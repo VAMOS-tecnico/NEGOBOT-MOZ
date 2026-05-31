@@ -30,6 +30,6 @@ def webhook():
     
     return "EVENT_RECEIVED", 200
 
-if name == "main":
+if_name_==_"main_":
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
