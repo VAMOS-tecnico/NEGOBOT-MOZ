@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-app = Flask(_name_)
+app = Flask(__name__)
 
 # Configuração da IA
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
