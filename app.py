@@ -9,7 +9,7 @@ app = Flask(__name__)
 
 # Configurar o Gemini (IA)
 genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
-model = genai.GenerativeModel('gemini-3.0-flash-preview')
+model = genai.GenerativeModel('gemini-2.0-flash')
 
 @app.route('/')
 def home():
