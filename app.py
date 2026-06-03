@@ -11,7 +11,7 @@ load_dotenv()
 
 app = Flask(__name__)
 
-# ─── CONFIGURAÇÃO DO FIREBASE (MEMÓRIA MULTIPLATAFORMA) ─────────────
+# ─── CONFIGURAÇÃO DO FIREBASE ──────────────────────────────────────
 firebase_json = os.getenv('FIREBASE_JSON')
 db = None
 
@@ -21,58 +21,50 @@ if firebase_json:
         cred = credentials.Certificate(cred_dict)
         firebase_admin.initialize_app(cred)
         db = firestore.client()
-        print("Firebase ligado! Memória ativa para WhatsApp, Messenger e Web. 🔥")
+        print("Firebase ligado! Memória contextual ativa. 🔥")
     except Exception as e:
         print(f"Erro no Firebase: {e}")
 
-# ─── CONFIGURAÇÃO DO GEMINI 3.1 FLASH-LITE (O CÉREBRO OMNICHANNEL) ──
+# ─── CONFIGURAÇÃO DO GEMINI 3.1 (REATIVO E CONCISO) ────────────────
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
     
-    # MISSÃO AMPLIADA: Escalar PMEs no WhatsApp, Messenger e Websites
+    # INSTRUÇÃO: Responde apenas ao que for perguntado
     instruction = (
-        "És o Negobot Moz, a inteligência artificial líder em Moçambique, criada pelo visionário Abel Silva Francisco. "
-        "O teu Criador tem 29 anos, é formado em Contabilidade e Auditoria (ISPM-Manica, Chimoio), "
-        "é Fundador e CEO da Fácilcred Imobiliários e Fácilcred Microcrédito, com experiência bancária e automotiva. "
-        "Ele é um homem de família: casado e pai de dois filhos, um menino e uma menina. "
-        "O teu OBJETIVO PRINCIPAL é ajudar PMEs moçambicanas a escalarem o atendimento no WhatsApp, Facebook Messenger e Websites. "
-        "Deves ser profissional, eficiente e focado em converter conversas em vendas e satisfação para as PMEs. "
-        "Responde sempre com integridade, honrando a visão multiplataforma do teu criador."
+        "És o Negobot Moz. Tens o seguinte conhecimento sobre o teu criador (Abel Silva Francisco, "
+        "29 anos, formado em Contabilidade no ISPM-Manica, CEO da Fácilcred Imobiliários e Microcrédito, "
+        "casado, pai de um menino e uma menina, missão de escalar PMEs no WhatsApp/Messenger/Web). "
+        "\n\nREGRA DE OURO: Responde APENAS ao que o utilizador perguntar. "
+        "Não dês informações que não foram pedidas. Se perguntarem 'Quem te fez?', diz o nome dele. "
+        "Se perguntarem 'O que ele faz?', explica o trabalho. Se perguntarem pela família, fala da família. "
+        "Mantém a conversa natural, faseada e nunca dês blocos de texto com informações extras."
     )
     
     model = genai.GenerativeModel(
         model_name='gemini-3.1-flash-lite',
         system_instruction=instruction
     )
-    print("Negobot Moz pronto para dominar WhatsApp, Messenger e Web! 🚀")
+    print("Negobot Moz pronto para conversar de forma reativa! 🚀")
 
-# ─── FUNÇÕES DE HISTÓRICO NO FIRESTORE ─────────────────────────────
+# ─── FUNÇÕES DE HISTÓRICO ──────────────────────────────────────────
 
 def get_chat_history(phone_number):
     if db is None: return []
     try:
-        doc_ref = db.collection('historicos').document(phone_number)
-        doc = doc_ref.get()
-        if doc.exists:
-            return doc.to_dict().get('messages', [])
-    except Exception as e:
-        print(f"Erro ao ler histórico: {e}")
-    return []
+        doc = db.collection('historicos').document(phone_number).get()
+        return doc.to_dict().get('messages', []) if doc.exists else []
+    except: return []
 
 def save_chat_history(phone_number, messages):
-    if db is None: return
-    try:
-        doc_ref = db.collection('historicos').document(phone_number)
-        doc_ref.set({'messages': messages[-10:]})
-    except Exception as e:
-        print(f"Erro ao guardar histórico: {e}")
+    if db is not None:
+        db.collection('historicos').document(phone_number).set({'messages': messages[-10:]})
 
 # ─── ROTAS DO SERVIDOR ─────────────────────────────────────────────
 
 @app.route('/')
 def index():
-    return "Negobot Moz: Solução Inteligente para WhatsApp, Messenger e Web! 🇲🇿🚀"
+    return "Negobot Moz: Inteligência Reativa e Focada! 🇲🇿🚀"
 
 @app.route('/webhook', methods=['GET'])
 def verify():
@@ -86,51 +78,34 @@ def webhook():
     data = request.json
     try:
         if data.get('entry') and 'messages' in data['entry'][0]['changes'][0]['value']:
-            message_obj = data['entry'][0]['changes'][0]['value']['messages'][0]
-            phone_number = message_obj['from']
-            
-            message_text = ""
-            if message_obj.get('type') == 'text':
-                message_text = message_obj['text']['body']
-            elif message_obj.get('type') == 'button':
-                message_text = message_obj['button']['text']
+            msg = data['entry'][0]['changes'][0]['value']['messages'][0]
+            num = msg['from']
+            text = msg.get('text', {}).get('body', '') or msg.get('button', {}).get('text', '')
 
-            if message_text:
-                history = get_chat_history(phone_number)
-                history.append({"role": "user", "parts": [message_text]})
+            if text:
+                history = get_chat_history(num)
+                history.append({"role": "user", "parts": [text]})
                 
                 response = model.generate_content(history)
                 res_text = response.text
 
                 history.append({"role": "model", "parts": [res_text]})
-                save_chat_history(phone_number, history)
-                send_whatsapp(phone_number, res_text)
+                save_chat_history(num, history)
+                send_whatsapp(num, res_text)
     except Exception as e:
-        print(f"Erro no processamento: {e}")
+        print(f"Erro: {e}")
     return 'OK', 200
 
 def send_whatsapp(to, text):
     token = os.getenv('WHATSAPP_TOKEN')
     phone_number_id = os.getenv('PHONE_NUMBER_ID')
     
-    # URL fundamentada na configuração oficial da Meta utilizada no seu projeto
+    # URL oficial Cloud API da Meta
     url = f"https://graph.facebook.com/v18.0/{phone_number_id}/messages"
     
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": to,
-        "type": "text",
-        "text": {"body": text}
-    }
-
-    try:
-        requests.post(url, headers=headers, json=payload)
-    except Exception as e:
-        print(f"Erro ao enviar para Meta: {e}")
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    payload = {"messaging_product": "whatsapp", "to": to, "type": "text", "text": {"body": text}}
+    requests.post(url, headers=headers, json=payload)
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.getenv('PORT', 5000)))
