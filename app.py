@@ -31,7 +31,7 @@ else:
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel(model_name='gemini-2.0-flash')
+    model = genai.GenerativeModel(model_name='gemini-3.1-flash-lite')
 else:
     print("ERRO: GEMINI_API_KEY em falta.")
 
