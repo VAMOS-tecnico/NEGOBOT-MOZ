@@ -14,7 +14,7 @@ GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
     model = genai.GenerativeModel(
-        model_name='gemini-2.0-flash',
+        model_name='gemini-3.1-flash-lite',
         system_instruction="És o Negobot Moz, um assistente inteligente e amigável em Moçambique. Responde de forma concisa, direta e útil. Evita textos muito longos ou explicações desnecessárias, a menos que o utilizador peça detalhes. Usa um tom respeitoso."
     )
     print("Gemini configurado com sucesso!")
