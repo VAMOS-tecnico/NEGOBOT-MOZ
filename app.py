@@ -25,19 +25,21 @@ if firebase_json:
     except Exception as e:
         print(f"Erro no Firebase: {e}")
 
-# ─── CONFIGURAÇÃO DO GEMINI 3.1 ────────────────────────────────────
+# ─── CONFIGURAÇÃO DO GEMINI 3.1 (A ALMA REATIVA) ───────────────────
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
     
+    # INSTRUÇÃO: Regras de resposta curta e clara conforme pedido pelo Sr. Abel
     instruction = (
-        "És o Negobot Moz, o assistente de IA criado pelo CEO Abel Silva Francisco. "
-        "A tua missão é atender PMEs no Whatsapp, Facebook messeger e Websites. "
-        "\n\nREGRAS DE OURO:"
-        "\n1. CLAREZA TOTAL: Usa uma linguagem bem clara e simples."
-        "\n2. REATIVIDADE: Responde APENAS ao que for perguntado."
-        "\n3. CONHECIMENTO: Sabes que o teu criador (Abel Silva Francisco) tem 29 anos, Auditor, "
-        "CEO da Fácilcred, casado e tem um casal de filhos (menino e menina). Revela apenas se pedirem."
+        "És o Negobot Moz, o assistente de IA para PMEs no Whatsapp, Facebook messeger e Websites. "
+        "\n\nREGRAS CRÍTICAS DE RESPOSTA:"
+        "\n1. Se te perguntarem 'Quem te fez?' ou 'Quem é o teu criador?', responde exatamente: 'empresário Abel Francisco'."
+        "\n2. CLAREZA TOTAL: Usa sempre uma linguagem bem clara e simples."
+        "\n3. REATIVIDADE: Responde APENAS ao que for perguntado. Não dês informações extras."
+        "\n4. CONHECIMENTO EXTRA: Sabes que o empresário Abel Francisco tem 29 anos, é formado em Auditoria, "
+        "CEO da Fácilcred, casado e tem um casal de filhos. Mas SÓ falas disto se te perguntarem especificamente."
+        "\n5. MULTIPLATAFORMA: Estás presente no Whatsapp, Facebook messeger e Websites."
     )
     
     model = genai.GenerativeModel(
@@ -62,7 +64,7 @@ def save_chat_history(phone_number, messages):
 
 @app.route('/')
 def index():
-    return "Negobot Moz Online: Whatsapp, Facebook messeger e Websites! 🇲🇿🚀"
+    return "Negobot Moz: Atendimento do empresário Abel Francisco Online! 🇲🇿🚀"
 
 @app.route('/webhook', methods=['GET'])
 def verify():
@@ -81,18 +83,15 @@ def webhook():
             message_text = message_obj.get('text', {}).get('body', '') or message_obj.get('button', {}).get('text', '')
 
             if message_text:
-                # 1. Recuperar histórico do Firebase
                 history = get_chat_history(phone_number)
                 
-                # 3. Gerar resposta com Gemini (Snippet do Sr. Abel)
                 try:
-                    # Iniciamos o chat com o histórico para manter a memória ativa
+                    # Gerar resposta com a lógica start_chat que o Sr. Abel definiu
                     chat = model.start_chat(history=history)
-                    
                     response = chat.send_message(message_text) 
                     response_text = response.text
 
-                    # 4. Atualizar o histórico com a nova conversa
+                    # Formatar histórico para guardar no Firebase
                     new_history = []
                     for msg in chat.history:
                         new_history.append({
@@ -101,8 +100,6 @@ def webhook():
                         })
                     
                     save_chat_history(phone_number, new_history)
-
-                    # 5. Enviar de volta ao Whatsapp
                     send_whatsapp(phone_number, response_text)
 
                 except Exception as e:
@@ -114,11 +111,10 @@ def webhook():
     return 'OK', 200
 
 def send_whatsapp(to, text):
-    # Credenciais do ambiente Meta Cloud API
     token = os.getenv('WHATSAPP_TOKEN')
     phone_number_id = os.getenv('PHONE_NUMBER_ID')
     
-    # URL da API Cloud da Meta para envio de mensagens
+    # URL da API Cloud da Meta fundamentada no seu ambiente
     url = f"https://graph.facebook.com/v18.0/{phone_number_id}/messages"
     
     headers = {
