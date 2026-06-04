@@ -25,56 +25,44 @@ if firebase_json:
     except Exception as e:
         print(f"Erro no Firebase: {e}")
 
-# ─── CONFIGURAÇÃO DO GEMINI 3.1 (A ALMA CLARA E REATIVA) ───────────
+# ─── CONFIGURAÇÃO DO GEMINI 3.1 ────────────────────────────────────
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
     
-    # INSTRUÇÃO: Palavras escritas exatamente como o Sr. Abel pediu
     instruction = (
         "És o Negobot Moz, o assistente de IA criado pelo CEO Abel Silva Francisco. "
         "A tua missão é atender PMEs no Whatsapp, Facebook messeger e Websites. "
-        "\n\nREGRAS DE OURO DE LINGUAGEM E POSTURA:"
-        "\n1. CLAREZA TOTAL: Usa uma linguagem bem clara e simples. Evita palavras complicadas."
-        "\n2. REATIVIDADE: Responde APENAS ao que for perguntado. Se o cliente perguntar 'quem', diz apenas o nome."
-        "\n3. CONHECIMENTO: Sabes que o teu criador (Abel Silva Francisco) tem 29 anos, é formado em Auditoria, "
-        "é CEO da Fácilcred, casado e tem um casal de filhos (um menino e uma menina). Revela apenas o que te pedirem."
-        "\n4. MULTIPLATAFORMA: Estás preparado para ajudar empresas no Whatsapp, Facebook messeger e Websites."
-        "\n5. ESTILO: Sê educado, breve e focado em ser útil para o negócio moçambicano."
+        "\n\nREGRAS DE OURO:"
+        "\n1. CLAREZA TOTAL: Usa uma linguagem bem clara e simples."
+        "\n2. REATIVIDADE: Responde APENAS ao que for perguntado."
+        "\n3. CONHECIMENTO: Sabes que o teu criador (Abel Silva Francisco) tem 29 anos, Auditor, "
+        "CEO da Fácilcred, casado e tem um casal de filhos (menino e menina). Revela apenas se pedirem."
     )
     
     model = genai.GenerativeModel(
         model_name='gemini-3.1-flash-lite',
         system_instruction=instruction
     )
-    print("Negobot Moz configurado com: Whatsapp, Facebook messeger e Websites! 🚀")
 
-# ─── FUNÇÕES DE HISTÓRICO NO FIRESTORE ─────────────────────────────
+# ─── FUNÇÕES DE HISTÓRICO ──────────────────────────────────────────
 
 def get_chat_history(phone_number):
     if db is None: return []
     try:
-        doc_ref = db.collection('historicos').document(phone_number)
-        doc = doc_ref.get()
-        if doc.exists:
-            return doc.to_dict().get('messages', [])
-    except Exception as e:
-        print(f"Erro ao ler histórico: {e}")
-    return []
+        doc = db.collection('historicos').document(phone_number).get()
+        return doc.to_dict().get('messages', []) if doc.exists else []
+    except: return []
 
 def save_chat_history(phone_number, messages):
-    if db is None: return
-    try:
-        doc_ref = db.collection('historicos').document(phone_number)
-        doc_ref.set({'messages': messages[-10:]})
-    except Exception as e:
-        print(f"Erro ao guardar histórico: {e}")
+    if db is not None:
+        db.collection('historicos').document(phone_number).set({'messages': messages[-10:]})
 
 # ─── ROTAS DO SERVIDOR ─────────────────────────────────────────────
 
 @app.route('/')
 def index():
-    return "Negobot Moz: Atendimento Claro no Whatsapp, Facebook messeger e Websites! 🇲🇿🚀"
+    return "Negobot Moz Online: Whatsapp, Facebook messeger e Websites! 🇲🇿🚀"
 
 @app.route('/webhook', methods=['GET'])
 def verify():
@@ -90,33 +78,47 @@ def webhook():
         if data.get('entry') and 'messages' in data['entry'][0]['changes'][0]['value']:
             message_obj = data['entry'][0]['changes'][0]['value']['messages'][0]
             phone_number = message_obj['from']
-            
-            message_text = ""
-            if message_obj.get('type') == 'text':
-                message_text = message_obj['text']['body']
-            elif message_obj.get('type') == 'button':
-                message_text = message_obj['button']['text']
-            
+            message_text = message_obj.get('text', {}).get('body', '') or message_obj.get('button', {}).get('text', '')
+
             if message_text:
+                # 1. Recuperar histórico do Firebase
                 history = get_chat_history(phone_number)
-                history.append({"role": "user", "parts": [message_text]})
                 
-                response = model.generate_content(history)
-                response_text = response.text
+                # 3. Gerar resposta com Gemini (Snippet do Sr. Abel)
+                try:
+                    # Iniciamos o chat com o histórico para manter a memória ativa
+                    chat = model.start_chat(history=history)
+                    
+                    response = chat.send_message(message_text) 
+                    response_text = response.text
 
-                history.append({"role": "model", "parts": [response_text]})
-                save_chat_history(phone_number, history)
+                    # 4. Atualizar o histórico com a nova conversa
+                    new_history = []
+                    for msg in chat.history:
+                        new_history.append({
+                            "role": msg.role,
+                            "parts": [p.text for p in msg.parts]
+                        })
+                    
+                    save_chat_history(phone_number, new_history)
 
-                send_whatsapp(phone_number, response_text)
+                    # 5. Enviar de volta ao Whatsapp
+                    send_whatsapp(phone_number, response_text)
+
+                except Exception as e:
+                    print(f"Erro no Gemini: {e}")
+
     except Exception as e:
         print(f"Erro no processamento: {e}")
+
     return 'OK', 200
 
 def send_whatsapp(to, text):
+    # Credenciais do ambiente Meta Cloud API
     token = os.getenv('WHATSAPP_TOKEN')
     phone_number_id = os.getenv('PHONE_NUMBER_ID')
     
-    # URL oficial fundamentada na configuração Meta Cloud API do seu projeto
+    # URL da API Cloud da Meta para envio de mensagens
     url = f"https://graph.facebook.com/v18.0/{phone_number_id}/messages"
     
     headers = {
