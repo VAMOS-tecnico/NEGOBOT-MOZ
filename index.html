@@ -4,6 +4,13 @@
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Negobot Moz | O chatbot que fecha vendas para o seu negócio 24horas por dia</title>
+  
+  <!-- SEO & Social Meta Tags -->
+  <meta name="description" content="Automatize seu atendimento no WhatsApp, Facebook e Website com o Negobot Moz. O chatbot que trabalha 24h por dia para o seu negócio.">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Negobot Moz | Chatbot de Vendas 24h">
+  <meta property="og:description" content="A solução definitiva para PMEs moçambicanas venderem mais no digital.">
+
   <style>
     :root {
       --bg: #050505;
@@ -68,7 +75,6 @@
       text-transform: uppercase;
     }
 
-    /* Balanced Compact - Ajuste Fino */
     .hero { padding: 40px 8% 30px; text-align: center; }
     .hero h1 { font-size: 32px; font-weight: 900; line-height: 1.1; margin-bottom: 15px; }
     .hero h1 span { color: var(--gold-vibrant); }
@@ -86,6 +92,7 @@
       border-radius: 8px;
       display: inline-block;
       text-transform: uppercase;
+      text-align: center;
     }
 
     .features { padding: 30px 5%; display: flex; flex-direction: column; gap: 15px; }
@@ -105,162 +112,4 @@
     .fb-header { background: #0084ff; color: #fff; padding: 30px 10px 8px; display: flex; align-items: center; gap: 6px; font-size: 11px; text-align: left; }
     .fb-body { background: #fff; height: calc(100% - 65px); padding: 8px; display: flex; flex-direction: column; gap: 6px; overflow-y: auto; }
     
-    .web-header { background: #f8f8f8; border-bottom: 1px solid #eee; padding: 30px 10px 8px; color: #333; font-size: 9px; text-align: left; font-weight: bold; }
-    .web-body { background: #fff; height: calc(100% - 55px); position: relative; padding: 8px; display: flex; flex-direction: column; }
-    .web-chat-bubble { position: absolute; bottom: 12px; right: 12px; width: 35px; height: 35px; background: var(--gold); border-radius: 50%; display: flex; align-items: center; justify-content: center; box-shadow: 0 3px 8px rgba(0,0,0,0.2); }
-    .web-chat-window { width: 100%; background: #fff; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); border: 1px solid #eee; padding: 8px; font-size: 9px; text-align: left; display: flex; flex-direction: column; gap: 4px; }
-
-    .msg { padding: 6px 8px; border-radius: 6px; font-size: 10px; max-width: 85%; line-height: 1.3; color: #000; position: relative; text-align: left; }
-    .msg.in { background: #f1f0f0; align-self: flex-start; border-bottom-left-radius: 2px; }
-    .msg.out { background: #dcf8c6; align-self: flex-end; border-bottom-right-radius: 2px; }
-    .fb-body .msg.out { background: #0084ff; color: #fff; }
-    .web-body .msg.out { background: var(--gold); color: #000; }
-
-    .whatsapp-float { position: fixed; bottom: 15px; right: 15px; background-color: #25d366; color: #fff; width: 55px; height: 55px; border-radius: 50%; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px rgba(0,0,0,0.3); z-index: 2000; transition: transform 0.3s ease; }
-    .whatsapp-float svg { width: 28px; height: 28px; fill: currentColor; }
-
-    .ceo-section { padding: 40px 8%; text-align: center; background: rgba(255,255,255,0.02); }
-    .ceo-name { font-size: 20px; font-weight: 900; margin-top: 10px; }
-    .ceo-group { color: var(--gold-vibrant); font-weight: 700; text-transform: uppercase; font-size: 11px; }
-
-    .pricing { padding: 40px 5%; text-align: center; }
-    .price-card { background: var(--glass); padding: 30px 20px; border-radius: 15px; border: 1px solid var(--glass-border); text-align: left; margin-bottom: 20px; }
-    .price-card.featured { border-color: var(--gold-vibrant); }
-    .trial-tag { background: var(--emerald); color: #fff; padding: 3px 8px; border-radius: 50px; font-size: 9px; font-weight: 900; display: inline-block; margin-bottom: 8px; }
-    .price-card .price { font-size: 32px; font-weight: 900; margin-bottom: 15px; }
-    .price-card ul { list-style: none; margin-bottom: 20px; }
-    .price-card ul li { margin-bottom: 8px; font-size: 13px; color: rgba(255,255,255,0.7); }
-
-    .assist-section { padding: 40px 8%; text-align: center; background: var(--bg); border-top: 1px solid var(--glass-border); }
-    .assist-section h2 { font-size: 22px; margin-bottom: 15px; }
-
-    footer { padding: 30px 8%; border-top: 1px solid var(--glass-border); text-align: center; font-size: 10px; color: rgba(255,255,255,0.4); }
-
-    @media (min-width: 769px) {
-      .hero { padding: 60px 10%; text-align: left; }
-      .features { flex-direction: row; justify-content: center; }
-      .feature-card { flex: 1; max-width: 320px; }
-      .omni-container { flex-direction: row; align-items: flex-start; }
-      .price-card { display: inline-block; width: 320px; margin: 10px; vertical-align: top; }
-    }
-  </style>
-</head>
-<body>
-
-<div class="bg-system">
-  <div class="aura aura-1"></div>
-  <div class="aura aura-2"></div>
-</div>
-
-<nav>
-  <div class="brand">NEGOBOT<span>MOZ</span></div>
-  <a href="#precos" class="nav-cta">Teste Grátis</a>
-</nav>
-
-<section class="hero">
-  <h1>Negobot Moz: <span>Chatbot de Vendas 24h</span></h1>
-  <p>Automatize o seu atendimento no WhatsApp, Facebook e Website. Venda mais, todos os dias.</p>
-  <a href="#precos" class="cta-button">Ativar agora</a>
-</section>
-
-<section class="features">
-  <div class="feature-card">
-    <h3>Confirmação Automática</h3>
-    <p>O sistema valida e liberta o pedido sem que precise de fazer nada.</p>
-  </div>
-  <div class="feature-card">
-    <h3>Atendimento Omnichannel</h3>
-    <p>WhatsApp, Facebook e Website centralizados num só lugar.</p>
-  </div>
-  <div class="feature-card">
-    <h3>Foco em Resultados</h3>
-    <p>Aumente vendas com respostas instantâneas e automáticas.</p>
-  </div>
-</section>
-
-<section class="chat-preview">
-  <h2 style="font-size: 22px; margin-bottom: 10px;">Vejam em Ação</h2>
-  <div class="omni-container">
-    <div>
-      <div class="mockup-label">WhatsApp</div>
-      <div class="mockup">
-        <div class="wa-header"><div style="width:18px; height:18px; background:var(--gold); border-radius:50%;"></div>Negobot Moz</div>
-        <div class="wa-body">
-          <div class="msg in">Gostaria de ver casas na Matola.</div>
-          <div class="msg out">Claro! Temos T3 e T4. Qual o seu orçamento?</div>
-          <div class="msg in">Até 35.000 MT.</div>
-          <div class="msg out">Aqui estão as opções... 🏠</div>
-        </div>
-      </div>
-    </div>
-    <div>
-      <div class="mockup-label">Facebook</div>
-      <div class="mockup">
-        <div class="fb-header"><div style="width:18px; height:18px; background:#eee; border-radius:50%;"></div>Negobot Moz</div>
-        <div class="fb-body">
-          <div class="msg in">Ainda têm o Toyota Vitz?</div>
-          <div class="msg out">Sim! Gostaria de agendar um test-drive? 🚗</div>
-          <div class="msg in">Sim, amanhã às 10h.</div>
-          <div class="msg out">Agendado! Vemo-nos amanhã.</div>
-        </div>
-      </div>
-    </div>
-    <div>
-      <div class="mockup-label">Website</div>
-      <div class="mockup">
-        <div class="web-header">O seu website oficial</div>
-        <div class="web-body">
-          <div style="font-size:9px; font-weight:bold; margin-top:12px;">Serviços em Destaque</div>
-          <div style="width:100%; height:50px; background:#eee; margin-top:6px; border-radius:4px;"></div>
-          <div class="web-chat-window">
-            <div class="msg in">Como solicitar os vossos serviços?</div>
-            <div class="msg out">Posso ajudar-te agora mesmo! O que procuras?</div>
-          </div>
-          <div class="web-chat-bubble">💬</div>
-        </div>
-      </div>
-    </div>
-  </div>
-</section>
-
-<section class="ceo-section">
-  <h2 style="font-size: 22px;">Fundador e Visão</h2>
-  <p style="margin-top:10px; color:rgba(255,255,255,0.6); font-size: 13px;">O Negobot Moz faz parte do <strong>Grupo Fácilcred</strong>, capacitando PMEs moçambicanas.</p>
-  <div class="ceo-name">Abel Francisco</div>
-  <div class="ceo-group">CEO & Fundador</div>
-</section>
-
-<section class="pricing" id="precos">
-  <h2 style="font-size: 22px; margin-bottom: 20px;">Planos e Preços</h2>
-  <div class="price-card">
-    <span class="trial-tag">3 DIAS GRÁTIS</span>
-    <h4 style="color:var(--gold-vibrant); font-size:14px;">Plano Iniciação</h4>
-    <div class="price">1.099 MT <span>/mês</span></div>
-    <ul><li>WhatsApp</li><li>Confirmação Automática</li><li>Suporte via Chat</li></ul>
-    <a href="#" class="cta-button" style="width:100%; padding:10px; font-size:12px;">Assinar</a>
-  </div>
-  <div class="price-card featured">
-    <span class="trial-tag">3 DIAS GRÁTIS</span>
-    <h4 style="color:var(--gold-vibrant); font-size:14px;">Elite Corporate</h4>
-    <div class="price">2.900 MT <span>/mês</span></div>
-    <ul><li>Omnichannel (WhatsApp + FB + Web)</li><li>Pagamentos Integrados</li><li>Dashboard Profissional</li></ul>
-    <a href="#" class="cta-button" style="width:100%; padding:10px; font-size:12px; background:#fff;">ASSINAR</a>
-  </div>
-</section>
-
-<section class="assist-section">
-  <h2>Assistência</h2>
-  <a href="https://wa.me/258855000929" class="cta-button" style="background: #25d366; color: #fff; width: auto; padding: 10px 25px; display: inline-flex; align-items: center; gap: 8px;">
-    <svg style="width:16px; height:16px; fill:currentColor;" viewBox="0 0 24 24"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>
-    Conversar
-  </a>
-</section>
-
-<a href="https://wa.me/258855000929" class="whatsapp-float" target="_blank">
-  <svg viewBox="0 0 24 24"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>
-</a>
-
-<footer><p>© 2026 NEGOBOT MOZ // Grupo fácilcred</p></footer>
-
-</body>
-</html>
+    .web-header { background: #f8f8f8; border-bottom: 1px solid #eee; padding: 30px 10px 8px; color: #333; font-size:
