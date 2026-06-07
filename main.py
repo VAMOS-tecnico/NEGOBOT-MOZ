@@ -2,13 +2,16 @@ import os
 import json
 import datetime
 from flask import Flask, request, jsonify
+from flask_cors import CORS  # Importa o CORS para Flask
 import firebase_admin
 from firebase_admin import credentials, firestore
 
 app = Flask(__name__)
 
-# Configuração do Firebase via Variável de Ambiente
-# No Render, vamos colar o conteúdo do seu ficheiro JSON numa variável chamada FIREBASE_JSON
+# Configura o CORS exatamente para o seu site no GitHub
+CORS(app, resources={r"/*": {"origins": "https://vamos-tecnico.github.io/NEGOBOT-MOZ/"}})
+
+# Configuração do Firebase
 firebase_config = os.environ.get('FIREBASE_JSON')
 if firebase_config:
     cred_dict = json.loads(firebase_config)
@@ -17,32 +20,35 @@ if firebase_config:
     db = firestore.client()
 
 @app.route('/')
-def health_check():
+def home():
     return "API Negobot Moz Ativa!", 200
 
-# Endpoint para ativar o acesso (Webhook)
-@app.route('/ativar-acesso', methods=['POST'])
-def ativar_acesso():
+@app.route('/solicitar-pagamento', methods=['POST'])
+def solicitar_pagamento():
     data = request.json
-    telefone = data.get('telefone') # Ex: 25884xxxxxxx
+    telefone = data.get('telefone')
     plano = data.get('plano', 'Iniciação')
     
     if not telefone:
-        return jsonify({"erro": "Telefone obrigatorio"}), 400
+        return jsonify({"mensagem": "Número de telefone é obrigatório"}), 400
 
-    # Define a validade para 30 dias a partir de agora
-    validade = datetime.datetime.now() + datetime.timedelta(days=30)
+    try:
+        # Grava o pedido no Firestore para o Bot poder consultar depois
+        doc_ref = db.collection('assinantes').document(telefone)
+        doc_ref.set({
+            'status': 'pendente',
+            'plano': plano,
+            'data_pedido': datetime.datetime.now()
+        })
 
-    # Grava ou atualiza o status no Firestore
-    doc_ref = db.collection('assinantes').document(telefone)
-    doc_ref.set({
-        'status': 'ativo',
-        'plano': plano,
-        'data_ativacao': datetime.datetime.now(),
-        'data_expiracao': validade
-    })
+        return jsonify({
+            "status": "sucesso", 
+            "mensagem": "Pedido recebido com sucesso! Siga as instruções no seu WhatsApp."
+        }), 200
 
-    return jsonify({"status": "sucesso", "mensagem": f"Acesso libertado para {telefone}"}), 200
+    except Exception as e:
+        print(f"Erro ao gravar no Firebase: {e}")
+        return jsonify({"mensagem": "Erro ao processar o pedido no servidor"}), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
