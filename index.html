@@ -359,3 +359,52 @@
 </section>
 
 <footer><p>© 2026 NEGOBOT MOZ // Grupo fácilcred</p></footer>
+    <!-- Firebase & Automação Negobot Moz -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-app.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyA2Sth-Hpn8fyH1cf2YmK7AFE-TL3hTMsc",
+      authDomain: "negobot-moz-7980f.firebaseapp.com",
+      projectId: "negobot-moz-7980f",
+      storageBucket: "negobot-moz-7980f.firebasestorage.app",
+      messagingSenderId: "1054282421756",
+      appId: "1:1054282421756:web:b983004b5db61dc9080e79",
+      measurementId: "G-4V9Y3BNMSE"
+    };
+
+    const app = initializeApp(firebaseConfig);
+
+    async function iniciarPagamento(nomePlano) {
+      const numTelefone = prompt("Introduza o seu número M-Pesa ou e-Mola (ex: 84xxxxxxx):");
+      
+      if (!numTelefone || numTelefone.length < 9) {
+        alert("Por favor, introduza um número válido.");
+        return;
+      }
+
+      const API_URL = "https://negobot-backend.onrender.com"; 
+
+      try {
+        const response = await fetch(`${API_URL}/solicitar-pagamento`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ telefone: numTelefone, plano: nomePlano })
+        });
+        
+        const dados = await response.json();
+        if (response.ok) {
+            alert("Pedido recebido com sucesso! Siga as instruções no seu WhatsApp.");
+        } else {
+            alert("Erro: " + (dados.mensagem || "Tente novamente mais tarde."));
+        }
+      } catch (erro) {
+        alert("Erro ao ligar ao servidor. Verifique se a sua API no Render está ativa.");
+      }
+    }
+
+    window.iniciarPagamento = iniciarPagamento;
+  </script>
+</body>
+</html>
+
