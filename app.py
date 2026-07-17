@@ -9,6 +9,12 @@ from firebase_admin import credentials, firestore
 
 app = Flask(__name__)
 
+# --- Rota de Saúde (Adicionada) ---
+# Isso resolve o erro 404 e permite que o UptimeRobot mantenha o bot ativo
+@app.route('/', methods=['GET'])
+def health_check():
+    return "O bot está online!", 200
+
 # Inicialização do Firebase
 firebase_config_env = os.getenv('FIREBASE_CONFIG')
 if firebase_config_env:
