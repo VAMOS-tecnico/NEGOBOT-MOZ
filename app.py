@@ -23,9 +23,9 @@ else:
 
 db = firestore.client()
 
-# Configuração do Gemini
+# Configuração do Gemini (Atualizado para o novíssimo Gemini 3 Flash Preview!)
 genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
-model = genai.GenerativeModel('gemini-1.5-flash')
+model = genai.GenerativeModel('gemini-3-flash-preview')
 
 def get_chat_history(phone_number):
     try:
