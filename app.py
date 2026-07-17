@@ -9,8 +9,7 @@ from firebase_admin import credentials, firestore
 
 app = Flask(__name__)
 
-# --- Rota de Saúde (Adicionada) ---
-# Isso resolve o erro 404 e permite que o UptimeRobot mantenha o bot ativo
+# --- Rota de Saúde ---
 @app.route('/', methods=['GET'])
 def health_check():
     return "O bot está online!", 200
@@ -29,9 +28,9 @@ else:
 
 db = firestore.client()
 
-# Inicialização do novo SDK Gemini
+# --- ATUALIZAÇÃO 1: Modelo Otimizado ---
 client = genai.Client(api_key=os.getenv('GEMINI_API_KEY'))
-MODEL_NAME = 'gemini-3-flash-preview'
+MODEL_NAME = 'gemini-3.1-flash-lite'
 
 def get_chat_history(phone_number):
     try:
@@ -54,26 +53,19 @@ def save_chat_history(phone_number, history):
 def webhook():
     data = request.json
     try:
-        # Verifica se o evento é uma mensagem nova
         if data.get('event') == "messages.upsert" and "data" in data:
             msg_data = data['data']
             key = msg_data.get('key', {})
             
-            # --- TRAVA DE SEGURANÇA ---
-            # 1. Evita responder a si mesmo
             if key.get('fromMe'): return 'OK', 200
             
-            # 2. TRAVA DE GRUPOS: Se tiver @g.us, ignora imediatamente
             phone_number = key.get('remoteJid', '')
             if '@g.us' in phone_number:
-                print("Ignorado: Mensagem de grupo detectada.")
                 return 'OK', 200
-            # ---------------------------
             
             message = msg_data.get('message', {})
             message_text = ""
             
-            # Extração de texto
             if 'conversation' in message:
                 message_text = message['conversation']
             elif 'extendedTextMessage' in message:
@@ -83,25 +75,27 @@ def webhook():
                 # Recuperar histórico
                 raw_history = get_chat_history(phone_number)
                 
+                # --- ATUALIZAÇÃO 2: Limite de Histórico (últimas 6 mensagens) ---
+                recent_history = raw_history[-6:]
+                
                 # Converter para o formato do novo SDK
                 contents = []
-                for msg in raw_history:
+                for msg in recent_history:
                     role = "model" if msg.get('role') == "assistant" else msg.get('role')
                     parts = [types.Part.from_text(text=p.get('text', '')) for p in msg.get('parts', [])]
                     contents.append(types.Content(role=role, parts=parts))
                 
-                # Adicionar nova mensagem
                 contents.append(types.Content(role="user", parts=[types.Part.from_text(text=message_text)]))
 
                 # Gerar resposta
                 response = client.models.generate_content(model=MODEL_NAME, contents=contents)
                 response_text = response.text
                 
-                # Salvar histórico atualizado
+                # Salvar histórico atualizado (mantendo o limite para não crescer infinitamente)
                 contents.append(types.Content(role="model", parts=[types.Part.from_text(text=response_text)]))
-                save_chat_history(phone_number, [{"role": c.role, "parts": [{"text": p.text} for p in c.parts]} for c in contents])
+                # Aqui salvamos apenas as últimas 10 interações para manter o banco leve
+                save_chat_history(phone_number, [{"role": c.role, "parts": [{"text": p.text} for p in c.parts]} for c in contents[-10:]])
 
-                # Enviar resposta
                 send_whatsapp(phone_number, response_text)
 
     except Exception as e:
