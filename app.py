@@ -9,24 +9,22 @@ from firebase_admin import credentials, firestore
 
 app = Flask(__name__)
 
-# Inicialização do Firebase usando a variável de ambiente FIREBASE_CONFIG
+# Inicialização do Firebase
 firebase_config_env = os.getenv('FIREBASE_CONFIG')
 if firebase_config_env:
     try:
         firebase_config = json.loads(firebase_config_env)
         cred = credentials.Certificate(firebase_config)
         firebase_admin.initialize_app(cred)
-    except Exception as e:
-        print(f"Erro ao carregar JSON do Firebase: {e}")
+    except Exception:
         firebase_admin.initialize_app()
 else:
     firebase_admin.initialize_app()
 
 db = firestore.client()
 
-# Configuração do NOVO cliente Gemini (SDK oficial google-genai)
+# Inicialização do novo SDK Gemini
 client = genai.Client(api_key=os.getenv('GEMINI_API_KEY'))
-# Usando o novíssimo Gemini 3 Flash Preview!
 MODEL_NAME = 'gemini-3-flash-preview'
 
 def get_chat_history(phone_number):
@@ -50,102 +48,64 @@ def save_chat_history(phone_number, history):
 def webhook():
     data = request.json
     try:
+        # Verifica se o evento é uma mensagem nova
         if data.get('event') == "messages.upsert" and "data" in data:
             msg_data = data['data']
             key = msg_data.get('key', {})
             
+            # Evita responder a mensagens enviadas pelo próprio bot
             if key.get('fromMe'): return 'OK', 200
                 
             phone_number = key.get('remoteJid')
             message = msg_data.get('message', {})
             message_text = ""
             
-            # Extração de texto conforme o tipo de mensagem
+            # Extração de texto
             if 'conversation' in message:
                 message_text = message['conversation']
             elif 'extendedTextMessage' in message:
                 message_text = message['extendedTextMessage'].get('text', '')
-            elif 'buttonsResponseMessage' in message:
-                message_text = message['buttonsResponseMessage'].get('selectedButtonId', '')
-            elif 'templateButtonReplyMessage' in message:
-                message_text = message['templateButtonReplyMessage'].get('selectedId', '')
 
             if message_text and phone_number:
-                # Recuperar o histórico do Firebase
+                # Recuperar histórico
                 raw_history = get_chat_history(phone_number)
                 
-                # Converter o histórico antigo para o formato correto do novo SDK (types.Content)
+                # Converter para o formato do novo SDK
                 contents = []
                 for msg in raw_history:
-                    role = msg.get('role')
-                    # O novo SDK espera "user" ou "model"
-                    if role == "assistant":
-                        role = "model"
-                    
-                    parts_list = []
-                    for p in msg.get('parts', []):
-                        parts_list.append(types.Part.from_text(text=p.get('text', '')))
-                        
-                    contents.append(
-                        types.Content(
-                            role=role,
-                            parts=parts_list
-                        )
-                    )
+                    role = "model" if msg.get('role') == "assistant" else msg.get('role')
+                    parts = [types.Part.from_text(text=p.get('text', '')) for p in msg.get('parts', [])]
+                    contents.append(types.Content(role=role, parts=parts))
                 
-                # Adicionar a nova mensagem do usuário ao histórico de envio
-                contents.append(
-                    types.Content(
-                        role="user",
-                        parts=[types.Part.from_text(text=message_text)]
-                    )
-                )
+                # Adicionar nova mensagem
+                contents.append(types.Content(role="user", parts=[types.Part.from_text(text=message_text)]))
 
-                try:
-                    # Chamar o modelo usando o novo SDK
-                    response = client.models.generate_content(
-                        model=MODEL_NAME,
-                        contents=contents
-                    )
-                    
-                    # Adicionar a resposta do modelo ao histórico final
-                    contents.append(
-                        types.Content(
-                            role="model",
-                            parts=[types.Part.from_text(text=response.text)]
-                        )
-                    )
+                # Gerar resposta
+                response = client.models.generate_content(model=MODEL_NAME, contents=contents)
+                response_text = response.text
+                
+                # Salvar histórico atualizado
+                contents.append(types.Content(role="model", parts=[types.Part.from_text(text=response_text)]))
+                save_chat_history(phone_number, [{"role": c.role, "parts": [{"text": p.text} for p in c.parts]} for c in contents])
 
-                    # Converter de volta para formato JSON simples para salvar no Firebase
-                    updated_history = []
-                    for content in contents:
-                        updated_history.append({
-                            "role": content.role,
-                            "parts": [{"text": p.text} for p in content.parts]
-                        })
-                    
-                    save_chat_history(phone_number, updated_history)
-                    send_whatsapp(phone_number, response.text)
+                # Enviar resposta
+                send_whatsapp(phone_number, response_text)
 
-                except Exception as e:
-                    print(f"Erro no Gemini: {e}")
     except Exception as e:
-        print(f"Erro no webhook: {e}")
+        print(f"ERRO CRÍTICO: {e}")
         
     return 'OK', 200
 
 def send_whatsapp(to, text):
     url = f"{os.getenv('EVOLUTION_API_URL')}/message/sendText/{os.getenv('EVOLUTION_INSTANCE_NAME')}"
     headers = {"apikey": os.getenv('EVOLUTION_API_KEY'), "Content-Type": "application/json"}
-    payload = {
-        "number": to,
-        "options": {"delay": 1200, "presence": "composing"},
-        "textMessage": {"text": text}
-    }
+    payload = {"number": to, "text": text}
+    
     try:
-        requests.post(url, headers=headers, json=payload)
+        response = requests.post(url, headers=headers, json=payload)
+        print(f"DEBUG: Resposta da API: {response.status_code} - {response.text}")
     except Exception as e:
-        print(f"Erro ao enviar: {e}")
+        print(f"ERRO ao enviar: {e}")
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.getenv('PORT', 5000)))
