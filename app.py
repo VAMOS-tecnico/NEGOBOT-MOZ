@@ -10,7 +10,7 @@ from firebase_admin import credentials, firestore
 app = Flask(__name__)
 
 # Inicialização do Firebase
-firebase_config_env = os.getenv('FIREBASE_CONFI')
+firebase_config_env = os.getenv('FIREBASE_CONFIG')
 if firebase_config_env:
     try:
         firebase_config = json.loads(firebase_config_env)
