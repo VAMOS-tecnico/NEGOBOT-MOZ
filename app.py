@@ -28,7 +28,7 @@ else:
 
 db = firestore.client()
 
-# --- ATUALIZAÇÃO 1: Modelo Otimizado ---
+# Instanciar o Cliente Gemini
 client = genai.Client(api_key=os.getenv('GEMINI_API_KEY'))
 MODEL_NAME = 'gemini-3.1-flash-lite'
 
@@ -72,13 +72,9 @@ def webhook():
                 message_text = message['extendedTextMessage'].get('text', '')
 
             if message_text and phone_number:
-                # Recuperar histórico
                 raw_history = get_chat_history(phone_number)
-                
-                # --- ATUALIZAÇÃO 2: Limite de Histórico (últimas 6 mensagens) ---
                 recent_history = raw_history[-6:]
                 
-                # Converter para o formato do novo SDK
                 contents = []
                 for msg in recent_history:
                     role = "model" if msg.get('role') == "assistant" else msg.get('role')
@@ -87,13 +83,47 @@ def webhook():
                 
                 contents.append(types.Content(role="user", parts=[types.Part.from_text(text=message_text)]))
 
+                # --- 🌟 CONFIGURAÇÃO DE IDENTIDADE E RESPOSTAS FRACIONADAS 🌟 ---
+                sys_instruction = (
+                    "Você é o Negobot Moz, um assistente virtual comercial de Moçambique, profissional e muito amigável. "
+                    "Seu objetivo é apresentar e vender o serviço de automação de WhatsApp para pequenas e médias empresas.\n\n"
+                    "REGRAS CRÍTICAS DE COMPORTAMENTO:\n"
+                    "1. RESPOSTAS FRACIONADAS E DIRECIONADAS (REGRA DE OURO): Nunca envie todas as informações do negócio de uma única vez. "
+                    "Responda estritamente e apenas à pergunta que o usuário fez no momento. Mantenha as mensagens curtas, naturais e em formato de diálogo.\n"
+                    "   - Se ele saudar, apenas saúde de volta e pergunte como pode ajudar.\n"
+                    "   - Se ele perguntar o preço, mostre APENAS os planos. Não mande os dados de pagamento ainda.\n"
+                    "   - Se ele perguntar quem criou, responda APENAS sobre o criador.\n"
+                    "   - Só envie os dados do M-Pesa se ele disser claramente que quer assinar, avançar ou pagar.\n"
+                    "2. NÃO seja uma IA de pesquisa geral. Não responda a perguntas de cultura geral, matemática ou outros temas. "
+                    "Traga o cliente de volta ao assunto do Negobot Moz com educação.\n"
+                    "3. IDENTIDADE DO CRIADOR: Se perguntarem 'Quem te fez?', 'Quem te criou?' ou 'Quem é seu dono?', "
+                    "responda: 'Fui desenvolvido pelo empresário Abel Francisco, um reconhecido empreendedor do ramo "
+                    "automotivo e imobiliário em Moçambique, licenciado em Contabilidade e Auditoria.'\n"
+                    "4. PLANOS E PREÇOS:\n"
+                    "   - Plano Inicial: 500 Meticais\n"
+                    "   - Plano Avançado: 1000 Meticais\n"
+                    "5. DADOS DE COBRANÇA (M-PESA): Quando solicitados pelo cliente para fechar a compra, envie:\n"
+                    "   - Número do M-Pesa: 855000929\n"
+                    "   - Nome do Titular: Abel Francisco\n"
+                    "   Explique brevemente que o nosso sistema integrado (NegoBoto Autopay) valida o SMS de forma automática e gera o QR Code na hora.\n"
+                    "6. Use negritos e mensagens organizadas por parágrafos curtos para facilitar a leitura no WhatsApp."
+                )
+
+                # Temperatura baixa garante foco total no diálogo sem inventar dados extras
+                config = types.GenerateContentConfig(
+                    system_instruction=sys_instruction,
+                    temperature=0.2
+                )
+
                 # Gerar resposta
-                response = client.models.generate_content(model=MODEL_NAME, contents=contents)
+                response = client.models.generate_content(
+                    model=MODEL_NAME, 
+                    contents=contents,
+                    config=config
+                )
                 response_text = response.text
                 
-                # Salvar histórico atualizado (mantendo o limite para não crescer infinitamente)
                 contents.append(types.Content(role="model", parts=[types.Part.from_text(text=response_text)]))
-                # Aqui salvamos apenas as últimas 10 interações para manter o banco leve
                 save_chat_history(phone_number, [{"role": c.role, "parts": [{"text": p.text} for p in c.parts]} for c in contents[-10:]])
 
                 send_whatsapp(phone_number, response_text)
