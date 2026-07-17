@@ -2,7 +2,7 @@ import os
 import requests
 from flask import Flask, request, jsonify
 
-app = Flask(name)
+app = Flask(__name__)
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -86,5 +86,5 @@ def send_whatsapp(to, text):
     except Exception as e:
         print(f"Erro ao enviar via Evolution API: {e}")
 
-if name == 'main':
+if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.getenv('PORT', 5000)))
