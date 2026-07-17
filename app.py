@@ -1,5 +1,6 @@
 import os
 import json
+import time
 import requests
 from flask import Flask, request
 from datetime import datetime, timedelta, timezone
@@ -110,7 +111,10 @@ def desconectar_instancia_evolution(phone_number):
         return False
 
 def gerar_e_enviar_qrcode_central(phone_number):
-    """Gera uma nova sessão de QR Code e envia como Imagem pelo número Central Master."""
+    """
+    Gera uma nova sessão de QR Code e envia como Imagem pelo número Central Master.
+    Trata instâncias abertas e limpa o cabeçalho Data URI do Base64.
+    """
     try:
         client_instance = phone_number.split('@')[0]
         headers = {"apikey": os.getenv('EVOLUTION_API_KEY'), "Content-Type": "application/json"}
@@ -120,13 +124,25 @@ def gerar_e_enviar_qrcode_central(phone_number):
         response_connect = requests.get(url_connect, headers=headers)
         
         if response_connect.status_code != 200:
-            print(f"❌ [API] Erro ao conectar instância {client_instance}")
+            print(f"❌ [API] Erro ao conectar instância {client_instance}: {response_connect.text}")
             return False
             
-        base64_qrcode = response_connect.json().get("base64")
+        dados_resposta = response_connect.json()
+        
+        # [Ajuste Ponto 1]: Se a instância já estiver aberta por segurança, avisa o cliente diretamente
+        if dados_resposta.get("instance", {}).get("state") == "open":
+            print(f"ℹ️ [API] A instância {client_instance} já está conectada e ativa.")
+            send_whatsapp(phone_number, "✅ O seu assistente virtual já se encontra ativo e totalmente operacional no nosso sistema!")
+            return True
+            
+        base64_qrcode = dados_resposta.get("base64")
         if not base64_qrcode:
-            print(f"❌ [API] O QR Code em base64 veio vazio.")
+            print(f"❌ [API] O campo 'base64' veio vazio. Resposta recebida: {dados_resposta}")
             return False
+
+        # [Ajuste Ponto 2]: Remove o prefixo 'data:image/...;base64,' se existir para enviar a string limpa
+        if "," in base64_qrcode:
+            base64_qrcode = base64_qrcode.split(",")[1]
 
         # 2. Enviar a imagem do QR Code pelo WhatsApp Central Master
         central_instance = os.getenv('EVOLUTION_INSTANCE_NAME')
@@ -145,10 +161,12 @@ def gerar_e_enviar_qrcode_central(phone_number):
             "number": phone_number,
             "caption": caption_text,
             "media": base64_qrcode,
-            "mediatype": "image"
+            "mediatype": "image",
+            "fileName": "qrcode.png"  # Nome de arquivo estático para renderização correta
         }
         
         response_send = requests.post(url_send_media, headers=headers, json=payload_media)
+        print(f"🔄 [AUTOPAY] Status de envio de média para {phone_number}: {response_send.status_code}")
         return response_send.status_code in [200, 201]
 
     except Exception as e:
@@ -218,6 +236,9 @@ def webhook_cliente():
                         # Envia o aviso pela própria instância do cliente antes de desligar
                         client_instance = phone_number.split('@')[0]
                         send_whatsapp(phone_number, resposta_bloqueio, instance_name=client_instance)
+                        
+                        # [Ajuste Ponto 3]: Delay estratégico de 3 segundos para garantir a entrega da mensagem
+                        time.sleep(3)
                         
                         # Desliga e invalida o QR Code imediatamente na API
                         desconectar_instancia_evolution(phone_number)
@@ -310,21 +331,4 @@ def webhook_central():
                     print(f"💳 [AUTOPAY] Possível SMS de pagamento detetado vindo de {phone_number}.")
                     
                     # 1. Atualiza o status do cliente para Ativo no Firebase
-                    db.collection('clientes').document(phone_number).update({
-                        "status": "active",
-                        "pago": True,
-                        "data_ativacao": datetime.now(timezone.utc)
-                    })
-                    print(f"✅ [AUTOPAY] Cliente {phone_number} foi ativado no Firestore!")
-                    
-                    # 2. Gera a nova sessão e envia o QR Code de volta pela Central Master
-                    gerar_e_enviar_qrcode_central(phone_number)
-
-    except Exception as e:
-        print(f"ERRO CRÍTICO NO WEBHOOK CENTRAL AUTOPAY: {e}")
-        
-    return 'OK', 200
-
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=int(os.getenv('PORT', 5000)))
+                    db.collection('cli... [message truncated]
