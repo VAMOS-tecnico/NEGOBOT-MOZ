@@ -2,7 +2,8 @@ import os
 import json
 import requests
 from flask import Flask, request
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 import firebase_admin
 from firebase_admin import credentials, firestore
 
@@ -23,9 +24,10 @@ else:
 
 db = firestore.client()
 
-# Configuração do Gemini (Atualizado para o novíssimo Gemini 3 Flash Preview!)
-genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
-model = genai.GenerativeModel('gemini-3-flash-preview')
+# Configuração do NOVO cliente Gemini (SDK oficial google-genai)
+client = genai.Client(api_key=os.getenv('GEMINI_API_KEY'))
+# Usando o novíssimo Gemini 3 Flash Preview!
+MODEL_NAME = 'gemini-3-flash-preview'
 
 def get_chat_history(phone_number):
     try:
@@ -69,21 +71,60 @@ def webhook():
                 message_text = message['templateButtonReplyMessage'].get('selectedId', '')
 
             if message_text and phone_number:
-                history = get_chat_history(phone_number)
+                # Recuperar o histórico do Firebase
+                raw_history = get_chat_history(phone_number)
                 
-                try:
-                    chat = model.start_chat(history=history)
-                    response = chat.send_message(message_text) 
+                # Converter o histórico antigo para o formato correto do novo SDK (types.Content)
+                contents = []
+                for msg in raw_history:
+                    role = msg.get('role')
+                    # O novo SDK espera "user" ou "model"
+                    if role == "assistant":
+                        role = "model"
+                    
+                    parts_list = []
+                    for p in msg.get('parts', []):
+                        parts_list.append(types.Part.from_text(text=p.get('text', '')))
+                        
+                    contents.append(
+                        types.Content(
+                            role=role,
+                            parts=parts_list
+                        )
+                    )
+                
+                # Adicionar a nova mensagem do usuário ao histórico de envio
+                contents.append(
+                    types.Content(
+                        role="user",
+                        parts=[types.Part.from_text(text=message_text)]
+                    )
+                )
 
-                    # Formato correto para o SDK do Gemini não dar erro
-                    new_history = []
-                    for msg in chat.history:
-                        new_history.append({
-                            "role": msg.role,
-                            "parts": [{"text": p.text} for p in msg.parts]
+                try:
+                    # Chamar o modelo usando o novo SDK
+                    response = client.models.generate_content(
+                        model=MODEL_NAME,
+                        contents=contents
+                    )
+                    
+                    # Adicionar a resposta do modelo ao histórico final
+                    contents.append(
+                        types.Content(
+                            role="model",
+                            parts=[types.Part.from_text(text=response.text)]
+                        )
+                    )
+
+                    # Converter de volta para formato JSON simples para salvar no Firebase
+                    updated_history = []
+                    for content in contents:
+                        updated_history.append({
+                            "role": content.role,
+                            "parts": [{"text": p.text} for p in content.parts]
                         })
                     
-                    save_chat_history(phone_number, new_history)
+                    save_chat_history(phone_number, updated_history)
                     send_whatsapp(phone_number, response.text)
 
                 except Exception as e:
