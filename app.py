@@ -53,10 +53,17 @@ def webhook():
             msg_data = data['data']
             key = msg_data.get('key', {})
             
-            # Evita responder a mensagens enviadas pelo próprio bot
+            # --- TRAVA DE SEGURANÇA ---
+            # 1. Evita responder a si mesmo
             if key.get('fromMe'): return 'OK', 200
-                
-            phone_number = key.get('remoteJid')
+            
+            # 2. TRAVA DE GRUPOS: Se tiver @g.us, ignora imediatamente
+            phone_number = key.get('remoteJid', '')
+            if '@g.us' in phone_number:
+                print("Ignorado: Mensagem de grupo detectada.")
+                return 'OK', 200
+            # ---------------------------
+            
             message = msg_data.get('message', {})
             message_text = ""
             
