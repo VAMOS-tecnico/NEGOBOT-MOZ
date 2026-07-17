@@ -357,4 +357,17 @@ def webhook_central():
                     return 'OK', 200
 
                 # --- FLUXO 3: COMANDO MANUAL DE RECUPERAÇÃO DE QR CODE ---
-                if msg_clean... [message truncated]
+                if msg_clean == "#qrcode":
+                    send_whatsapp(phone_number, "🔄 A gerar o seu QR Code de reconexão...")
+                    criar_e_configurar_instancia_automatica(phone_number)
+                    time.sleep(2)
+                    gerar_e_enviar_qrcode_central(phone_number)
+                    return 'OK', 200
+
+    except Exception as e:
+        print(f"ERRO WEBHOOK CENTRAL: {e}")
+        
+    return 'OK', 200
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=int(os.getenv('PORT', 5000)))
