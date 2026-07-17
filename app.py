@@ -32,6 +32,9 @@ db = firestore.client()
 client = genai.Client(api_key=os.getenv('GEMINI_API_KEY'))
 MODEL_NAME = 'gemini-3.1-flash-lite'
 
+# 🌟 VARIÁVEL ADICIONADA AQUI: Puxa o número do assistente configurado no Render
+NUMERO_ASSISTANTE = os.getenv('ASSISTANT_NUMBER')
+
 def get_chat_history(phone_number):
     try:
         doc_ref = db.collection('chats').document(phone_number)
@@ -60,6 +63,12 @@ def webhook():
             if key.get('fromMe'): return 'OK', 200
             
             phone_number = key.get('remoteJid', '')
+            
+            # 🌟 VALIDAÇÃO ADICIONADA AQUI: Se a mensagem vier do próprio número do assistente, o bot ignora
+            if NUMERO_ASSISTANTE and NUMERO_ASSISTANTE in phone_number:
+                print(f"🤖 [SEGURANÇA] Mensagem ignorada para evitar loop com o próprio assistente.")
+                return 'OK', 200
+                
             if '@g.us' in phone_number:
                 return 'OK', 200
             
@@ -109,7 +118,6 @@ def webhook():
                     "6. Use negritos e mensagens organizadas por parágrafos curtos para facilitar a leitura no WhatsApp."
                 )
 
-                # Temperatura baixa garante foco total no diálogo sem inventar dados extras
                 config = types.GenerateContentConfig(
                     system_instruction=sys_instruction,
                     temperature=0.2
