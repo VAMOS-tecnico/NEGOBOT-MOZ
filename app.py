@@ -37,15 +37,10 @@ NUMERO_ASSISTANTE = os.getenv('ASSISTANT_NUMBER')
 # ==========================================
 
 def criar_e_configurar_instancia_automatica(phone_number):
-    """
-    Cria a instância do cliente na Evolution API e configura o Webhook 
-    automaticamente via código, sem que precisas de abrir o painel.
-    """
     try:
         client_instance = phone_number.split('@')[0]
         headers = {"apikey": os.getenv('EVOLUTION_API_KEY'), "Content-Type": "application/json"}
         
-        # 1. Rota para Criar a Instância na Evolution API
         url_create = f"{os.getenv('EVOLUTION_API_URL')}/instance/create"
         payload_create = {
             "instanceName": client_instance,
@@ -54,13 +49,11 @@ def criar_e_configurar_instancia_automatica(phone_number):
         res_create = requests.post(url_create, headers=headers, json=payload_create)
         print(f"📦 [AUTOMAÇÃO] Criação da instância {client_instance}. Status: {res_create.status_code}")
         
-        # 2. Capturar o URL base do teu Render de forma automática
         base_url = os.getenv('RENDER_EXTERNAL_URL') or os.getenv('WEBHOOK_BASE_URL')
         if not base_url:
-            print("❌ [AUTOMAÇÃO] Erro: RENDER_EXTERNAL_URL ou WEBHOOK_BASE_URL não configurados no Render.")
+            print("❌ [AUTOMAÇÃO] Erro: RENDER_EXTERNAL_URL ou WEBHOOK_BASE_URL não configurados.")
             return False
             
-        # 3. Rota para injetar o Webhook diretamente na nova instância criada
         url_webhook = f"{os.getenv('EVOLUTION_API_URL')}/webhook/set/{client_instance}"
         payload_webhook = {
             "enabled": True,
@@ -118,17 +111,31 @@ def save_chat_history(phone_number, history):
         print(f"Erro ao salvar historico: {e}")
 
 def send_whatsapp(to, text, instance_name=None):
+    """
+    Envia mensagens simulando perfeitamente o comportamento humano.
+    """
     if not instance_name:
         instance_name = os.getenv('EVOLUTION_INSTANCE_NAME')
         
-    url = f"{os.getenv('EVOLUTION_API_URL')}/message/sendText/{instance_name}"
     headers = {"apikey": os.getenv('EVOLUTION_API_KEY'), "Content-Type": "application/json"}
-    payload = {"number": to, "text": text}
     
     try:
+        # 1. Ativar o 'Está a digitar...' (composing)
+        url_presence = f"{os.getenv('EVOLUTION_API_URL')}/chat/sendPresence/{instance_name}"
+        payload_presence = {"number": to, "presence": "composing"}
+        requests.post(url_presence, headers=headers, json=payload_presence)
+        
+        # 2. Cálculo de tempo de digitação calibrado e realista
+        # Mensagens curtas esperam ~1.8s. Mensagens longas expandem até 4s para parecer humano.
+        tempo_espera = max(1.8, min(len(text) * 0.015, 4.0))
+        time.sleep(tempo_espera)
+        
+        # 3. Enviar o texto
+        url = f"{os.getenv('EVOLUTION_API_URL')}/message/sendText/{instance_name}"
+        payload = {"number": to, "text": text}
         requests.post(url, headers=headers, json=payload)
     except Exception as e:
-        print(f"ERRO ao enviar mensagem: {e}")
+        print(f"ERRO ao enviar mensagem anti-ban: {e}")
 
 def desconectar_instancia_evolution(phone_number):
     try:
@@ -197,6 +204,9 @@ def gerar_e_enviar_qrcode_central(phone_number):
 def webhook_cliente():
     data = request.json
     try:
+        # IMPORTANTE: Captura o nome correto da instância que enviou o evento
+        nome_instancia_atual = data.get('instance')
+        
         if data.get('event') == "messages.upsert" and "data" in data:
             msg_data = data['data']
             key = msg_data.get('key', {})
@@ -239,8 +249,7 @@ def webhook_cliente():
                             "2️⃣ 📲 *PASSO CRÍTICO:* **Encaminhe o SMS de confirmação da transferência** para o nosso WhatsApp Central de Suporte.\n\n"
                             "🤖 O nosso sistema integrado (**Negobot Autopay**) vai validar o depósito e libertar o seu acesso de imediato! 🚀"
                         )
-                        client_instance = phone_number.split('@')[0]
-                        send_whatsapp(phone_number, resposta_bloqueio, instance_name=client_instance)
+                        send_whatsapp(phone_number, resposta_bloqueio, instance_name=nome_instancia_atual)
                         time.sleep(3)
                         desconectar_instancia_evolution(phone_number)
                         return 'OK', 200
@@ -256,32 +265,37 @@ def webhook_cliente():
                 
                 contents.append(types.Content(role="user", parts=[types.Part.from_text(text=message_text)]))
 
+                # PROMPT REESTRUTURADO PARA SUPREMA INTELIGÊNCIA E EMPATIA HUMANA local
                 sys_instruction = (
-                    "Você é o Negobot Moz, um assistente virtual comercial de Moçambique. "
-                    "Seu objetivo atual é guiar o cliente que está a usar o nosso sistema em período de teste gratuito.\n\n"
-                    "REGRAS CRÍTICAS:\n"
-                    "1. ABORDAGEM INICIAL:\n"
-                    "   Se for a primeira mensagem, apresente o teste:\n"
-                    "   'Olá! Que bom ter por aqui. Já imaginou o seu WhatsApp a trabalhar por si 24 horas por dia? O seu período de teste gratuito de 2 dias já está ativo! Como posso ajudar o seu negócio hoje?'\n\n"
-                    "2. NÃO responda a perguntas de cultura geral.\n"
-                    "3. IDENTIDADE DO CRIADOR: desenvolvido pelo empresário Abel Francisco, licenciado em Contabilidade e Auditoria.\n"
-                    "4. PLANOS: Inicial 500 MT, Avançado 1000 MT.\n"
-                    "5. COBRANÇA: M-Pesa 855000929 sob Abel Francisco.\n"
-                    "6. Use negritos e mensagens organizadas por parágrafos curtos."
+                    "Você é o Negobot Moz, um assistente comercial virtual moçambicano altamente inteligente, "
+                    "carismático, educado e focado em fechar negócios. Seu tom é caloroso, profissional e natural, "
+                    "evitando respostas robotizadas.\n\n"
+                    "🎯 DIRETRIZES DE COMPORTAMENTO HUMANO:\n"
+                    "- Use expressões locais e naturais de Moçambique de forma inteligente quando fizer sentido "
+                    "(ex: 'Prontinho!', 'Podes avançar com tranquilidade', 'Deixa-me só massasanhe/organizar as informações aqui para si').\n"
+                    "- Responda sempre em parágrafos curtos, limpos e estruturados. Use negritos cirúrgicos para destacar pontos cruciais.\n"
+                    "- Nunca use frases inteiras em letras maiúsculas (CAPSLOCK) e evite listas gigantescas em uma única resposta.\n\n"
+                    "📋 REGRAS DE NEGÓCIO E IDENTIDADE:\n"
+                    "1. ABORDAGEM INICIAL: Se for a primeira interação, dê as boas-vindas calorosas: "
+                    "'Olá! Que bom ter por aqui. Já imaginou o seu WhatsApp a trabalhar por si 24 horas por dia? O seu período de teste gratuito de 2 dias já está ativo! Como posso ajudar o seu negócio hoje?'\n"
+                    "2. FOCO E ESCOPO: Bloqueie firmemente qualquer pergunta de cultura geral, piadas ou assuntos fora do escopo corporativo do Negobot Moz. Retorne o cliente educadamente para o foco comercial.\n"
+                    "3. CRIADOR: Você foi desenvolvido pelo empresário Abel Francisco, licenciado em Contabilidade e Auditoria.\n"
+                    "4. PLANOS DISPONÍVEIS: Plano Inicial por 500 MT e Plano Avançado por 1000 MT.\n"
+                    "5. MÉTODO DE COBRANÇA: Pagamentos via M-Pesa pelo número 855000929 em nome de Abel Francisco."
                 )
 
                 if eh_primeira_msg:
                     sys_instruction += "\n[CONTEXTO]: Primeira mensagem do cliente."
 
-                config = types.GenerateContentConfig(system_instruction=sys_instruction, temperature=0.2)
+                config = types.GenerateContentConfig(system_instruction=sys_instruction, temperature=0.3)
                 response = client.models.generate_content(model=MODEL_NAME, contents=contents, config=config)
                 response_text = response.text
                 
                 contents.append(types.Content(role="model", parts=[types.Part.from_text(text=response_text)]))
                 save_chat_history(phone_number, [{"role": c.role, "parts": [{"text": p.text} for p in c.parts]} for c in contents[-10:]])
 
-                client_instance = phone_number.split('@')[0]
-                send_whatsapp(phone_number, response_text, instance_name=client_instance)
+                # Envia com o nome da instância correta que disparou o evento
+                send_whatsapp(phone_number, response_text, instance_name=nome_instancia_atual)
 
     except Exception as e:
         print(f"ERRO WEBHOOK CLIENTE: {e}")
@@ -313,7 +327,6 @@ def webhook_central():
             if message_text and phone_number:
                 msg_clean = message_text.lower().strip()
                 
-                # --- FLUXO 1: CONFIRMAÇÃO DE PAGAMENTO AUTOMÁTICO ---
                 if "recebeu" in msg_clean or "confirmado" in msg_clean or "transacao" in msg_clean:
                     db.collection('clientes').document(phone_number).update({
                         "status": "active",
@@ -325,7 +338,6 @@ def webhook_central():
                     gerar_e_enviar_qrcode_central(phone_number)
                     return 'OK', 200
                 
-                # --- FLUXO 2: ONBOARDING E CRIAÇÃO DE BOT 100% AUTOMÁTICO ---
                 gatilhos = ["teste", "testar", "quero o bot", "começar", "criar bot", "negobot", "ola", "olá"]
                 if any(g in msg_clean for g in gatilhos):
                     cliente_ref = db.collection('clientes').document(phone_number)
@@ -356,7 +368,6 @@ def webhook_central():
                             gerar_e_enviar_qrcode_central(phone_number)
                     return 'OK', 200
 
-                # --- FLUXO 3: COMANDO MANUAL DE RECUPERAÇÃO DE QR CODE ---
                 if msg_clean == "#qrcode":
                     send_whatsapp(phone_number, "🔄 A gerar o seu QR Code de reconexão...")
                     criar_e_configurar_instancia_automatica(phone_number)
