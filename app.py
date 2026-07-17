@@ -11,12 +11,11 @@ from firebase_admin import credentials, firestore
 
 app = Flask(__name__)
 
-# --- Rota de Saúde ---
 @app.route('/', methods=['GET'])
 def health_check():
-    return "O ecossistema Negobot está online e operacional! 🚀", 200
+    return "O ecossistema Negobot 100% Automático está online! 🚀", 200
 
-# Inicialização do Firebase
+# Inicialização Segura do Firebase
 firebase_config_env = os.getenv('FIREBASE_CONFIG')
 if firebase_config_env:
     try:
@@ -29,21 +28,58 @@ else:
     firebase_admin.initialize_app()
 
 db = firestore.client()
-
-# Instanciar o Cliente Gemini
 client = genai.Client(api_key=os.getenv('GEMINI_API_KEY'))
 MODEL_NAME = 'gemini-3.1-flash-lite'
-
-# Variável do assistente para evitar loops (Configurada no Render)
 NUMERO_ASSISTANTE = os.getenv('ASSISTANT_NUMBER')
 
+# ==========================================
+#   🤖 FUNÇÃO DE INFRAESTRUTURA AUTOMÁTICA
+# ==========================================
+
+def criar_e_configurar_instancia_automatica(phone_number):
+    """
+    Cria a instância do cliente na Evolution API e configura o Webhook 
+    automaticamente via código, sem que precisas de abrir o painel.
+    """
+    try:
+        client_instance = phone_number.split('@')[0]
+        headers = {"apikey": os.getenv('EVOLUTION_API_KEY'), "Content-Type": "application/json"}
+        
+        # 1. Rota para Criar a Instância na Evolution API
+        url_create = f"{os.getenv('EVOLUTION_API_URL')}/instance/create"
+        payload_create = {
+            "instanceName": client_instance,
+            "qrcode": True
+        }
+        res_create = requests.post(url_create, headers=headers, json=payload_create)
+        print(f"📦 [AUTOMAÇÃO] Criação da instância {client_instance}. Status: {res_create.status_code}")
+        
+        # 2. Capturar o URL base do teu Render de forma automática
+        base_url = os.getenv('RENDER_EXTERNAL_URL') or os.getenv('WEBHOOK_BASE_URL')
+        if not base_url:
+            print("❌ [AUTOMAÇÃO] Erro: RENDER_EXTERNAL_URL ou WEBHOOK_BASE_URL não configurados no Render.")
+            return False
+            
+        # 3. Rota para injetar o Webhook diretamente na nova instância criada
+        url_webhook = f"{os.getenv('EVOLUTION_API_URL')}/webhook/set/{client_instance}"
+        payload_webhook = {
+            "enabled": True,
+            "url": f"{base_url.rstrip('/')}/webhook-cliente",
+            "events": ["MESSAGES_UPSERT"]
+        }
+        res_webhook = requests.post(url_webhook, headers=headers, json=payload_webhook)
+        print(f"🔗 [AUTOMAÇÃO] Webhook automático configurado. Status: {res_webhook.status_code}")
+        
+        return True
+    except Exception as e:
+        print(f"❌ Erro crítico ao automatizar criação/webhook: {e}")
+        return False
 
 # ==========================================
-#        FUNÇÕES AUXILIARES E DE API
+#        FUNÇÕES AUXILIARES E DE BANCO
 # ==========================================
 
 def verificar_ou_criar_cliente(phone_number):
-    """Controla o período de teste de 2 dias do cliente no Firestore."""
     try:
         cliente_ref = db.collection('clientes').document(phone_number)
         doc = cliente_ref.get()
@@ -54,14 +90,14 @@ def verificar_ou_criar_cliente(phone_number):
                 "phone_number": phone_number,
                 "data_registro": agora,
                 "trial_start": agora,
-                "status": "trial"  # Estados: 'trial', 'bloqueado', 'active'
+                "status": "trial"
             }
             cliente_ref.set(dados_cliente)
             return dados_cliente, True
         
         return doc.to_dict(), False
     except Exception as e:
-        print(f"❌ Erro ao verificar/criar cliente: {e}")
+        print(f"❌ Erro ao verificar cliente: {e}")
         return None, False
 
 def get_chat_history(phone_number):
@@ -82,7 +118,6 @@ def save_chat_history(phone_number, history):
         print(f"Erro ao salvar historico: {e}")
 
 def send_whatsapp(to, text, instance_name=None):
-    """Envia mensagens de texto genéricas. Se não passar instância, usa a Master Central."""
     if not instance_name:
         instance_name = os.getenv('EVOLUTION_INSTANCE_NAME')
         
@@ -91,70 +126,54 @@ def send_whatsapp(to, text, instance_name=None):
     payload = {"number": to, "text": text}
     
     try:
-        response = requests.post(url, headers=headers, json=payload)
-        print(f"DEBUG: Envio via [{instance_name}] Status: {response.status_code}")
+        requests.post(url, headers=headers, json=payload)
     except Exception as e:
         print(f"ERRO ao enviar mensagem: {e}")
 
 def desconectar_instancia_evolution(phone_number):
-    """Envia um comando de LOGOUT para a Evolution API para destruir a sessão expirada."""
     try:
         instance_name = phone_number.split('@')[0]
         url = f"{os.getenv('EVOLUTION_API_URL')}/instance/logout/{instance_name}"
         headers = {"apikey": os.getenv('EVOLUTION_API_KEY'), "Content-Type": "application/json"}
-        
         response = requests.post(url, headers=headers)
-        print(f"🔄 [EVOLUTION] Logout executado na instância '{instance_name}'. Resposta: {response.status_code}")
         return response.status_code == 200
     except Exception as e:
-        print(f"❌ Erro ao desconectar instância: {e}")
         return False
 
 def gerar_e_enviar_qrcode_central(phone_number):
-    """
-    Gera uma nova sessão de QR Code e envia como Imagem pelo número Central Master.
-    Trata instâncias abertas e limpa o cabeçalho Data URI do Base64.
-    """
     try:
         client_instance = phone_number.split('@')[0]
         headers = {"apikey": os.getenv('EVOLUTION_API_KEY'), "Content-Type": "application/json"}
         
-        # 1. Forçar a Evolution API a gerar uma nova sessão/QR Code
         url_connect = f"{os.getenv('EVOLUTION_API_URL')}/instance/connect/{client_instance}"
         response_connect = requests.get(url_connect, headers=headers)
         
         if response_connect.status_code != 200:
-            print(f"❌ [API] Erro ao conectar instância {client_instance}: {response_connect.text}")
             return False
             
         dados_resposta = response_connect.json()
         
-        # [Ajuste Ponto 1]: Se a instância já estiver aberta por segurança, avisa o cliente diretamente
         if dados_resposta.get("instance", {}).get("state") == "open":
-            print(f"ℹ️ [API] A instância {client_instance} já está conectada e ativa.")
-            send_whatsapp(phone_number, "✅ O seu assistente virtual já se encontra ativo e totalmente operacional no nosso sistema!")
+            send_whatsapp(phone_number, "✅ O seu assistente virtual já se encontra ativo e operacional!")
             return True
             
         base64_qrcode = dados_resposta.get("base64")
         if not base64_qrcode:
-            print(f"❌ [API] O campo 'base64' veio vazio. Resposta recebida: {dados_resposta}")
             return False
 
-        # [Ajuste Ponto 2]: Remove o prefixo 'data:image/...;base64,' se existir para enviar a string limpa
         if "," in base64_qrcode:
             base64_qrcode = base64_qrcode.split(",")[1]
 
-        # 2. Enviar a imagem do QR Code pelo WhatsApp Central Master
         central_instance = os.getenv('EVOLUTION_INSTANCE_NAME')
         url_send_media = f"{os.getenv('EVOLUTION_API_URL')}/message/sendMedia/{central_instance}"
         
         caption_text = (
-            "✅ *Pagamento Confirmado com Sucesso!* 🎉\n\n"
-            "Aqui está o seu novo **QR Code** para reativar o seu assistente virtual:\n\n"
-            "1️⃣ Abra o seu WhatsApp pessoal ou da empresa.\n"
+            "🤖 *Aqui está o seu QR Code do Negobot Moz!* 🚀\n\n"
+            "Siga estes passos simples para ativar o seu robô comercial:\n\n"
+            "1️⃣ Abra o seu WhatsApp que vai atender os seus clientes.\n"
             "2️⃣ Vá a *Aparelhos Conectados* -> *Conectar um aparelho*.\n"
             "3️⃣ Aponte a câmara para este QR Code.\n\n"
-            "Assim que escanear, o seu *Negobot Moz* voltará a trabalhar e a faturar imediatamente! 🚀"
+            "O seu assistente começará a vender imediatamente! 🎉"
         )
         
         payload_media = {
@@ -162,17 +181,13 @@ def gerar_e_enviar_qrcode_central(phone_number):
             "caption": caption_text,
             "media": base64_qrcode,
             "mediatype": "image",
-            "fileName": "qrcode.png"  # Nome de arquivo estático para renderização correta
+            "fileName": "qrcode.png"
         }
         
-        response_send = requests.post(url_send_media, headers=headers, json=payload_media)
-        print(f"🔄 [AUTOPAY] Status de envio de média para {phone_number}: {response_send.status_code}")
-        return response_send.status_code in [200, 201]
-
+        requests.post(url_send_media, headers=headers, json=payload_media)
+        return True
     except Exception as e:
-        print(f"❌ Erro crítico no fluxo de envio de QR Code: {e}")
         return False
-
 
 # ==========================================
 #   ROTA 1: WEBHOOK DO ROBÔ DO CLIENTE
@@ -189,10 +204,8 @@ def webhook_cliente():
             if key.get('fromMe'): return 'OK', 200
             phone_number = key.get('remoteJid', '')
             
-            if NUMERO_ASSISTANTE and NUMERO_ASSISTANTE in phone_number:
-                return 'OK', 200
-            if '@g.us' in phone_number:
-                return 'OK', 200
+            if NUMERO_ASSISTANTE and NUMERO_ASSISTANTE in phone_number: return 'OK', 200
+            if '@g.us' in phone_number: return 'OK', 200
             
             message = msg_data.get('message', {})
             message_text = ""
@@ -211,40 +224,27 @@ def webhook_cliente():
                     if trial_start.tzinfo is None:
                         trial_start = trial_start.replace(tzinfo=timezone.utc)
                     
-                    # Verificação de Expiração do Teste
-                    if status == "trial":
-                        if agora > (trial_start + timedelta(days=2)):
-                            status = "bloqueado"
-                            db.collection('clientes').document(phone_number).update({"status": "bloqueado"})
+                    if status == "trial" and agora > (trial_start + timedelta(days=2)):
+                        status = "bloqueado"
+                        db.collection('clientes').document(phone_number).update({"status": "bloqueado"})
                     
-                    # Fluxo de Bloqueio Ativo
                     if status == "bloqueado":
                         resposta_bloqueio = (
                             "⚠️ *Aviso de Expiração - Negobot Moz* ⚠️\n\n"
                             "O seu período de teste gratuito de **2 dias** chegou ao fim.\n\n"
-                            "Para reativar o seu assistente virtual e continuar a responder aos seus clientes "
-                            "e a fechar vendas automaticamente 24 horas por dia, siga estes passos:\n\n"
-                            "1️⃣ Guarde o seu documento **PDF** com as informações da empresa.\n"
-                            "2️⃣ Efetue o pagamento da subscrição via **M-Pesa**:\n"
+                            "Para reativar o seu assistente virtual, faça o seguinte:\n\n"
+                            "1️⃣ Efetue o pagamento da subscrição via **M-Pesa**:\n"
                             "    • **Número M-Pesa:** 855000929\n"
                             "    • **Titular:** Abel Francisco\n\n"
-                            "3️⃣ 📲 *PASSO CRÍTICO:* **Encaminhe a mensagem/SMS de confirmação da transferência** "
-                            "para o nosso WhatsApp Central de Suporte.\n\n"
-                            "🤖 O nosso sistema integrado (**Negobot Autopay**) vai comparar os dados do SMS automaticamente "
-                            "para validar o depósito e libertar o seu novo acesso de imediato! Vamos elevar o seu negócio? 🚀"
+                            "2️⃣ 📲 *PASSO CRÍTICO:* **Encaminhe o SMS de confirmação da transferência** para o nosso WhatsApp Central de Suporte.\n\n"
+                            "🤖 O nosso sistema integrado (**Negobot Autopay**) vai validar o depósito e libertar o seu acesso de imediato! 🚀"
                         )
-                        # Envia o aviso pela própria instância do cliente antes de desligar
                         client_instance = phone_number.split('@')[0]
                         send_whatsapp(phone_number, resposta_bloqueio, instance_name=client_instance)
-                        
-                        # [Ajuste Ponto 3]: Delay estratégico de 3 segundos para garantir a entrega da mensagem
                         time.sleep(3)
-                        
-                        # Desliga e invalida o QR Code imediatamente na API
                         desconectar_instancia_evolution(phone_number)
                         return 'OK', 200
 
-                # IA Responde normalmente se o cliente estiver Ativo ou dentro do Trial
                 raw_history = get_chat_history(phone_number)
                 recent_history = raw_history[-6:]
                 
@@ -257,30 +257,21 @@ def webhook_cliente():
                 contents.append(types.Content(role="user", parts=[types.Part.from_text(text=message_text)]))
 
                 sys_instruction = (
-                    "Você é o Negobot Moz, um assistente virtual comercial de Moçambique, extremamente profissional, persuasivo e amigável. "
+                    "Você é o Negobot Moz, um assistente virtual comercial de Moçambique. "
                     "Seu objetivo atual é guiar o cliente que está a usar o nosso sistema em período de teste gratuito.\n\n"
-                    "REGRAS CRÍTICAS DE COMPORTAMENTO:\n"
-                    "1. ABORDAGEM INICIAL DE ALTO IMPACTO (PRIMEIRA MENSAGEM DO TESTE):\n"
-                    "   Se for a primeiríssima mensagem do cliente, apresente o teste com esta estrutura:\n"
-                    "   'Olá! Que bom ter por aqui. Já imaginou o seu WhatsApp a trabalhar por si 24 horas por dia, a responder clientes e a fechar vendas automaticamente? É exatamente isso que o Negobot Moz faz. O seu período de teste gratuito de 2 dias já está ativo! Aproveite para ver a máquina a funcionar. Como posso ajudar o seu negócio hoje?'\n\n"
-                    "2. FILOSOFIA DE ATENDIMENTO DURANTE O TESTE:\n"
-                    "   - Demonstre total capacidade de automação. Explique as vantagens do sistema (atendimento 24/7, parágrafos organizados, respostas rápidas).\n"
-                    "   - Se o cliente perguntar como deixar definitivo, explique que após os 2 dias ele precisará de enviar o PDF da empresa e realizar o pagamento via M-Pesa para ativação permanente.\n\n"
-                    "3. NÃO seja uma IA de pesquisa geral. Não responda a perguntas de cultura geral, matemática ou outros temas.\n\n"
-                    "4. IDENTIDADE DO CRIADOR: Se perguntarem quem te criou, "
-                    "responda: 'Fui desenvolvido pelo empresário Abel Francisco, um reconhecido empreendedor do ramo "
-                    "automotivo e imobiliário em Moçambique, licenciado em Contabilidade e Auditoria.'\n\n"
-                    "5. PLANOS E PREÇOS:\n"
-                    "   - Plano Inicial: 500 Meticais\n"
-                    "   - Plano Avançado: 1000 Meticais\n\n"
-                    "6. DADOS DE COBRANÇA (M-PESA):\n"
-                    "   - Número do M-Pesa: 855000929\n"
-                    "   - Nome do Titular: Abel Francisco\n\n"
-                    "7. Use negritos e mensagens organizadas por parágrafos curtos para facilitar a leitura no WhatsApp."
+                    "REGRAS CRÍTICAS:\n"
+                    "1. ABORDAGEM INICIAL:\n"
+                    "   Se for a primeira mensagem, apresente o teste:\n"
+                    "   'Olá! Que bom ter por aqui. Já imaginou o seu WhatsApp a trabalhar por si 24 horas por dia? O seu período de teste gratuito de 2 dias já está ativo! Como posso ajudar o seu negócio hoje?'\n\n"
+                    "2. NÃO responda a perguntas de cultura geral.\n"
+                    "3. IDENTIDADE DO CRIADOR: desenvolvido pelo empresário Abel Francisco, licenciado em Contabilidade e Auditoria.\n"
+                    "4. PLANOS: Inicial 500 MT, Avançado 1000 MT.\n"
+                    "5. COBRANÇA: M-Pesa 855000929 sob Abel Francisco.\n"
+                    "6. Use negritos e mensagens organizadas por parágrafos curtos."
                 )
 
                 if eh_primeira_msg:
-                    sys_instruction += "\n[CONTEXTO]: Primeira mensagem do cliente. Execute a Regra 1 estritamente."
+                    sys_instruction += "\n[CONTEXTO]: Primeira mensagem do cliente."
 
                 config = types.GenerateContentConfig(system_instruction=sys_instruction, temperature=0.2)
                 response = client.models.generate_content(model=MODEL_NAME, contents=contents, config=config)
@@ -293,15 +284,14 @@ def webhook_cliente():
                 send_whatsapp(phone_number, response_text, instance_name=client_instance)
 
     except Exception as e:
-        print(f"ERRO CRÍTICO NO WEBHOOK DO CLIENTE: {e}")
+        print(f"ERRO WEBHOOK CLIENTE: {e}")
     return 'OK', 200
 
-
 # ==========================================
-#   ROTA 2: WEBHOOK DO AUTOPAY CENTRAL
+#   ROTA 2: WEBHOOK DO AUTOPAY CENTRAL (MASTER)
 # ==========================================
 
-@app.route('/webhook-central', methods=['POST'])
+@app.route('/webhook', methods=['POST'])
 def webhook_central():
     data = request.json
     try:
@@ -310,8 +300,6 @@ def webhook_central():
             key = msg_data.get('key', {})
             
             if key.get('fromMe'): return 'OK', 200
-            
-            # O remetente da mensagem para a Central é o número do cliente que pagou
             phone_number = key.get('remoteJid', '')
             if '@g.us' in phone_number: return 'OK', 200
             
@@ -322,13 +310,51 @@ def webhook_central():
             elif 'extendedTextMessage' in message:
                 message_text = message['extendedTextMessage'].get('text', '')
 
-            # Lógica do Negobot Autopay: Compara se a mensagem colada é um SMS válido do M-Pesa
             if message_text and phone_number:
-                msg_clean = message_text.lower()
+                msg_clean = message_text.lower().strip()
                 
-                # Padrões comuns de confirmação de transferência do M-Pesa em Moçambique
+                # --- FLUXO 1: CONFIRMAÇÃO DE PAGAMENTO AUTOMÁTICO ---
                 if "recebeu" in msg_clean or "confirmado" in msg_clean or "transacao" in msg_clean:
-                    print(f"💳 [AUTOPAY] Possível SMS de pagamento detetado vindo de {phone_number}.")
+                    db.collection('clientes').document(phone_number).update({
+                        "status": "active",
+                        "pago": True,
+                        "data_ativacao": datetime.now(timezone.utc)
+                    })
+                    criar_e_configurar_instancia_automatica(phone_number)
+                    time.sleep(2)
+                    gerar_e_enviar_qrcode_central(phone_number)
+                    return 'OK', 200
+                
+                # --- FLUXO 2: ONBOARDING E CRIAÇÃO DE BOT 100% AUTOMÁTICO ---
+                gatilhos = ["teste", "testar", "quero o bot", "começar", "criar bot", "negobot", "ola", "olá"]
+                if any(g in msg_clean for g in gatilhos):
+                    cliente_ref = db.collection('clientes').document(phone_number)
+                    doc = cliente_ref.get()
                     
-                    # 1. Atualiza o status do cliente para Ativo no Firebase
-                    db.collection('cli... [message truncated]
+                    if not doc.exists:
+                        send_whatsapp(phone_number, "⏳ *Olá! Estou a preparar o seu ambiente do Negobot Moz agora mesmo...* Demora menos de 10 segundos! 🚀")
+                        
+                        sucesso_infra = criar_e_configurar_instancia_automatica(phone_number)
+                        if sucesso_infra:
+                            agora = datetime.now(timezone.utc)
+                            dados_cliente = {
+                                "phone_number": phone_number,
+                                "data_registro": agora,
+                                "trial_start": agora,
+                                "status": "trial"
+                            }
+                            cliente_ref.set(dados_cliente)
+                            time.sleep(3)
+                            gerar_e_enviar_qrcode_central(phone_number)
+                    else:
+                        status_atual = doc.to_dict().get('status', 'trial')
+                        if status_atual == 'bloqueado':
+                            send_whatsapp(phone_number, "⚠️ O seu período de teste terminou. Efetue o pagamento via M-Pesa (855000929) e envie o SMS de confirmação aqui.")
+                        elif status_atual == 'active':
+                            send_whatsapp(phone_number, "✅ O seu plano está Ativo! Se precisar de reconectar, digite *#qrcode*.")
+                        else:
+                            gerar_e_enviar_qrcode_central(phone_number)
+                    return 'OK', 200
+
+                # --- FLUXO 3: COMANDO MANUAL DE RECUPERAÇÃO DE QR CODE ---
+                if msg_clean... [message truncated]
