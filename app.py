@@ -14,7 +14,7 @@ app = Flask(__name__)
 
 @app.route('/', methods=['GET'])
 def health_check():
-    return "O ecossistema Negobot 100% Automático está online! 🚀", 200
+    return "O ecossistema Negobot 100% Automático com Suporte Humano está online! 🚀", 200
 
 # Inicialização Segura do Firebase
 firebase_config_env = os.getenv('FIREBASE_CONFIG')
@@ -261,6 +261,19 @@ def webhook_cliente():
                 message_text = message['extendedTextMessage'].get('text', '')
 
             if message_text and phone_number:
+                msg_clean = message_text.lower().strip()
+                
+                # --- NOVO: ENCAIXE DE SUPORTE HUMANO (PLANO AVANÇADO) ---
+                gatilhos_humano = ["falar com atendente", "suporte humano", "atendente", "falar com humano", "#suporte"]
+                if any(g in msg_clean for g in gatilhos_humano):
+                    resposta_suporte = (
+                        "🔔 *Pedido de Suporte Humano recebido!*\n\n"
+                        "Vou chamar um dos nossos especialistas para dar continuidade ao seu atendimento. "
+                        "Por favor, aguarde um momento que a equipa já o vai contactar aqui! 🤝"
+                    )
+                    send_whatsapp(phone_number, resposta_suporte, instance_name=nome_instancia_atual)
+                    return 'OK', 200
+
                 cliente, eh_primeira_msg = verificar_ou_criar_cliente(phone_number)
                 agora = datetime.now(timezone.utc)
                 
@@ -310,7 +323,7 @@ def webhook_cliente():
                     "- Use expressões locais e naturais de Moçambique de forma inteligente quando fizer sentido "
                     "(ex: 'Prontinho!', 'Podes avançar com tranquilidade', 'Deixa-me só massasanhe/organizar as informações aqui para si').\n"
                     "- Responda sempre em parágrafos curtos, limpos e estruturados. Use negritos cirúrgicos para destacar pontos cruciais.\n"
-                    "- Nunca use frases inteiras em letras maiúsculas (CAPSLOCK) e evite listas gigantescas em uma única resposta.\n\n"
+                    "- Nunca use frases inteiras in letras maiúsculas (CAPSLOCK) e evite listas gigantescas em uma única resposta.\n\n"
                     "📋 REGRAS DE NEGÓCIO E IDENTIDADE:\n"
                     "1. ABORDAGEM INICIAL: Se for a primeira interação, dê as boas-vindas calorosas: "
                     "'Olá! Que bom ter por aqui. Já imaginou o seu WhatsApp a trabalhar por si 24 horas por dia? O seu período de teste gratuito de 2 dias já está ativo! Como posso ajudar o seu negócio hoje?'\n"
@@ -408,7 +421,7 @@ def webhook_central():
                             send_whatsapp(phone_number, "✅ O seu teste de 2 dias já está a decorrer! Se precisar do QR Code novamente, digite *#qrcode*.")
                     return 'OK', 200
 
-                # --- FLUXO 3: APENAS UM OLÁ ---
+                # --- FLUXO 3: APENAS UM OLÁ (NOVO GUIÃO DE VENDAS PERSUASIVO) ---
                 gatilhos_saudacao = ["ola", "olá", "bom dia", "boa tarde", "boa noite", "negobot"]
                 if any(g in msg_clean for g in gatilhos_saudacao):
                     cliente_ref = db.collection('clientes').document(phone_number)
@@ -416,12 +429,12 @@ def webhook_central():
                     
                     if not doc.exists:
                         mensagem_vendas = (
-                            "👋 Olá! Sou o assistente central do *Negobot Moz*.\n\n"
-                            "Estou aqui para criar uma automação comercial que atende os seus clientes 24h por dia!\n\n"
-                            "🎁 *Quer iniciar o seu TESTE GRATUITO DE 2 DIAS agora mesmo?*\n"
-                            "Basta responder a esta mensagem com a palavra: *TESTAR*"
+                            "👋 Olá! Daqui fala o assistente do **Negobot Moz**.\n\n"
+                            "Sabia que mais de 70% das vendas no WhatsApp são perdidas por demora no atendimento? 😱\n\n"
+                            "Quero ajudar a sua empresa a faturar 24h por dia, mesmo enquanto está a dormir! 🎁 **Libertei um teste 100% GRATUITO de 2 dias para si.**\n\n"
+                            "Quer ativar agora? Responda apenas com a palavra: *TESTAR*"
                         )
-                        send_whatsapp(phone_number, message_vendas)
+                        send_whatsapp(phone_number, mensagem_vendas)
                         
                         cliente_ref.set({
                             "phone_number": phone_number, 
@@ -458,11 +471,13 @@ def loop_interno_lembretes():
             chave_atual = f"{agora.strftime('%Y-%m-%d_%H:%M')}"
             
             if chave_atual != ultima_execucao_chave:
-                if agora.hour == 8 and agora.minute == 30:
+                # NOVO HORÁRIO: Manhã às 09:30
+                if agora.hour == 9 and agora.minute == 30:
                     enviar_lembretes_em_massa("manhã")
                     ultima_execucao_chave = chave_atual
                 
-                elif agora.hour == 15 and agora.minute == 30:
+                # NOVO HORÁRIO: Tarde às 17:00
+                elif agora.hour == 17 and agora.minute == 0:
                     enviar_lembretes_em_massa("tarde")
                     ultima_execucao_chave = chave_atual
                     
