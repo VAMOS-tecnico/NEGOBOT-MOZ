@@ -2,6 +2,7 @@ import os
 import json
 import time
 import requests
+import threading
 from flask import Flask, request
 from datetime import datetime, timedelta, timezone
 from google import genai
@@ -111,26 +112,19 @@ def save_chat_history(phone_number, history):
         print(f"Erro ao salvar historico: {e}")
 
 def send_whatsapp(to, text, instance_name=None):
-    """
-    Envia mensagens simulando perfeitamente o comportamento humano.
-    """
     if not instance_name:
         instance_name = os.getenv('EVOLUTION_INSTANCE_NAME')
         
     headers = {"apikey": os.getenv('EVOLUTION_API_KEY'), "Content-Type": "application/json"}
     
     try:
-        # 1. Ativar o 'Está a digitar...' (composing)
         url_presence = f"{os.getenv('EVOLUTION_API_URL')}/chat/sendPresence/{instance_name}"
         payload_presence = {"number": to, "presence": "composing"}
         requests.post(url_presence, headers=headers, json=payload_presence)
         
-        # 2. Cálculo de tempo de digitação calibrado e realista
-        # Mensagens curtas esperam ~1.8s. Mensagens longas expandem até 4s para parecer humano.
         tempo_espera = max(1.8, min(len(text) * 0.015, 4.0))
         time.sleep(tempo_espera)
         
-        # 3. Enviar o texto
         url = f"{os.getenv('EVOLUTION_API_URL')}/message/sendText/{instance_name}"
         payload = {"number": to, "text": text}
         requests.post(url, headers=headers, json=payload)
@@ -197,6 +191,49 @@ def gerar_e_enviar_qrcode_central(phone_number):
         return False
 
 # ==========================================
+#     📢 ROTINA AUTOMÁTICA DE LEMBRETES
+# ==========================================
+
+def enviar_lembretes_em_massa(periodo="dia"):
+    try:
+        print(f"⏰ [ROTINA] Iniciando disparo de lembretes do período da {periodo}...")
+        clientes_ref = db.collection('clientes').where('status', '==', 'trial').stream()
+        central_instance = os.getenv('EVOLUTION_INSTANCE_NAME')
+        
+        saudacao = "Bom dia" if periodo == "manhã" else "Boa tarde"
+        
+        mensagem_lembrete = (
+            f"👋 *{saudacao}! Passando com um aviso importante sobre o seu Negobot Moz.* 🤖\n\n"
+            "Lembramos que o seu período de teste gratuito de 2 dias está ativo e em andamento. "
+            "**Por favor, faça o pagamento da sua subscrição para que o seu bot não seja desligado!** ⚠️\n\n"
+            "💵 *Dados de Pagamento via M-Pesa:*\n"
+            "• **Número M-Pesa:** 855000929\n"
+            "• **Titular:** Abel Francisco\n\n"
+            "📄 *PASSO CRÍTICO DE CONFIGURAÇÃO (Plano Avançado):* \n"
+            "Para calibrarmos a inteligência do seu robô com o raciocínio correto do seu negócio, "
+            "**envie-nos aqui um documento em PDF com todas as informações, catálogos e regras da sua empresa.**"
+        )
+        
+        contador = 0
+        for doc in clientes_ref:
+            dados = doc.to_dict()
+            phone_number = dados.get('phone_number')
+            if phone_number:
+                send_whatsapp(phone_number, mensagem_lembrete, instance_name=central_instance)
+                contador += 1
+                time.sleep(1.5)
+                
+        print(f"✅ [ROTINA] Lembretes concluídos. Total de mensagens enviadas: {contador}")
+    except Exception as e:
+        print(f"❌ Erro crítico ao processar envio de lembretes em massa: {e}")
+
+@app.route('/cron/lembretes', methods=['GET'])
+def disparar_lembretes_via_url():
+    periodo = request.args.get('periodo', 'manhã')
+    threading.Thread(target=enviar_lembretes_em_massa, args=(periodo,)).start()
+    return f"A rotina automatizada de lembretes da {periodo} foi disparada em segundo plano!", 200
+
+# ==========================================
 #   ROTA 1: WEBHOOK DO ROBÔ DO CLIENTE
 # ==========================================
 
@@ -204,7 +241,6 @@ def gerar_e_enviar_qrcode_central(phone_number):
 def webhook_cliente():
     data = request.json
     try:
-        # IMPORTANTE: Captura o nome correto da instância que enviou o evento
         nome_instancia_atual = data.get('instance')
         
         if data.get('event') == "messages.upsert" and "data" in data:
@@ -234,6 +270,7 @@ def webhook_cliente():
                     if trial_start.tzinfo is None:
                         trial_start = trial_start.replace(tzinfo=timezone.utc)
                     
+                    # CONTROLO DO TEMPO DO TESTE (BLOQUEIA APÓS 2 DIAS)
                     if status == "trial" and agora > (trial_start + timedelta(days=2)):
                         status = "bloqueado"
                         db.collection('clientes').document(phone_number).update({"status": "bloqueado"})
@@ -265,7 +302,6 @@ def webhook_cliente():
                 
                 contents.append(types.Content(role="user", parts=[types.Part.from_text(text=message_text)]))
 
-                # PROMPT REESTRUTURADO PARA SUPREMA INTELIGÊNCIA E EMPATIA HUMANA local
                 sys_instruction = (
                     "Você é o Negobot Moz, um assistente comercial virtual moçambicano altamente inteligente, "
                     "carismático, educado e focado em fechar negócios. Seu tom é caloroso, profissional e natural, "
@@ -278,9 +314,11 @@ def webhook_cliente():
                     "📋 REGRAS DE NEGÓCIO E IDENTIDADE:\n"
                     "1. ABORDAGEM INICIAL: Se for a primeira interação, dê as boas-vindas calorosas: "
                     "'Olá! Que bom ter por aqui. Já imaginou o seu WhatsApp a trabalhar por si 24 horas por dia? O seu período de teste gratuito de 2 dias já está ativo! Como posso ajudar o seu negócio hoje?'\n"
-                    "2. FOCO E ESCOPO: Bloqueie firmemente qualquer pergunta de cultura geral, piadas ou assuntos fora do escopo corporativo do Negobot Moz. Retorne o cliente educadamente para o foco comercial.\n"
+                    "2. FOCO E ESCOPO: Bloqueie firmemente qualquer pergunta de cultura geral, piadas ou assuntos fora do escopo corporativo do Negobot Moz.\n"
                     "3. CRIADOR: Você foi desenvolvido pelo empresário Abel Francisco, licenciado em Contabilidade e Auditoria.\n"
-                    "4. PLANOS DISPONÍVEIS: Plano Inicial por 500 MT e Plano Avançado por 1000 MT.\n"
+                    "4. PLANOS DISPONÍVEIS:\n"
+                    "   - Plano Inicial (500 MT/mês): Atendimento automático 24h/7 para perguntas frequentes, configurado apenas por texto manual enviado pelo cliente (não lê arquivos PDF), com limite de até 1.500 mensagens/mês e sem suporte humano integrado.\n"
+                    "   - Plano Avançado (1000 MT/mês): O mais completo e recomendado! Mensagens ilimitadas, inteligência avançada calibrada e treinada diretamente através do documento PDF da empresa (lê catálogos e tabelas complexas) e com SUPORTE HUMANO integrado no WhatsApp sempre que o cliente precisar ou solicitar falar com uma pessoa real.\n"
                     "5. MÉTODO DE COBRANÇA: Pagamentos via M-Pesa pelo número 855000929 em nome de Abel Francisco."
                 )
 
@@ -294,7 +332,6 @@ def webhook_cliente():
                 contents.append(types.Content(role="model", parts=[types.Part.from_text(text=response_text)]))
                 save_chat_history(phone_number, [{"role": c.role, "parts": [{"text": p.text} for p in c.parts]} for c in contents[-10:]])
 
-                # Envia com o nome da instância correta que disparou o evento
                 send_whatsapp(phone_number, response_text, instance_name=nome_instancia_atual)
 
     except Exception as e:
@@ -327,6 +364,7 @@ def webhook_central():
             if message_text and phone_number:
                 msg_clean = message_text.lower().strip()
                 
+                # --- FLUXO 1: CONFIRMAÇÃO DE PAGAMENTO ---
                 if "recebeu" in msg_clean or "confirmado" in msg_clean or "transacao" in msg_clean:
                     db.collection('clientes').document(phone_number).update({
                         "status": "active",
@@ -335,16 +373,18 @@ def webhook_central():
                     })
                     criar_e_configurar_instancia_automatica(phone_number)
                     time.sleep(2)
+                    send_whatsapp(phone_number, "🎉 *Pagamento Confirmado!* O seu Negobot Moz foi atualizado com sucesso para o modo ilimitado.")
                     gerar_e_enviar_qrcode_central(phone_number)
                     return 'OK', 200
                 
-                gatilhos = ["teste", "testar", "quero o bot", "começar", "criar bot", "negobot", "ola", "olá"]
-                if any(g in msg_clean for g in gatilhos):
+                # --- FLUXO 2: INÍCIO E CRIAÇÃO DO TESTE DE 2 DIAS ---
+                gatilhos_teste = ["teste", "testar", "quero o bot", "começar", "criar bot"]
+                if any(g in msg_clean for g in gatilhos_teste):
                     cliente_ref = db.collection('clientes').document(phone_number)
                     doc = cliente_ref.get()
                     
-                    if not doc.exists:
-                        send_whatsapp(phone_number, "⏳ *Olá! Estou a preparar o seu ambiente do Negobot Moz agora mesmo...* Demora menos de 10 segundos! 🚀")
+                    if not doc.exists or doc.to_dict().get('status') == 'prospect':
+                        send_whatsapp(phone_number, "⏳ *Excelente! A preparar o seu ambiente do Negobot Moz para os 2 dias de teste gratuito...* Demora menos de 10 segundos! 🚀")
                         
                         sucesso_infra = criar_e_configurar_instancia_automatica(phone_number)
                         if sucesso_infra:
@@ -361,13 +401,36 @@ def webhook_central():
                     else:
                         status_atual = doc.to_dict().get('status', 'trial')
                         if status_atual == 'bloqueado':
-                            send_whatsapp(phone_number, "⚠️ O seu período de teste terminou. Efetue o pagamento via M-Pesa (855000929) e envie o SMS de confirmação aqui.")
+                            send_whatsapp(phone_number, "⚠️ O seu período de teste de 2 dias terminou. Efetue o pagamento via M-Pesa (855000929) e envie o SMS de confirmação aqui.")
                         elif status_atual == 'active':
                             send_whatsapp(phone_number, "✅ O seu plano está Ativo! Se precisar de reconectar, digite *#qrcode*.")
-                        else:
-                            gerar_e_enviar_qrcode_central(phone_number)
+                        elif status_atual == 'trial':
+                            send_whatsapp(phone_number, "✅ O seu teste de 2 dias já está a decorrer! Se precisar do QR Code novamente, digite *#qrcode*.")
                     return 'OK', 200
 
+                # --- FLUXO 3: APENAS UM OLÁ ---
+                gatilhos_saudacao = ["ola", "olá", "bom dia", "boa tarde", "boa noite", "negobot"]
+                if any(g in msg_clean for g in gatilhos_saudacao):
+                    cliente_ref = db.collection('clientes').document(phone_number)
+                    doc = cliente_ref.get()
+                    
+                    if not doc.exists:
+                        mensagem_vendas = (
+                            "👋 Olá! Sou o assistente central do *Negobot Moz*.\n\n"
+                            "Estou aqui para criar uma automação comercial que atende os seus clientes 24h por dia!\n\n"
+                            "🎁 *Quer iniciar o seu TESTE GRATUITO DE 2 DIAS agora mesmo?*\n"
+                            "Basta responder a esta mensagem com a palavra: *TESTAR*"
+                        )
+                        send_whatsapp(phone_number, message_vendas)
+                        
+                        cliente_ref.set({
+                            "phone_number": phone_number, 
+                            "status": "prospect",
+                            "data_registro": datetime.now(timezone.utc)
+                        })
+                    return 'OK', 200
+
+                # --- FLUXO 4: RECONEXÃO ---
                 if msg_clean == "#qrcode":
                     send_whatsapp(phone_number, "🔄 A gerar o seu QR Code de reconexão...")
                     criar_e_configurar_instancia_automatica(phone_number)
@@ -380,5 +443,34 @@ def webhook_central():
         
     return 'OK', 200
 
+# ==========================================
+#     ⏰ SINCRO DE LOOP INTERNO EM SEGUNDO PLANO
+# ==========================================
+
+def loop_interno_lembretes():
+    print("⏰ [SISTEMA] Monitor de lembretes em segundo plano ativo.")
+    ultima_execucao_chave = ""
+    
+    while True:
+        try:
+            tz_moz = timezone(timedelta(hours=2))
+            agora = datetime.now(tz_moz)
+            chave_atual = f"{agora.strftime('%Y-%m-%d_%H:%M')}"
+            
+            if chave_atual != ultima_execucao_chave:
+                if agora.hour == 8 and agora.minute == 30:
+                    enviar_lembretes_em_massa("manhã")
+                    ultima_execucao_chave = chave_atual
+                
+                elif agora.hour == 15 and agora.minute == 30:
+                    enviar_lembretes_em_massa("tarde")
+                    ultima_execucao_chave = chave_atual
+                    
+        except Exception as e:
+            print(f"❌ Erro no loop secundário de lembretes: {e}")
+            
+        time.sleep(30)
+
 if __name__ == '__main__':
+    threading.Thread(target=loop_interno_lembretes, daemon=True).start()
     app.run(host='0.0.0.0', port=int(os.getenv('PORT', 5000)))
