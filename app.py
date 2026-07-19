@@ -41,6 +41,30 @@ db = firestore.client()
 client = genai.Client(api_key=os.getenv('GEMINI_API_KEY'))
 MODEL_NAME = 'gemini-3.1-flash-lite'
 NUMERO_ASSISTANTE = os.getenv('ASSISTANT_NUMBER')
+ADMIN_NUMBER = os.getenv('ADMIN_NUMBER')  # O teu número pessoal (ex: 25884xxxxxxx) para alertas e comandos
+
+# ==========================================
+#   📢 FUNÇÃO DE NOTIFICAÇÃO DE ERROS CRÍTICOS
+# ==========================================
+
+def notificar_erro_admin(erro_msg):
+    """Envia um alerta em tempo real para o WhatsApp do Administrador em caso de erro crítico."""
+    if ADMIN_NUMBER:
+        central_instance = os.getenv('EVOLUTION_INSTANCE_NAME')
+        headers = {"apikey": os.getenv('EVOLUTION_API_KEY'), "Content-Type": "application/json"}
+        url = f"{os.getenv('EVOLUTION_API_URL')}/message/sendText/{central_instance}"
+        
+        # Garante o formato correto do número
+        to_number = ADMIN_NUMBER if "@" in ADMIN_NUMBER else f"{ADMIN_NUMBER}@s.whatsapp.net"
+        
+        payload = {
+            "number": to_number,
+            "text": f"⚠️ *[ALERTA CRÍTICO - NEGOBOT]*\n\nOcorreu uma falha no servidor:\n❌ `{erro_msg}`\n\n*Verifique a consola do Render imediatamente.*"
+        }
+        try:
+            requests.post(url, headers=headers, json=payload)
+        except Exception as e:
+            print(f"Falha ao enviar notificação de erro ao admin: {e}")
 
 # ==========================================
 #   🤖 FUNÇÃO DE INFRAESTRUTURA AUTOMÁTICA
@@ -77,7 +101,9 @@ def criar_e_configurar_instancia_automatica(phone_number):
         
         return True
     except Exception as e:
-        print(f"❌ Erro crítico ao automatizar criação/webhook: {e}")
+        erro_msg = f"Erro ao automatizar criação/webhook para {phone_number}: {e}"
+        print(f"❌ {erro_msg}")
+        notificar_erro_admin(erro_msg)
         return False
 
 # ==========================================
@@ -95,7 +121,8 @@ def verificar_ou_criar_cliente(phone_number):
                 "phone_number": phone_number,
                 "data_registro": agora,
                 "trial_start": agora,
-                "status": "trial"
+                "status": "trial",
+                "diretrizes_corporativas": "Atenda o cliente com foco exclusivo nos serviços comerciais e institucionais da empresa."
             }
             cliente_ref.set(dados_cliente)
             return dados_cliente, True
@@ -232,13 +259,15 @@ def enviar_lembretes_em_massa(periodo="dia"):
             dados = doc.to_dict()
             phone_number = dados.get('phone_number')
             if phone_number:
-                send_whatsapp(phone_number, mensagem_lembrete, instance_name=central_instance)
+                send_whatsapp(phone_number, message_lembrete, instance_name=central_instance)
                 contador += 1
                 time.sleep(1.5)
                 
         print(f"✅ [ROTINA] Lembretes concluídos. Total de mensagens enviadas: {contador}")
     except Exception as e:
-        print(f"❌ Erro crítico ao processar envio de lembretes em massa: {e}")
+        erro_msg = f"Erro na rotina de lembretes em massa: {e}"
+        print(f"❌ {erro_msg}")
+        notificar_erro_admin(erro_msg)
 
 @app.route('/cron/lembretes', methods=['GET'])
 def disparar_lembretes_via_url():
@@ -290,9 +319,13 @@ def webhook_cliente():
                 cliente, eh_primeira_msg = verificar_ou_criar_cliente(phone_number)
                 agora = datetime.now(timezone.utc)
                 
+                diretrizes_corporativas = "Atenda o cliente focado estritamente nas regras do seu negócio corporativo."
                 if cliente:
                     status = cliente.get('status', 'trial')
                     trial_start = cliente.get('trial_start')
+                    # Puxa as regras customizadas do Firebase se existirem
+                    diretrizes_corporativas = cliente.get('diretrizes_corporativas', diretrizes_corporativas)
+                    
                     if trial_start.tzinfo is None:
                         trial_start = trial_start.replace(tzinfo=timezone.utc)
                     
@@ -318,7 +351,7 @@ def webhook_cliente():
                         return 'OK', 200
 
                 raw_history = get_chat_history(phone_number)
-                recent_history = raw_history[-16:] # Expandido para reter melhor o fio da conversa
+                recent_history = raw_history[-16:]
                 
                 contents = []
                 for msg in recent_history:
@@ -329,18 +362,21 @@ def webhook_cliente():
                 contents.append(types.Content(role="user", parts=[types.Part.from_text(text=message_text)]))
 
                 sys_instruction = (
-                    "Você é o Negobot Moz, um assistente comercial virtual moçambicano altamente inteligente, "
-                    "carismático, educado e focado em fechar negócios. Seu tom é caloroso, profissional e natural, "
-                    "evitando respostas robotizadas.\n\n"
-                    "🎯 DIRETRIZES DE COMPORTAMENTO HUMANO:\n"
-                    "- Use expressões locais e naturais de Moçambique de forma inteligente quando fizer sentido "
-                    "(ex: 'Prontinho!', 'Podes avançar com tranquilidade', 'Deixa-me só massasanhe/organizar as informações aqui para si').\n"
-                    "- Responda sempre em parágrafos curtos, limpos e estruturados. Use negritos cirúrgicos para destacar pontos cruciais.\n"
-                    "- Nunca use frases inteiras em letras maiúsculas (CAPSLOCK) e evite listas gigantescas em uma única resposta.\n\n"
-                    "📋 REGRAS DE NEGÓCIO E IDENTIDADE:\n"
-                    "1. ABORDAGEM INICIAL: Se for a primeira interação, dê as boas-vindas calorosas: "
-                    "'Olá! Que bom ter por aqui. Já imaginou o seu WhatsApp a trabalhar por si 24 horas por dia? O seu período de teste gratuito de 2 dias já está ativo! Como posso ajudar o seu negócio hoje?'\n"
-                    "2. FOCO E ESCOPO: Bloqueie firmemente qualquer pergunta de cultura geral, piadas ou assuntos fora do escopo corporativo do Negobot Moz.\n"
+                    "Você é o Negobot Moz, um assistente comercial virtual altamente inteligente, profissional e "
+                    "estritamente focado em fechar negócios no mercado corporativo. Sua comunicação deve ser feita "
+                    "exclusivamente na norma padrão e culta da Língua Portuguesa (Língua Oficial de Moçambique), mantendo um "
+                    "tom sério, polido, claro e corporativo.\n\n"
+                    "🎯 DIRETRIZES DE CONDUTA E LINGUAGEM:\n"
+                    "- É expressamente proibido o uso de dialetos locais, regionalismos informais, gírias ou termos coloquiais.\n"
+                    "- Mantenha total seriedade: bloqueie firmemente qualquer tipo de piada, brincadeira ou assunto alheio ao escopo comercial.\n"
+                    "- Responda sempre de forma clara e objetiva, utilizando parágrafos curtos e estruturados. Aplique negritos de forma cirúrgica para destacar informações essenciais.\n"
+                    "- Nunca utilize frases inteiras em letras maiúsculas (CAPSLOCK) e evite listas excessivamente longas em uma única mensagem.\n\n"
+                    "📋 INFORMAÇÕES ESPECÍFICAS DA EMPRESA E REGRAS DE NEGÓCIO:\n"
+                    f"{diretrizes_corporativas}\n\n"
+                    "📋 DADOS INSTITUCIONAIS GERAIS:\n"
+                    "1. ABORDAGEM INICIAL: Caso seja a primeira interação do cliente, forneça uma recepção formal: "
+                    "'Olá! Seja bem-vindo. Já imaginou o seu WhatsApp a trabalhar pelo seu negócio 24 horas por dia? O seu período de teste gratuito de 2 dias já está ativo! Como posso ajudar a sua empresa hoje?'\n"
+                    "2. FOCO E ESCOPO: Restrinja o atendimento estritamente ao esclarecimento de dúvidas sobre os serviços comerciais do Negobot Moz.\n"
                     "3. CRIADOR: Você foi desenvolvido pelo empresário Abel Francisco, licenciado em Contabilidade e Auditoria.\n"
                     "4. PLANOS DISPONÍVEIS:\n"
                     "   - Plano Inicial (500 MT/mês): Atendimento automático 24h/7 para perguntas frequentes, configurado apenas por texto manual enviado pelo cliente (não lê arquivos PDF), com limite de até 1.500 mensagens/mês e sem suporte humano integrado.\n"
@@ -351,7 +387,7 @@ def webhook_cliente():
                 if eh_primeira_msg:
                     sys_instruction += "\n[CONTEXTO]: Primeira mensagem do cliente."
 
-                config = types.GenerateContentConfig(system_instruction=sys_instruction, temperature=0.3)
+                config = types.GenerateContentConfig(system_instruction=sys_instruction, temperature=0.2)
                 response = client.models.generate_content(model=MODEL_NAME, contents=contents, config=config)
                 response_text = response.text
                 
@@ -361,7 +397,9 @@ def webhook_cliente():
                 send_whatsapp(phone_number, response_text, instance_name=nome_instancia_atual)
 
     except Exception as e:
-        print(f"❌ ERRO WEBHOOK CLIENTE: {e}")
+        erro_completo = f"Erro na rota Webhook Cliente (Instância: {data.get('instance')}): {e}"
+        print(f"❌ {erro_completo}")
+        notificar_erro_admin(erro_completo)
     return 'OK', 200
 
 # ==========================================
@@ -390,6 +428,44 @@ def webhook_central():
             if message_text and phone_number:
                 msg_clean = message_text.lower().strip()
                 
+                # --- NOVO COMANDO EXCLUSIVO: DASHBOARD DE CONTROLO DE CLIENTES VIA WHATSAPP ---
+                if msg_clean.startswith('#status'):
+                    # Validação de Segurança: Apenas o número do administrador pode executar
+                    remetente_puro = phone_number.split('@')[0]
+                    if ADMIN_NUMBER and remetente_puro in ADMIN_NUMBER:
+                        partes = message_text.split()
+                        if len(partes) > 1:
+                            numero_pesquisa = partes[1].strip()
+                            if not numero_pesquisa.endswith('@s.whatsapp.net'):
+                                jid_pesquisa = f"{numero_pesquisa}@s.whatsapp.net"
+                            else:
+                                jid_pesquisa = numero_pesquisa
+                                
+                            doc_cliente = db.collection('clientes').document(jid_pesquisa).get()
+                            if doc_cliente.exists:
+                                c_dados = doc_cliente.to_dict()
+                                c_status = c_dados.get('status', 'trial')
+                                c_pago = c_dados.get('pago', False)
+                                c_reg = c_dados.get('data_registro')
+                                reg_formatado = c_reg.strftime('%d/%m/%Y às %H:%M') if c_reg else "N/A"
+                                
+                                resposta_status = (
+                                    f"📊 *DASHBOARD CENTRAL - NEGOBOT MOZ*\n\n"
+                                    f"• *Cliente:* {numero_pesquisa}\n"
+                                    f"• *Estado Atual:* {c_status.upper()}\n"
+                                    f"• *Subscrição Paga:* {'Sim ✅' if c_pago else 'Não ❌'}\n"
+                                    f"• *Data de Início/Registro:* {reg_formatado}"
+                                )
+                            else:
+                                resposta_status = f"❌ *Erro:* O número `{numero_pesquisa}` não foi encontrado na base de dados do Firebase."
+                        else:
+                            resposta_status = "💡 *Instrução de Uso:* Envie exatamente: `#status 25884xxxxxxx`"
+                    else:
+                        resposta_status = "⛔ *Acesso Negado:* Este comando é restrito ao administrador do ecossistema."
+                        
+                    send_whatsapp(phone_number, resposta_status)
+                    return 'OK', 200
+
                 # --- FLUXO 1: CONFIRMAÇÃO DE PAGAMENTO ---
                 if "recebeu" in msg_clean or "confirmado" in msg_clean or "transacao" in msg_clean:
                     db.collection('clientes').document(phone_number).update({
@@ -419,7 +495,8 @@ def webhook_central():
                                 "phone_number": phone_number,
                                 "data_registro": agora,
                                 "trial_start": agora,
-                                "status": "trial"
+                                "status": "trial",
+                                "diretrizes_corporativas": "Atenda o cliente focado estritamente nas regras do seu negócio corporativo."
                             }
                             cliente_ref.set(dados_cliente)
                             time.sleep(3)
@@ -434,7 +511,7 @@ def webhook_central():
                             send_whatsapp(phone_number, "✅ O seu teste de 2 dias já está a decorrer! Se precisar do QR Code novamente, digite *#qrcode*.")
                     return 'OK', 200
 
-                # --- FLUXO 3: APENAS UM OLÁ (NOVO GUIÃO DE VENDAS PERSUASIVO) ---
+                # --- FLUXO 3: APENAS UM OLÁ ---
                 gatilhos_saudacao = ["ola", "olá", "bom dia", "boa tarde", "boa noite", "negobot"]
                 if any(g in msg_clean for g in gatilhos_saudacao):
                     cliente_ref = db.collection('clientes').document(phone_number)
@@ -447,12 +524,13 @@ def webhook_central():
                             "Quero ajudar a sua empresa a faturar 24h por dia, mesmo enquanto está a dormir! 🎁 **Libertei um teste 100% GRATUITO de 2 dias para si.**\n\n"
                             "Quer ativar agora? Responda apenas com a palavra: *TESTAR*"
                         )
-                        send_whatsapp(phone_number, mensagem_vendas)
+                        send_whatsapp(phone_number, message_vendas)
                         
                         cliente_ref.set({
                             "phone_number": phone_number, 
                             "status": "prospect",
-                            "data_registro": datetime.now(timezone.utc)
+                            "data_registro": datetime.now(timezone.utc),
+                            "diretrizes_corporativas": "Atenda o cliente focado estritamente nas regras do seu negócio corporativo."
                         })
                     return 'OK', 200
 
@@ -465,7 +543,9 @@ def webhook_central():
                     return 'OK', 200
 
     except Exception as e:
-        print(f"❌ ERRO WEBHOOK CENTRAL: {e}")
+        erro_completo = f"Erro na rota Webhook Central: {e}"
+        print(f"❌ {erro_completo}")
+        notificar_erro_admin(erro_completo)
         
     return 'OK', 200
 
@@ -484,12 +564,9 @@ def loop_interno_lembretes():
             chave_atual = f"{agora.strftime('%Y-%m-%d_%H:%M')}"
             
             if chave_atual != ultima_execucao_chave:
-                # Horário da Manhã às 09:30
                 if agora.hour == 9 and agora.minute == 30:
                     enviar_lembretes_em_massa("manhã")
                     ultima_execucao_chave = chave_atual
-                
-                # Horário da Tarde às 17:00
                 elif agora.hour == 17 and agora.minute == 0:
                     enviar_lembretes_em_massa("tarde")
                     ultima_execucao_chave = chave_atual
