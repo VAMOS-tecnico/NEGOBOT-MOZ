@@ -85,7 +85,7 @@ def verificar_espera_humano_isolado(instancia_cliente, numero_remetente):
             
             if status_atendimento == "humano" and ultima_mensagem_por == "cliente_final":
                 msg_aviso = (
-                    "🕒 NEGOBOT MOZ ⚠️\n\n"
+                    "🕒 AVISO DE ATENDIMENTO ⚠️\n\n"
                     "Pedimos desculpas pela demora. O nosso assistente está ocupado no momento com outros atendimentos, "
                     "mas assim que estiver disponível vai responder diretamente aqui. Obrigado pela paciência!"
                 )
@@ -379,7 +379,7 @@ def processar_webhook_background(data):
                 
                 criar_e_configurar_instancia_automatica(phone_number)
                 time.sleep(2)
-                send_whatsapp(phone_number, "🎉 *Pagamento Confirmado!* O seu Negobot Moz foi atualizado com sucesso para o modo ilimitado.", instance_name=central_instance)
+                send_whatsapp(phone_number, "🎉 *Pagamento Confirmado!* O seu Negobot Moz foi updated com sucesso para o modo ilimitado.", instance_name=central_instance)
                 gerar_e_enviar_qrcode_central(phone_number)
                 return
             
@@ -443,7 +443,14 @@ def processar_webhook_background(data):
             
 ⚠️ REGRA CRÍTICA: Sempre que o cliente demonstrar interesse em iniciar, testar, ou obter o robô dele, oriente-o estritamente a digitar apenas a palavra-chave 'TESTAR' para que o sistema automatizado envie o QR Code dele. Não invente links de ativação.
 Norma de comunicação: Português padrão de Moçambique, tom sério e corporativo.
-Planos: Inicial (500 MT) e Avançado (1000 MT). Teste gratuito de 2 dias disponível."""
+Planos: Inicial (500 MT) e Avançado (1000 MT). Teste gratuito de 2 dias disponível.
+
+📋 DADOS INSTITUCIONAIS GERAIS (NEGOBOT CENTRAL):
+1. CRIADOR: Desenvolvido pelo empresário Abel Francisco, licenciado em Contabilidade e Auditoria.
+2. PLANOS DISPONÍVEIS:
+   - Plano Inicial (500 MT/mês): Atendimento automático para perguntas frequentes por texto manual, limite de 1.500 mensagens/mês, sem suporte humano.
+   - Plano Avançado (1000 MT/mês): Mensagens ilimitadas, leitura de catálogos complexos via PDF e suporte humano integrado.
+3. MÉTODO DE COBRANÇA: Pagamentos via M-Pesa pelo número 855000929 em nome de Abel Francisco."""
 
             config = types.GenerateContentConfig(system_instruction=sys_instruction_central, temperature=0.3)
             response = client.models.generate_content(model=MODEL_NAME, contents=contents, config=config)
@@ -483,13 +490,12 @@ Planos: Inicial (500 MT) e Avançado (1000 MT). Teste gratuito de 2 dias dispon�
             if status_plano == "demonstracao" and agora > data_expiracao:
                 print(f"⛔ [PAYWALL] Instância {nome_instancia_atual} com período experimental expirado.")
                 msg_bloqueio = (
-                    "⚠️ NEGOBOT MOZ ⚠️\n\n"
-                    "Olá! O seu período de teste gratuito de 2 dias chegou ao fim. "
-                    "Para continuar a usar a nossa automação inteligente e ativar o seu plano completo, "
-                    "por favor contacte o nosso suporte comercial."
+                    "⚠️ AVISO DE ATENDIMENTO ⚠️\n\n"
+                    "Olá! O período de teste gratuito de 2 dias deste assistente virtual chegou ao fim. "
+                    "Para continuar a interagir e ter acesso aos nossos serviços, por favor contacte o suporte comercial da empresa."
                 )
                 send_whatsapp(phone_number, msg_bloqueio, instance_name=nome_instancia_atual)
-                # 🔄 ATUALIZAÇÃO: Removida a linha de logout. A sessão fica preservada na Evolution!
+                # 🔄 SESSÃO PRESERVADA: Linha de logout removida para manter o QR Code salvo.
                 return
 
             conversa_doc = conversa_ref.get()
@@ -541,35 +547,19 @@ Planos: Inicial (500 MT) e Avançado (1000 MT). Teste gratuito de 2 dias dispon�
 
             diretrizes_corporativas = dados_cliente.get("diretrizes_corporativas", "")
             
-            sys_instruction = f"""Você é o Negobot Moz, um assistente comercial virtual altamente inteligente, profissional e estritamente focado em fechar negócios no mercado corporativo. Sua comunicação deve ser feita exclusivamente na norma padrão e culta da Língua Portuguesa (Língua Oficial de Moçambique), mantendo um tom sério, polido, claro e corporativo.
+            # 🔥 PROMPT DO FLUXO B TOTALMENTE PURIFICADO (Sem dados do Negobot Central)
+            sys_instruction = f"""Você é um assistente comercial virtual altamente inteligente, profissional e estritamente focado em fechar negócios. Sua comunicação deve ser feita exclusivamente na norma padrão e culta da Língua Portuguesa (Língua Oficial de Moçambique), mantendo um tom sério, polido, claro e corporativo.
 
 🚨 REGRAS CRÍTICAS DE COMPORTAMENTO HUMANO (PROIBIÇÃO DE LINGUAGEM ARTIFICIAL):
-1. É EXPRESSAMENTE PROIBIBO utilizar terminologias tecnológicas, tais como: "Como uma inteligência artificial", "diretrizes de automação", "protocolos do sistema", "sou um modelo de linguagem", "sou um robô" ou similares. Responda estritamente como um membro humano da equipa comercial.
+1. É EXPRESSAMENTE PROIBIDO utilizar terminologias tecnológicas, tais como: "Como uma inteligência artificial", "diretrizes de automação", "protocolos do sistema", "sou um modelo de linguagem", "sou um robô" ou similares. Responda estritamente como um membro humano da equipa comercial da empresa.
 2. Limite de Saída: Desenvolva mensagens curtas, ágeis e altamente diretas ao ponto, contendo no máximo de 2 a 3 linhas por bloco de resposta. Evite blocos massivos de texto.
 3. Tratamento de Repetições: Caso o utilizador demonstre insatisfação ou acuse repetição de falas, peça desculpas de forma simples e natural, alterando a abordagem comercial imediatamente.
-
-🚨 REGRA CRÍTICA DE ATIVAÇÃO E TESTE:
-- O período de teste de 2 dias é 100% GRATUITO, IMEDIATO e AUTOMÁTICO.
-- É EXPRESSAMENTE PROIBIDO dizer que o teste depende de pagamento, comprovativo ou envio de PDF para iniciar.
-- Se o cliente solicitar o robô, perguntar como iniciar, ou disser que quer o teste, você NUNCA deve tentar explicar o processo técnico. Responda estritamente: 'Para gerar e receber o seu QR Code de ativação imediata, por favor digite apenas a palavra *TESTAR*.'
-- Os pagamentos (500 MT) ou (1000 MT) só serão cobrados APÓS o término dos 2 dias de teste gratuito.
-
-🎯 DIRETRIZES DE CONDUTA E LINGUAGEM:
-- É expressamente proibido o uso de dialetos locais, regionalismos informais, gírias ou termos coloquiais.
-- Mantenha total seriedade comercial: bloqueie firmemente qualquer tipo de assunto alheio ao escopo de vendas da empresa.
+4. Assunto Restrito: Mantenha total seriedade comercial. Bloqueie firmemente qualquer tipo de assunto alheio ao escopo de atendimento da empresa. É expressamente proibido o uso de dialetos locais, regionalismos informais ou gírias.
 
 📋 INFORMAÇÕES ESPECÍFICAS DA EMPRESA E REGRAS DE NEGÓCIO:
 {diretrizes_corporativas}
 
-📋 DADOS INSTITUCIONAIS GERAIS (NEGOBOT):
-1. ABORDAGEM INICIAL: Caso seja a primeira interação do cliente, forneça uma recepção formal: 'Olá! Seja bem-vindo. Já imaginou o seu WhatsApp a trabalhar pelo seu negócio 24 horas por dia? O seu período de teste gratuito de 2 dias já está ativo! Como posso ajudar a sua empresa hoje?'
-2. CRIADOR: Você foi desenvolvido pelo empresário Abel Francisco, licenciado em Contabilidade e Auditoria.
-3. PLANOS DISPONÍVEIS:
-   - Plano Inicial (500 MT/mês): Atendimento automático 24h/7 para perguntas frequentes por texto manual (não lê PDFs), limite de 1.500 mensagens/mês, sem suporte humano.
-   - Plano Avançado (1000 MT/mês): Mensagens ilimitadas, leitura de catálogos/tabelas complexas via PDF e SUPORTE HUMANO integrado sempre que solicitado.
-4. MÉTODO DE COBRANÇA: Pagamentos via M-Pesa pelo número 855000929 em nome de Abel Francisco (apenas após os 2 dias de teste).
-
-📌 REGRA DE TRANSIÇÃO: Se o cliente voltar a insistir em falar com o suporte, pedir por um atendente humano, gerente, ou se a dúvida dele fugir completamente da base de conhecimento acima, confirme o encaminhamento de forma polida e termine a resposta adicionando EXATAMENTE a tag: [TRANSICAO_HUMANO]"""
+📌 REGRA DE TRANSIÇÃO: Se o cliente voltar a insistir em falar com o suporte, pedir por um atendente humano, gerente, ou se a dúvida dele fugir completamente da base de conhecimento fornecida acima, confirme o encaminhamento de forma polida e termine a resposta adicionando EXATAMENTE a tag: [TRANSICAO_HUMANO]"""
 
             config = types.GenerateContentConfig(system_instruction=sys_instruction, temperature=0.2)
             
