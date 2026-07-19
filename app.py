@@ -3,6 +3,7 @@ import json
 import time
 import requests
 import threading
+import re  # Importado para a limpeza cirúrgica dos números
 from flask import Flask, request
 from datetime import datetime, timedelta, timezone
 from google import genai
@@ -35,7 +36,7 @@ else:
         firebase_admin.initialize_app()
         print("📦 [SISTEMA] Firebase inicializado com configurações padrão.")
     except Exception as e:
-        print(f"❌ [SISTEMA] Erro crítico na inicialização padrão do Firebase: {e}")
+        print(f"❌ [SISTEMA] Erro crítico na initialization padrão do Firebase: {e}")
 
 db = firestore.client()
 client = genai.Client(api_key=os.getenv('GEMINI_API_KEY'))
@@ -71,13 +72,16 @@ def notificar_erro_admin(erro_msg):
 
 def criar_e_configurar_instancia_automatica(phone_number):
     try:
-        client_instance = phone_number.split('@')[0]
+        # Extrai estritamente os números do JID (ex: '258879900929') evitando sufixos corrompidos
+        client_instance = re.sub(r'\D', '', phone_number)
         headers = {"apikey": os.getenv('EVOLUTION_API_KEY'), "Content-Type": "application/json"}
         
         url_create = f"{os.getenv('EVOLUTION_API_URL')}/instance/create"
+        # Payload corrigido com 'integration' para a Evolution v2.3.7
         payload_create = {
             "instanceName": client_instance,
-            "qrcode": True
+            "qrcode": True,
+            "integration": "WHATSAPP-BAILEYS"
         }
         res_create = requests.post(url_create, headers=headers, json=payload_create)
         res_create.raise_for_status()
@@ -171,7 +175,7 @@ def send_whatsapp(to, text, instance_name=None):
 
 def desconectar_instancia_evolution(phone_number):
     try:
-        instance_name = phone_number.split('@')[0]
+        instance_name = re.sub(r'\D', '', phone_number)
         url = f"{os.getenv('EVOLUTION_API_URL')}/instance/logout/{instance_name}"
         headers = {"apikey": os.getenv('EVOLUTION_API_KEY'), "Content-Type": "application/json"}
         response = requests.post(url, headers=headers)
@@ -182,7 +186,8 @@ def desconectar_instancia_evolution(phone_number):
 
 def gerar_e_enviar_qrcode_central(phone_number):
     try:
-        client_instance = phone_number.split('@')[0]
+        # Garante o ID da instância perfeitamente limpo aqui também
+        client_instance = re.sub(r'\D', '', phone_number)
         headers = {"apikey": os.getenv('EVOLUTION_API_KEY'), "Content-Type": "application/json"}
         
         url_connect = f"{os.getenv('EVOLUTION_API_URL')}/instance/connect/{client_instance}"
@@ -341,7 +346,7 @@ def webhook_cliente():
                             "    • **Número M-Pesa:** 855000929\n"
                             "    • **Titular:** Abel Francisco\n\n"
                             "2️⃣ 📲 *PASSO CRÍTICO:* **Encaminhe o SMS de confirmação da transferência** para o nosso WhatsApp Central de Suporte.\n\n"
-                            "🤖 O nosso sistema integrado (**Negobot Autopay**) vai validar o depósito e libertar o seu acesso de imediato! 🚀"
+                            "🤖 O nosso system integrado (**Negobot Autopay**) vai validar o depósito e libertar o seu acesso de imediato! 🚀"
                         )
                         send_whatsapp(phone_number, resposta_bloqueio, instance_name=nome_instancia_atual)
                         time.sleep(3)
@@ -366,7 +371,7 @@ def webhook_cliente():
 - O período de teste de 2 dias é 100% GRATUITO, IMEDIATO e AUTOMÁTICO.
 - É EXPRESSAMENTE PROIBIDO dizer que o teste depende de pagamento, comprovativo ou envio de PDF para iniciar.
 - Se o cliente solicitar o robô, perguntar como iniciar, ou disser que quer o teste, você NUNCA deve tentar explicar o processo técnico. Responda estritamente: 'Para gerar e receber o seu QR Code de ativação imediata, por favor digite apenas a palavra *TESTAR*.'
-- Os pagamentos (500 MT ou 1000 MT) só serão cobrados APÓS o término dos 2 dias de teste gratuito.
+- Os pagamentos (500 MT) ou (1000 MT) só serão cobrados APÓS o término dos 2 dias de teste gratuito.
 
 🎯 DIRETRIZES DE CONDUTA E LINGUAGEM:
 - É expressamente proibido o uso de dialetos locais, regionalismos informais, gírias ou termos coloquiais.
@@ -475,7 +480,7 @@ def webhook_central():
                     })
                     criar_e_configurar_instancia_automatica(phone_number)
                     time.sleep(2)
-                    send_whatsapp(phone_number, "🎉 *Pagamento Confirmado!* O seu Negobot Moz foi updated com sucesso para o modo ilimitado.")
+                    send_whatsapp(phone_number, "🎉 *Pagamento Confirmado!* O seu Negobot Moz foi atualizado com sucesso para o modo ilimitado.")
                     gerar_e_enviar_qrcode_central(phone_number)
                     return 'OK', 200
                 
@@ -504,7 +509,7 @@ def webhook_central():
                     else:
                         status_atual = doc.to_dict().get('status', 'trial')
                         if status_atual == 'bloqueado':
-                            send_whatsapp(phone_number, "⚠️ O seu período de teste de 2 dias terminou. Efetue o pagamento via M-Pesa (855000929) and envie o SMS de confirmação aqui.")
+                            send_whatsapp(phone_number, "⚠️ O seu período de teste de 2 dias terminou. Efetue o pagamento via M-Pesa (855000929) e envie o SMS de confirmação aqui.")
                         elif status_atual == 'active':
                             send_whatsapp(phone_number, "✅ O seu plano está Ativo! Se precisar de reconectar, digite *#qrcode*.")
                         elif status_atual == 'trial':
@@ -520,7 +525,6 @@ def webhook_central():
                     return 'OK', 200
 
                 # --- FLUXO 4: INTELIGÊNCIA ARTIFICIAL DE SUPORTE (EVITA QUE O BOT FIQUE MUDO) ---
-                # Se não for nenhum comando técnico ou administrativo, o Gemini responde às dúvidas do cliente no número central
                 raw_history = get_chat_history(phone_number)
                 recent_history = raw_history[-10:]
                 
