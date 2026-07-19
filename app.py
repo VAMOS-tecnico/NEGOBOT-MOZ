@@ -86,7 +86,7 @@ def verificar_espera_humano_isolado(instancia_cliente, numero_remetente):
             if status_atendimento == "humano" and ultima_mensagem_por == "cliente_final":
                 msg_aviso = (
                     "🕒 NEGOBOT MOZ ⚠️\n\n"
-                    "Pedimos desculpas pela demora. O nosso assistente está ocupado no momento realizou outros atendimentos, "
+                    "Pedimos desculpas pela demora. O nosso assistente está ocupado no momento com outros atendimentos, "
                     "mas assim que estiver disponível vai responder diretamente aqui. Obrigado pela paciência!"
                 )
                 send_whatsapp(numero_remetente, msg_aviso, instance_name=instancia_cliente)
@@ -166,17 +166,6 @@ def send_whatsapp(to, text, instance_name=None):
         res.raise_for_status()
     except Exception as e:
         print(f"ERRO ao enviar mensagem pela instância {instance_name}: {e}")
-
-def desconectar_instancia_evolution(phone_number):
-    try:
-        instance_name = re.sub(r'\D', '', phone_number)
-        url = f"{os.getenv('EVOLUTION_API_URL')}/instance/logout/{instance_name}"
-        headers = {"apikey": os.getenv('EVOLUTION_API_KEY'), "Content-Type": "application/json"}
-        response = requests.post(url, headers=headers, timeout=10)
-        return response.status_code == 200
-    except Exception as e:
-        print(f"Erro ao desconectar instância: {e}")
-        return False
 
 def gerar_e_enviar_qrcode_central(phone_number):
     try:
@@ -279,10 +268,7 @@ def universal_webhook():
     if not data:
         return 'OK', 200
         
-    # Fase 1: Desvia todo o processamento para segundo plano imediatamente
     threading.Thread(target=processar_webhook_background, args=(data,)).start()
-    
-    # Responde imediatamente com HTTP 200 OK para cortar a duplicação por timeout
     return 'OK', 200
 
 # ==========================================
@@ -297,13 +283,11 @@ def processar_webhook_background(data):
         msg_data = data['data']
         key = msg_data.get('key', {})
         
-        # Fase 2: Roteamento Dinâmico de Instâncias
         nome_instancia_atual = data.get('instance')
         central_instance = os.getenv('EVOLUTION_INSTANCE_NAME')
         if not nome_instancia_atual:
             return
 
-        # Captura e validação do remetente
         phone_number = key.get('remoteJid', '')
         if not phone_number or '@g.us' in phone_number:
             return
@@ -311,7 +295,6 @@ def processar_webhook_background(data):
         if NUMERO_ASSISTANTE and NUMERO_ASSISTANTE in phone_number:
             return
 
-        # Captura estruturada de texto da mensagem
         message = msg_data.get('message', {})
         message_text = ""
         if 'conversation' in message:
@@ -330,11 +313,10 @@ def processar_webhook_background(data):
         is_from_me = from_me is True or str(from_me).lower() == 'true'
 
         if is_from_me:
-            # Apenas se a mensagem veio de uma instância de cliente ativo
             if nome_instancia_atual != central_instance:
                 conversa_ref = db.collection('clientes_bot').document(nome_instancia_atual).collection('conversas').document(phone_number)
                 conversa_ref.set({
-                    "status_atendimento": "bot", # Restaura o bot ao responder ou assume controlo total
+                    "status_atendimento": "bot",
                     "ultima_mensagem_por": "atendente",
                     "ultima_interacao": agora
                 }, merge=True)
@@ -344,14 +326,13 @@ def processar_webhook_background(data):
                     "text": message_text,
                     "timestamp": agora
                 })
-            return  # Encerra fluxo. Sem chamada à Gemini.
+            return
 
         # =======================================================
         # 🏢 FLUXO A: MENSAGEM RECEBIDA PELA INSTÂNCIA CENTRAL (ADMIN)
         # =======================================================
         if nome_instancia_atual == central_instance:
             
-            # --- DASHBOARD DE CONTROLO DE CLIENTES ---
             if msg_clean.startswith('#status'):
                 remetente_puro = phone_number.split('@')[0]
                 if ADMIN_NUMBER and remetente_puro in ADMIN_NUMBER:
@@ -385,14 +366,12 @@ def processar_webhook_background(data):
                 send_whatsapp(phone_number, resposta_status, instance_name=central_instance)
                 return
 
-            # --- CONFIRMAÇÃO DE PAGAMENTO M-PESA ---
             if "recebeu" in msg_clean or "confirmado" in msg_clean or "transacao" in msg_clean:
                 db.collection('clientes').document(phone_number).update({
                     "status": "active",
                     "pago": True,
                     "data_ativacao": agora
                 })
-                # Atualiza também o nó isolado do tenant
                 db.collection('clientes_bot').document(phone_number.split('@')[0]).set({
                     "status_plano": "active",
                     "data_ativacao": agora
@@ -404,7 +383,6 @@ def processar_webhook_background(data):
                 gerar_e_enviar_qrcode_central(phone_number)
                 return
             
-            # --- INÍCIO E CRIAÇÃO DO TESTE DE 2 DIAS ---
             gatilhos_teste = ["teste", "testar", "quero o bot", "começar", "criar bot"]
             if any(g in msg_clean for g in gatilhos_teste):
                 cliente_ref = db.collection('clientes').document(phone_number)
@@ -424,7 +402,6 @@ def processar_webhook_background(data):
                         }
                         cliente_ref.set(dados_cliente)
                         
-                        # Espelha configuração no nó isolado do tenant (Fase 3/4)
                         tenant_id = re.sub(r'\D', '', phone_number)
                         db.collection('clientes_bot').document(tenant_id).set({
                             "status_plano": "demonstracao",
@@ -444,7 +421,6 @@ def processar_webhook_background(data):
                         send_whatsapp(phone_number, "✅ O seu teste de 2 dias já está a decorrer! Se precisar do QR Code novamente, digite *#qrcode*.", instance_name=central_instance)
                 return
 
-            # --- RECONEXÃO MANDATÓRIA ---
             if msg_clean == "#qrcode":
                 send_whatsapp(phone_number, "🔄 A gerar o seu QR Code de reconexão...", instance_name=central_instance)
                 criar_e_configurar_instancia_automatica(phone_number)
@@ -452,7 +428,6 @@ def processar_webhook_background(data):
                 gerar_e_enviar_qrcode_central(phone_number)
                 return
 
-            # --- IA DE ATENDIMENTO CENTRAL (SUPORTE MASTER) ---
             raw_history = get_chat_history(phone_number)
             recent_history = raw_history[-10:]
             
@@ -482,15 +457,12 @@ Planos: Inicial (500 MT) e Avançado (1000 MT). Teste gratuito de 2 dias dispon�
         # 🤖 FLUXO B: MENSAGEM RECEBIDA PELA INSTÂNCIA DO CLIENTE
         # =======================================================
         else:
-            # 📂 FASE 3: Endereçamento e Estrutura Firestore Totalmente Isolada por Tenant
             client_doc_ref = db.collection('clientes_bot').document(nome_instancia_atual)
             conversa_ref = client_doc_ref.collection('conversas').document(phone_number)
             historico_ref = conversa_ref.collection('historico')
 
-            # Carrega definições do Tenant com proteção contra documentos ausentes
             client_doc = client_doc_ref.get()
             if not client_doc.exists:
-                # Criação automática em caso de novos Tenants
                 dados_cliente = {
                     "status_plano": "demonstracao",
                     "data_ativacao": agora,
@@ -517,24 +489,20 @@ Planos: Inicial (500 MT) e Avançado (1000 MT). Teste gratuito de 2 dias dispon�
                     "por favor contacte o nosso suporte comercial."
                 )
                 send_whatsapp(phone_number, msg_bloqueio, instance_name=nome_instancia_atual)
-                time.sleep(2)
-                desconectar_instancia_evolution(nome_instancia_atual)
+                # 🔄 ATUALIZAÇÃO: Removida a linha de logout. A sessão fica preservada na Evolution!
                 return
 
-            # 🎛️ FASE 6: Verificação Prévia do Estado de Transição Humana
             conversa_doc = conversa_ref.get()
             status_atendimento = "bot"
             if conversa_doc.exists:
                 status_atendimento = conversa_doc.to_dict().get("status_atendimento", "bot")
 
-            # Se o atendimento estiver delegado ao Humano, apenas arquiva no Firestore e chama o monitor
             if status_atendimento == "humano":
                 conversa_ref.set({"ultima_mensagem_por": "cliente_final", "ultima_interacao": agora}, merge=True)
                 historico_ref.add({"role": "user", "text": message_text, "timestamp": agora})
                 threading.Thread(target=verificar_espera_humano_isolado, args=(nome_instancia_atual, phone_number)).start()
                 return
 
-            # Gatilhos Textuais Explícitos para Atendimento Humano Imediato
             gatilhos_humano = ["falar com atendente", "suporte humano", "atendente", "falar com humano", "#suporte", "humano", "suporte"]
             if any(g in msg_clean for g in gatilhos_humano):
                 conversa_ref.set({
@@ -553,7 +521,6 @@ Planos: Inicial (500 MT) e Avançado (1000 MT). Teste gratuito de 2 dias dispon�
                 threading.Thread(target=verificar_espera_humano_isolado, args=(nome_instancia_atual, phone_number)).start()
                 return
 
-            # 🧠 FASE 3: Controlo de Memória Otimizada via Firestore (.limit(10))
             docs_historico = historico_ref.order_by('timestamp', direction=firestore.Query.DESCENDING).limit(10).stream()
             
             lista_mensagens = []
@@ -561,7 +528,6 @@ Planos: Inicial (500 MT) e Avançado (1000 MT). Teste gratuito de 2 dias dispon�
                 lista_mensagens.append(d.to_dict())
             lista_mensagens.reverse()
 
-            # Reconstrução estruturada do histórico para a SDK da Gemini
             contents = []
             for m in lista_mensagens:
                 role_bruto = m.get('role')
@@ -571,10 +537,8 @@ Planos: Inicial (500 MT) e Avançado (1000 MT). Teste gratuito de 2 dias dispon�
                     parts=[types.Part.from_text(text=m.get('text', ''))]
                 ))
             
-            # Adiciona a entrada atual do utilizador
             contents.append(types.Content(role="user", parts=[types.Part.from_text(text=message_text)]))
 
-            # 📝 FASE 5: Engenharia de Prompt e Alinhamento Humano (Anti-Robô)
             diretrizes_corporativas = dados_cliente.get("diretrizes_corporativas", "")
             
             sys_instruction = f"""Você é o Negobot Moz, um assistente comercial virtual altamente inteligente, profissional e estritamente focado em fechar negócios no mercado corporativo. Sua comunicação deve ser feita exclusivamente na norma padrão e culta da Língua Portuguesa (Língua Oficial de Moçambique), mantendo um tom sério, polido, claro e corporativo.
@@ -605,18 +569,15 @@ Planos: Inicial (500 MT) e Avançado (1000 MT). Teste gratuito de 2 dias dispon�
    - Plano Avançado (1000 MT/mês): Mensagens ilimitadas, leitura de catálogos/tabelas complexas via PDF e SUPORTE HUMANO integrado sempre que solicitado.
 4. MÉTODO DE COBRANÇA: Pagamentos via M-Pesa pelo número 855000929 em nome de Abel Francisco (apenas após os 2 dias de teste).
 
-📌 REGRA DE TRANSIÇÃO: Se o cliente insistir em falar com o suporte, pedir por um atendente humano, gerente, ou se a dúvida dele fugir completamente da base de conhecimento acima, confirme o encaminhamento de forma polida e termine a resposta adicionando EXATAMENTE a tag: [TRANSICAO_HUMANO]"""
+📌 REGRA DE TRANSIÇÃO: Se o cliente voltar a insistir em falar com o suporte, pedir por um atendente humano, gerente, ou se a dúvida dele fugir completamente da base de conhecimento acima, confirme o encaminhamento de forma polida e termine a resposta adicionando EXATAMENTE a tag: [TRANSICAO_HUMANO]"""
 
             config = types.GenerateContentConfig(system_instruction=sys_instruction, temperature=0.2)
             
-            # Executa a chamada à API Gemini
             response = client.models.generate_content(model=MODEL_NAME, contents=contents, config=config)
             response_text = response.text if response.text else ""
             
-            # Regista a mensagem recebida no histórico do par isolado
             historico_ref.add({"role": "user", "text": message_text, "timestamp": agora})
 
-            # Tratamento do gatilho dinâmico de transição humana (Fase 6)
             if "[TRANSICAO_HUMANO]" in response_text:
                 response_text = response_text.replace("[TRANSICAO_HUMANO]", "").strip()
                 
@@ -637,11 +598,9 @@ Planos: Inicial (500 MT) e Avançado (1000 MT). Teste gratuito de 2 dias dispon�
                     "timestamp": agora
                 })
                 
-                # Dispara o temporizador em background de 4 minutos
                 threading.Thread(target=verificar_espera_humano_isolado, args=(nome_instancia_atual, phone_number)).start()
                 return
 
-            # Fluxo Normal de Envio Comercial
             if response_text:
                 send_whatsapp(phone_number, response_text, instance_name=nome_instancia_atual)
                 historico_ref.add({"role": "model", "text": response_text, "timestamp": agora})
