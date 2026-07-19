@@ -359,7 +359,7 @@ def webhook_cliente():
                 
                 contents.append(types.Content(role="user", parts=[types.Part.from_text(text=message_text)]))
 
-                # PROMPT SYSTEM TOTALMENTE BLINDADO
+                # PROMPT SYSTEM TOTALMENTE BLINDADO (ROBÔ DO CLIENTE)
                 sys_instruction = f"""Você é o Negobot Moz, um assistente comercial virtual altamente inteligente, profissional e estritamente focado em fechar negócios no mercado corporativo. Sua comunicação deve ser feita exclusivamente na norma padrão e culta da Língua Portuguesa (Língua Oficial de Moçambique), mantendo um tom sério, polido, claro e corporativo.
 
 🚨 REGRA CRÍTICA DE ATIVAÇÃO E TESTE:
@@ -398,7 +398,7 @@ def webhook_cliente():
                 send_whatsapp(phone_number, response_text, instance_name=nome_instancia_atual)
 
     except Exception as e:
-        erro_completo = f"Erro na rota Webhook Cliente (Instância: {data.get('instance')}): {e}"
+        erro_completo = f"Erro na rota Webhook Client (Instância: {data.get('instance')}): {e}"
         print(f"❌ {erro_completo}")
         notificar_erro_admin(erro_completo)
     return 'OK', 200
@@ -475,7 +475,7 @@ def webhook_central():
                     })
                     criar_e_configurar_instancia_automatica(phone_number)
                     time.sleep(2)
-                    send_whatsapp(phone_number, "🎉 *Pagamento Confirmado!* O seu Negobot Moz foi atualizado com sucesso para o modo ilimitado.")
+                    send_whatsapp(phone_number, "🎉 *Pagamento Confirmado!* O seu Negobot Moz foi updated com sucesso para o modo ilimitado.")
                     gerar_e_enviar_qrcode_central(phone_number)
                     return 'OK', 200
                 
@@ -504,37 +504,14 @@ def webhook_central():
                     else:
                         status_atual = doc.to_dict().get('status', 'trial')
                         if status_atual == 'bloqueado':
-                            send_whatsapp(phone_number, "⚠️ O seu período de teste de 2 dias terminou. Efetue o pagamento via M-Pesa (855000929) e envie o SMS de confirmação aqui.")
+                            send_whatsapp(phone_number, "⚠️ O seu período de teste de 2 dias terminou. Efetue o pagamento via M-Pesa (855000929) and envie o SMS de confirmação aqui.")
                         elif status_atual == 'active':
                             send_whatsapp(phone_number, "✅ O seu plano está Ativo! Se precisar de reconectar, digite *#qrcode*.")
                         elif status_atual == 'trial':
                             send_whatsapp(phone_number, "✅ O seu teste de 2 dias já está a decorrer! Se precisar do QR Code novamente, digite *#qrcode*.")
                     return 'OK', 200
 
-                # --- FLUXO 3: SAUDAÇÃO INICIAL ---
-                gatilhos_saudacao = ["ola", "olá", "bom dia", "boa tarde", "boa noite", "negobot"]
-                if any(g in msg_clean for g in gatilhos_saudacao):
-                    cliente_ref = db.collection('clientes').document(phone_number)
-                    doc = cliente_ref.get()
-                    
-                    if not doc.exists:
-                        mensagem_vendas = (
-                            "👋 Olá! Daqui fala o assistente do **Negobot Moz**.\n\n"
-                            "Sabia que mais de 70% das vendas no WhatsApp são perdidas por demora no atendimento? 😱\n\n"
-                            "Quero ajudar a sua empresa a faturar 24h por dia, mesmo enquanto está a dormir! 🎁 **Libertei um teste 100% GRATUITO de 2 dias para si.**\n\n"
-                            "Quer ativar agora? Responda apenas com a palavra: *TESTAR*"
-                        )
-                        send_whatsapp(phone_number, mensagem_vendas)
-                        
-                        cliente_ref.set({
-                            "phone_number": phone_number, 
-                            "status": "prospect",
-                            "data_registro": datetime.now(timezone.utc),
-                            "diretrizes_corporativas": "Atenda o cliente focado estritamente nas regras do seu negócio corporativo."
-                        })
-                    return 'OK', 200
-
-                # --- FLUXO 4: RECONEXÃO ---
+                # --- FLUXO 3: RECONEXÃO ---
                 if msg_clean == "#qrcode":
                     send_whatsapp(phone_number, "🔄 A gerar o seu QR Code de reconexão...")
                     criar_e_configurar_instancia_automatica(phone_number)
@@ -542,8 +519,36 @@ def webhook_central():
                     gerar_e_enviar_qrcode_central(phone_number)
                     return 'OK', 200
 
+                # --- FLUXO 4: INTELIGÊNCIA ARTIFICIAL DE SUPORTE (EVITA QUE O BOT FIQUE MUDO) ---
+                # Se não for nenhum comando técnico ou administrativo, o Gemini responde às dúvidas do cliente no número central
+                raw_history = get_chat_history(phone_number)
+                recent_history = raw_history[-10:]
+                
+                contents = []
+                for msg in recent_history:
+                    role = "model" if msg.get('role') == "assistant" else msg.get('role')
+                    parts = [types.Part.from_text(text=p.get('text', '')) for p in msg.get('parts', [])]
+                    contents.append(types.Content(role=role, parts=parts))
+                
+                contents.append(types.Content(role="user", parts=[types.Part.from_text(text=message_text)]))
+
+                sys_instruction_central = """Você é o assistente comercial oficial do Negobot Moz. Seu objetivo é sanar dúvidas sobre os planos e direcionar o cliente para testar a ferramenta. 
+                
+⚠️ REGRA CRÍTICA: Sempre que o cliente demonstrar interesse em iniciar, testar, ou obter o robô dele, oriente-o estritamente a digitar apenas a palavra-chave 'TESTAR' para que o sistema automatizado envie o QR Code dele. Não invente links de ativação.
+Norma de comunicação: Português padrão de Moçambique, tom sério e corporativo.
+Planos: Inicial (500 MT) e Avançado (1000 MT). Teste gratuito de 2 dias disponível."""
+
+                config = types.GenerateContentConfig(system_instruction=sys_instruction_central, temperature=0.3)
+                response = client.models.generate_content(model=MODEL_NAME, contents=contents, config=config)
+                response_text = response.text
+                
+                contents.append(types.Content(role="model", parts=[types.Part.from_text(text=response_text)]))
+                save_chat_history(phone_number, [{"role": c.role, "parts": [{"text": p.text} for p in c.parts]} for c in contents[-10:]])
+
+                send_whatsapp(phone_number, response_text)
+
     except Exception as e:
-        erro_completo = f"Erro na rota Webhook Central: {e}"
+        erro_completo = f"Erro na rota Webhook Central atualizada: {e}"
         print(f"❌ {erro_completo}")
         notificar_erro_admin(erro_completo)
         
