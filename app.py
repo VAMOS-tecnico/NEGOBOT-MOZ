@@ -41,7 +41,7 @@ db = firestore.client()
 client = genai.Client(api_key=os.getenv('GEMINI_API_KEY'))
 MODEL_NAME = 'gemini-3.1-flash-lite'
 NUMERO_ASSISTANTE = os.getenv('ASSISTANT_NUMBER')
-ADMIN_NUMBER = os.getenv('ADMIN_NUMBER')  # O teu número pessoal (ex: 25884xxxxxxx) para alertas e comandos
+ADMIN_NUMBER = os.getenv('ADMIN_NUMBER')  # Seu número pessoal para alertas e comandos administrativos
 
 # ==========================================
 #   📢 FUNÇÃO DE NOTIFICAÇÃO DE ERROS CRÍTICOS
@@ -54,7 +54,6 @@ def notificar_erro_admin(erro_msg):
         headers = {"apikey": os.getenv('EVOLUTION_API_KEY'), "Content-Type": "application/json"}
         url = f"{os.getenv('EVOLUTION_API_URL')}/message/sendText/{central_instance}"
         
-        # Garante o formato correto do número
         to_number = ADMIN_NUMBER if "@" in ADMIN_NUMBER else f"{ADMIN_NUMBER}@s.whatsapp.net"
         
         payload = {
@@ -122,7 +121,7 @@ def verificar_ou_criar_cliente(phone_number):
                 "data_registro": agora,
                 "trial_start": agora,
                 "status": "trial",
-                "diretrizes_corporativas": "Atenda o cliente com foco exclusivo nos serviços comerciais e institucionais da empresa."
+                "diretrizes_corporativas": "Atenda o cliente de forma séria e focado estritamente nos serviços comerciais e planos da empresa."
             }
             cliente_ref.set(dados_cliente)
             return dados_cliente, True
@@ -259,7 +258,7 @@ def enviar_lembretes_em_massa(periodo="dia"):
             dados = doc.to_dict()
             phone_number = dados.get('phone_number')
             if phone_number:
-                send_whatsapp(phone_number, message_lembrete, instance_name=central_instance)
+                send_whatsapp(phone_number, mensagem_lembrete, instance_name=central_instance)
                 contador += 1
                 time.sleep(1.5)
                 
@@ -305,7 +304,7 @@ def webhook_cliente():
             if message_text and phone_number:
                 msg_clean = message_text.lower().strip()
                 
-                # --- ENCAIXE DE SUPORTE HUMANO (PLANO AVANÇADO) ---
+                # --- ENCAIXE DE SUPORTE HUMANO ---
                 gatilhos_humano = ["falar com atendente", "suporte humano", "atendente", "falar com humano", "#suporte"]
                 if any(g in msg_clean for g in gatilhos_humano):
                     resposta_suporte = (
@@ -323,7 +322,6 @@ def webhook_cliente():
                 if cliente:
                     status = cliente.get('status', 'trial')
                     trial_start = cliente.get('trial_start')
-                    # Puxa as regras customizadas do Firebase se existirem
                     diretrizes_corporativas = cliente.get('diretrizes_corporativas', diretrizes_corporativas)
                     
                     if trial_start.tzinfo is None:
@@ -361,28 +359,31 @@ def webhook_cliente():
                 
                 contents.append(types.Content(role="user", parts=[types.Part.from_text(text=message_text)]))
 
-                sys_instruction = (
-                    "Você é o Negobot Moz, um assistente comercial virtual altamente inteligente, profissional e "
-                    "estritamente focado em fechar negócios no mercado corporativo. Sua comunicação deve ser feita "
-                    "exclusivamente na norma padrão e culta da Língua Portuguesa (Língua Oficial de Moçambique), mantendo um "
-                    "tom sério, polido, claro e corporativo.\n\n"
-                    "🎯 DIRETRIZES DE CONDUTA E LINGUAGEM:\n"
-                    "- É expressamente proibido o uso de dialetos locais, regionalismos informais, gírias ou termos coloquiais.\n"
-                    "- Mantenha total seriedade: bloqueie firmemente qualquer tipo de piada, brincadeira ou assunto alheio ao escopo comercial.\n"
-                    "- Responda sempre de forma clara e objetiva, utilizando parágrafos curtos e estruturados. Aplique negritos de forma cirúrgica para destacar informações essenciais.\n"
-                    "- Nunca utilize frases inteiras em letras maiúsculas (CAPSLOCK) e evite listas excessivamente longas em uma única mensagem.\n\n"
-                    "📋 INFORMAÇÕES ESPECÍFICAS DA EMPRESA E REGRAS DE NEGÓCIO:\n"
-                    f"{diretrizes_corporativas}\n\n"
-                    "📋 DADOS INSTITUCIONAIS GERAIS:\n"
-                    "1. ABORDAGEM INICIAL: Caso seja a primeira interação do cliente, forneça uma recepção formal: "
-                    "'Olá! Seja bem-vindo. Já imaginou o seu WhatsApp a trabalhar pelo seu negócio 24 horas por dia? O seu período de teste gratuito de 2 dias já está ativo! Como posso ajudar a sua empresa hoje?'\n"
-                    "2. FOCO E ESCOPO: Restrinja o atendimento estritamente ao esclarecimento de dúvidas sobre os serviços comerciais do Negobot Moz.\n"
-                    "3. CRIADOR: Você foi desenvolvido pelo empresário Abel Francisco, licenciado em Contabilidade e Auditoria.\n"
-                    "4. PLANOS DISPONÍVEIS:\n"
-                    "   - Plano Inicial (500 MT/mês): Atendimento automático 24h/7 para perguntas frequentes, configurado apenas por texto manual enviado pelo cliente (não lê arquivos PDF), com limite de até 1.500 mensagens/mês e sem suporte humano integrado.\n"
-                    "   - Plano Avançado (1000 MT/mês): O mais completo e recomendado! Mensagens ilimitadas, inteligência avançada calibrada e treinada diretamente através do documento PDF da empresa (lê catálogos e tabelas complexas) e com SUPORTE HUMANO integrado no WhatsApp sempre que o cliente precisar ou solicitar falar com uma pessoa real.\n"
-                    "5. MÉTODO DE COBRANÇA: Pagamentos via M-Pesa pelo número 855000929 em nome de Abel Francisco."
-                )
+                # PROMPT SYSTEM TOTALMENTE BLINDADO
+                sys_instruction = f"""Você é o Negobot Moz, um assistente comercial virtual altamente inteligente, profissional e estritamente focado em fechar negócios no mercado corporativo. Sua comunicação deve ser feita exclusivamente na norma padrão e culta da Língua Portuguesa (Língua Oficial de Moçambique), mantendo um tom sério, polido, claro e corporativo.
+
+🚨 REGRA CRÍTICA DE ATIVAÇÃO E TESTE:
+- O período de teste de 2 dias é 100% GRATUITO, IMEDIATO e AUTOMÁTICO.
+- É EXPRESSAMENTE PROIBIDO dizer que o teste depende de pagamento, comprovativo ou envio de PDF para iniciar.
+- Se o cliente solicitar o robô, perguntar como iniciar, ou disser que quer o teste, você NUNCA deve tentar explicar o processo técnico. Responda estritamente: 'Para gerar e receber o seu QR Code de ativação imediata, por favor digite apenas a palavra *TESTAR*.'
+- Os pagamentos (500 MT ou 1000 MT) só serão cobrados APÓS o término dos 2 dias de teste gratuito.
+
+🎯 DIRETRIZES DE CONDUTA E LINGUAGEM:
+- É expressamente proibido o uso de dialetos locais, regionalismos informais, gírias ou termos coloquiais.
+- Mantenha total seriedade: bloqueie firmemente qualquer tipo de piada, brincadeira ou assunto alheio ao escopo comercial.
+- Responda sempre de forma clara e objetiva, utilizando parágrafos curtos e estruturados. Aplique negritos de forma cirúrgica para destacar informações essenciais.
+
+📋 INFORMAÇÕES ESPECÍFICAS DA EMPRESA E REGRAS DE NEGÓCIO:
+{diretrizes_corporativas}
+
+📋 DADOS INSTITUCIONAIS GERAIS:
+1. ABORDAGEM INICIAL: Caso seja a primeira interação do cliente, forneça uma recepção formal: 'Olá! Seja bem-vindo. Já imaginou o seu WhatsApp a trabalhar pelo seu negócio 24 horas por dia? O seu período de teste gratuito de 2 dias já está ativo! Como posso ajudar a sua empresa hoje?'
+2. FOCO E ESCOPO: Restrinja o atendimento estritamente ao esclarecimento de dúvidas sobre os serviços comerciais do Negobot Moz.
+3. CRIADOR: Você foi desenvolvido pelo empresário Abel Francisco, licenciado em Contabilidade e Auditoria.
+4. PLANOS DISPONÍVEIS:
+   - Plano Inicial (500 MT/mês): Atendimento automático 24h/7 para perguntas frequentes por texto manual (não lê PDFs), limite de 1.500 mensagens/mês, sem suporte humano.
+   - Plano Avançado (1000 MT/mês): Mensagens ilimitadas, leitura de catálogos/tabelas complexas via PDF e SUPORTE HUMANO integrado sempre que solicitado.
+5. MÉTODO DE COBRANÇA: Pagamentos via M-Pesa pelo número 855000929 em nome de Abel Francisco (apenas após os 2 dias de teste)."""
 
                 if eh_primeira_msg:
                     sys_instruction += "\n[CONTEXTO]: Primeira mensagem do cliente."
@@ -428,9 +429,8 @@ def webhook_central():
             if message_text and phone_number:
                 msg_clean = message_text.lower().strip()
                 
-                # --- NOVO COMANDO EXCLUSIVO: DASHBOARD DE CONTROLO DE CLIENTES VIA WHATSAPP ---
+                # --- DASHBOARD DE CONTROLO DE CLIENTES VIA WHATSAPP ---
                 if msg_clean.startswith('#status'):
-                    # Validação de Segurança: Apenas o número do administrador pode executar
                     remetente_puro = phone_number.split('@')[0]
                     if ADMIN_NUMBER and remetente_puro in ADMIN_NUMBER:
                         partes = message_text.split()
@@ -452,16 +452,16 @@ def webhook_central():
                                 resposta_status = (
                                     f"📊 *DASHBOARD CENTRAL - NEGOBOT MOZ*\n\n"
                                     f"• *Cliente:* {numero_pesquisa}\n"
-                                    f"• *Estado Atual:* {c_status.upper()}\n"
-                                    f"• *Subscrição Paga:* {'Sim ✅' if c_pago else 'Não ❌'}\n"
-                                    f"• *Data de Início/Registro:* {reg_formatado}"
+                                    f"• *Estado:* {c_status.upper()}\n"
+                                    f"• *Pago:* {'Sim ✅' if c_pago else 'Não ❌'}\n"
+                                    f"• *Registro:* {reg_formatado}"
                                 )
                             else:
-                                resposta_status = f"❌ *Erro:* O número `{numero_pesquisa}` não foi encontrado na base de dados do Firebase."
+                                resposta_status = f"❌ *Erro:* O número `{numero_pesquisa}` não consta no Firebase."
                         else:
                             resposta_status = "💡 *Instrução de Uso:* Envie exatamente: `#status 25884xxxxxxx`"
                     else:
-                        resposta_status = "⛔ *Acesso Negado:* Este comando é restrito ao administrador do ecossistema."
+                        resposta_status = "⛔ *Acesso Negado:* Comando restrito ao administrador."
                         
                     send_whatsapp(phone_number, resposta_status)
                     return 'OK', 200
@@ -511,7 +511,7 @@ def webhook_central():
                             send_whatsapp(phone_number, "✅ O seu teste de 2 dias já está a decorrer! Se precisar do QR Code novamente, digite *#qrcode*.")
                     return 'OK', 200
 
-                # --- FLUXO 3: APENAS UM OLÁ ---
+                # --- FLUXO 3: SAUDAÇÃO INICIAL ---
                 gatilhos_saudacao = ["ola", "olá", "bom dia", "boa tarde", "boa noite", "negobot"]
                 if any(g in msg_clean for g in gatilhos_saudacao):
                     cliente_ref = db.collection('clientes').document(phone_number)
@@ -524,7 +524,7 @@ def webhook_central():
                             "Quero ajudar a sua empresa a faturar 24h por dia, mesmo enquanto está a dormir! 🎁 **Libertei um teste 100% GRATUITO de 2 dias para si.**\n\n"
                             "Quer ativar agora? Responda apenas com a palavra: *TESTAR*"
                         )
-                        send_whatsapp(phone_number, message_vendas)
+                        send_whatsapp(phone_number, mensagem_vendas)
                         
                         cliente_ref.set({
                             "phone_number": phone_number, 
