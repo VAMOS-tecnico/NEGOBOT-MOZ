@@ -36,7 +36,7 @@ if firebase_config_env:
 else:
     try:
         firebase_admin.initialize_app()
-        print("📦 [SISTEMA] Firebase inicializado com configurações padrão.")
+        print("📦 [SISTEMA] Firebase inicializado com configurations padrão.")
     except Exception as e:
         print(f"❌ [SISTEMA] Erro crítico na inicialização padrão do Firebase: {e}")
 
@@ -45,6 +45,12 @@ client = genai.Client(api_key=os.getenv('GEMINI_API_KEY'))
 MODEL_NAME = 'gemini-3.1-flash-lite'
 NUMERO_ASSISTANTE = os.getenv('ASSISTANT_NUMBER')
 ADMIN_NUMBER = os.getenv('ADMIN_NUMBER')
+
+# ==========================================
+#   🛡️ CONTROLO DE DUPLICADOS (ANTI-DUPLICAÇÃO)
+# ==========================================
+PROCESSADOS = {}
+processados_lock = threading.Lock()
 
 # ==========================================
 #   📢 FUNÇÃO DE NOTIFICAÇÃO DE ERROS CRÍTICOS
@@ -124,7 +130,7 @@ def criar_e_configurar_instancia_automatica(phone_number):
         return False
 
 # ==========================================
-#   📂 HISTÓRICO DE COMPATIBILIDADE (FLUXO A)
+#   📦 HISTÓRICO DE COMPATIBILIDADE (FLUXO A)
 # ==========================================
 def get_chat_history(phone_number):
     try:
@@ -283,6 +289,22 @@ def processar_webhook_background(data):
         msg_data = data['data']
         key = msg_data.get('key', {})
         
+        # 🛡️ FILTRO CRÍTICO ANTI-DUPLICAÇÃO
+        msg_id = key.get('id')
+        if msg_id:
+            with processados_lock:
+                agora_tempo = time.time()
+                # Limpeza de memória de chaves com mais de 60 segundos
+                antigos = [k for k, v in PROCESSADOS.items() if agora_tempo - v > 60]
+                for k in antigos:
+                    del PROCESSADOS[k]
+                
+                # Se a mensagem já entrou em processamento, cancela esta duplicada
+                if msg_id in PROCESSADOS:
+                    print(f"⚠️ [DEDUPLICAÇÃO] Ignorando webhook duplicado para a mensagem: {msg_id}")
+                    return
+                PROCESSADOS[msg_id] = agora_tempo
+
         nome_instancia_atual = data.get('instance')
         central_instance = os.getenv('EVOLUTION_INSTANCE_NAME')
         if not nome_instancia_atual:
@@ -495,7 +517,6 @@ Planos: Inicial (500 MT) e Avançado (1000 MT). Teste gratuito de 2 dias dispon�
                     "Para continuar a interagir e ter acesso aos nossos serviços, por favor contacte o suporte comercial da empresa."
                 )
                 send_whatsapp(phone_number, msg_bloqueio, instance_name=nome_instancia_atual)
-                # 🔄 SESSÃO PRESERVADA: Linha de logout removida para manter o QR Code salvo.
                 return
 
             conversa_doc = conversa_ref.get()
@@ -547,7 +568,6 @@ Planos: Inicial (500 MT) e Avançado (1000 MT). Teste gratuito de 2 dias dispon�
 
             diretrizes_corporativas = dados_cliente.get("diretrizes_corporativas", "")
             
-            # 🔥 PROMPT DO FLUXO B TOTALMENTE PURIFICADO (Sem dados do Negobot Central)
             sys_instruction = f"""Você é um assistente comercial virtual altamente inteligente, profissional e estritamente focado em fechar negócios. Sua comunicação deve ser feita exclusivamente na norma padrão e culta da Língua Portuguesa (Língua Oficial de Moçambique), mantendo um tom sério, polido, claro e corporativo.
 
 🚨 REGRAS CRÍTICAS DE COMPORTAMENTO HUMANO (PROIBIÇÃO DE LINGUAGEM ARTIFICIAL):
