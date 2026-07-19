@@ -3,7 +3,7 @@ import json
 import time
 import requests
 import threading
-import re  # Importado para a limpeza cirúrgica dos números
+import re
 from flask import Flask, request
 from datetime import datetime, timedelta, timezone
 from google import genai
@@ -17,7 +17,9 @@ app = Flask(__name__)
 def health_check():
     return "O ecossistema Negobot 100% Automático com Suporte Humano está online! 🚀", 200
 
-# Inicialização Segura do Firebase
+# ==========================================
+#   📦 INICIALIZAÇÃO SEGURA DO FIREBASE
+# ==========================================
 firebase_config_env = os.getenv('FIREBASE_CONFIG')
 if firebase_config_env:
     try:
@@ -42,12 +44,11 @@ db = firestore.client()
 client = genai.Client(api_key=os.getenv('GEMINI_API_KEY'))
 MODEL_NAME = 'gemini-3.1-flash-lite'
 NUMERO_ASSISTANTE = os.getenv('ASSISTANT_NUMBER')
-ADMIN_NUMBER = os.getenv('ADMIN_NUMBER')  # Seu número pessoal para alertas e comandos administrativos
+ADMIN_NUMBER = os.getenv('ADMIN_NUMBER')
 
 # ==========================================
 #   📢 FUNÇÃO DE NOTIFICAÇÃO DE ERROS CRÍTICOS
 # ==========================================
-
 def notificar_erro_admin(erro_msg):
     """Envia um alerta em tempo real para o WhatsApp do Administrador em caso de erro crítico."""
     if ADMIN_NUMBER:
@@ -56,7 +57,6 @@ def notificar_erro_admin(erro_msg):
         url = f"{os.getenv('EVOLUTION_API_URL')}/message/sendText/{central_instance}"
         
         to_number = ADMIN_NUMBER if "@" in ADMIN_NUMBER else f"{ADMIN_NUMBER}@s.whatsapp.net"
-        
         payload = {
             "number": to_number,
             "text": f"⚠️ *[ALERTA CRÍTICO - NEGOBOT]*\n\nOcorreu uma falha no servidor:\n❌ `{erro_msg}`\n\n*Verifique a consola do Render imediatamente.*"
@@ -67,15 +67,41 @@ def notificar_erro_admin(erro_msg):
             print(f"Falha ao enviar notificação de erro ao admin: {e}")
 
 # ==========================================
+#   ⏱️ FASE 6: TEMPORIZADOR DE ESPERA HUMANA (4 MINUTOS)
+# ==========================================
+def verificar_espera_humano_isolado(instancia_cliente, numero_remetente):
+    """Aguarda 4 minutos em segundo plano. Se o operador humano não responder, envia o alerta de atraso."""
+    print(f"⏱️ [TEMPORIZADOR] Iniciada monitorização de 4 minutos para {numero_remetente} na instância {instancia_cliente}")
+    time.sleep(240)
+    
+    try:
+        conversa_ref = db.collection('clientes_bot').document(instancia_cliente).collection('conversas').document(numero_remetente)
+        doc = conversa_ref.get()
+        
+        if doc.exists:
+            dados = doc.to_dict()
+            status_atendimento = dados.get("status_atendimento")
+            ultima_mensagem_por = dados.get("ultima_mensagem_por")
+            
+            if status_atendimento == "humano" and ultima_mensagem_por == "cliente_final":
+                msg_aviso = (
+                    "🕒 NEGOBOT MOZ ⚠️\n\n"
+                    "Pedimos desculpas pela demora. O nosso assistente está ocupado no momento realizou outros atendimentos, "
+                    "mas assim que estiver disponível vai responder diretamente aqui. Obrigado pela paciência!"
+                )
+                send_whatsapp(numero_remetente, msg_aviso, instance_name=instancia_cliente)
+                print(f"📢 [TEMPORIZADOR] Alerta de espera de 4 minutos enviado para {numero_remetente}")
+    except Exception as e:
+        print(f"❌ [ERRO TEMPORIZADOR] Falha na verificação de estouro de tempo: {e}")
+
+# ==========================================
 #   🤖 FUNÇÃO DE INFRAESTRUTURA AUTOMÁTICA
 # ==========================================
-
 def criar_e_configurar_instancia_automatica(phone_number):
     try:
         client_instance = re.sub(r'\D', '', phone_number)
         headers = {"apikey": os.getenv('EVOLUTION_API_KEY'), "Content-Type": "application/json"}
         
-        # BLINDAGEM: Remove resíduos e sessões fantasmas antigas para evitar erros de associação
         print(f"🔄 [AUTOMAÇÃO] Limpando sessões antigas para a instância {client_instance}...")
         requests.delete(f"{os.getenv('EVOLUTION_API_URL')}/instance/logout/{client_instance}", headers=headers)
         requests.delete(f"{os.getenv('EVOLUTION_API_URL')}/instance/delete/{client_instance}", headers=headers)
@@ -90,9 +116,6 @@ def criar_e_configurar_instancia_automatica(phone_number):
         res_create = requests.post(url_create, headers=headers, json=payload_create)
         res_create.raise_for_status()
         print(f"📦 [AUTOMAÇÃO] Nova instância {client_instance} criada com sucesso.")
-        
-        # NOTA: O Webhook local foi removido daqui! 
-        # Como ativou o Webhook Global no Render, a Evolution API já encaminha tudo nativamente.
         return True
     except Exception as e:
         erro_msg = f"Erro ao automatizar criação para {phone_number}: {e}"
@@ -101,31 +124,8 @@ def criar_e_configurar_instancia_automatica(phone_number):
         return False
 
 # ==========================================
-#        FUNÇÕES AUXILIARES E DE BANCO
+#   📂 HISTÓRICO DE COMPATIBILIDADE (FLUXO A)
 # ==========================================
-
-def verificar_ou_criar_cliente(phone_number):
-    try:
-        cliente_ref = db.collection('clientes').document(phone_number)
-        doc = cliente_ref.get()
-        agora = datetime.now(timezone.utc)
-
-        if not doc.exists:
-            dados_cliente = {
-                "phone_number": phone_number,
-                "data_registro": agora,
-                "trial_start": agora,
-                "status": "trial",
-                "diretrizes_corporativas": "Atenda o cliente de forma séria e focado estritamente nos serviços comerciais e planos da empresa."
-            }
-            cliente_ref.set(dados_cliente)
-            return dados_cliente, True
-        
-        return doc.to_dict(), False
-    except Exception as e:
-        print(f"❌ Erro ao verificar cliente: {e}")
-        return None, False
-
 def get_chat_history(phone_number):
     try:
         doc_ref = db.collection('chats').document(phone_number)
@@ -133,7 +133,7 @@ def get_chat_history(phone_number):
         if doc.exists:
             return doc.to_dict().get('history', [])
     except Exception as e:
-        print(f"Erro ao obter histórico: {e}")
+        print(f"Erro ao obter histórico do painel central: {e}")
     return []
 
 def save_chat_history(phone_number, history):
@@ -141,8 +141,11 @@ def save_chat_history(phone_number, history):
         doc_ref = db.collection('chats').document(phone_number)
         doc_ref.set({"history": history}, merge=True)
     except Exception as e:
-        print(f"Erro ao salvar histórico: {e}")
+        print(f"Erro ao salvar histórico do painel central: {e}")
 
+# ==========================================
+#   📞 COMUNICAÇÃO DE SAÍDA E DIGITAÇÃO HUMANA
+# ==========================================
 def send_whatsapp(to, text, instance_name=None):
     if not instance_name:
         instance_name = os.getenv('EVOLUTION_INSTANCE_NAME')
@@ -152,24 +155,24 @@ def send_whatsapp(to, text, instance_name=None):
     try:
         url_presence = f"{os.getenv('EVOLUTION_API_URL')}/chat/sendPresence/{instance_name}"
         payload_presence = {"number": to, "presence": "composing"}
-        requests.post(url_presence, headers=headers, json=payload_presence)
+        requests.post(url_presence, headers=headers, json=payload_presence, timeout=5)
         
         tempo_espera = max(1.8, min(len(text) * 0.015, 4.0))
         time.sleep(tempo_espera)
         
         url = f"{os.getenv('EVOLUTION_API_URL')}/message/sendText/{instance_name}"
         payload = {"number": to, "text": text}
-        res = requests.post(url, headers=headers, json=payload)
+        res = requests.post(url, headers=headers, json=payload, timeout=10)
         res.raise_for_status()
     except Exception as e:
-        print(f"ERRO ao enviar mensagem anti-ban: {e}")
+        print(f"ERRO ao enviar mensagem pela instância {instance_name}: {e}")
 
 def desconectar_instancia_evolution(phone_number):
     try:
         instance_name = re.sub(r'\D', '', phone_number)
         url = f"{os.getenv('EVOLUTION_API_URL')}/instance/logout/{instance_name}"
         headers = {"apikey": os.getenv('EVOLUTION_API_KEY'), "Content-Type": "application/json"}
-        response = requests.post(url, headers=headers)
+        response = requests.post(url, headers=headers, timeout=10)
         return response.status_code == 200
     except Exception as e:
         print(f"Erro ao desconectar instância: {e}")
@@ -181,11 +184,10 @@ def gerar_e_enviar_qrcode_central(phone_number):
         headers = {"apikey": os.getenv('EVOLUTION_API_KEY'), "Content-Type": "application/json"}
         
         url_connect = f"{os.getenv('EVOLUTION_API_URL')}/instance/connect/{client_instance}"
-        response_connect = requests.get(url_connect, headers=headers)
+        response_connect = requests.get(url_connect, headers=headers, timeout=10)
         response_connect.raise_for_status()
         
         dados_resposta = response_connect.json()
-        
         if dados_resposta.get("instance", {}).get("state") == "open":
             send_whatsapp(phone_number, "✅ O seu assistente virtual já se encontra ativo e operacional!")
             return True
@@ -216,8 +218,7 @@ def gerar_e_enviar_qrcode_central(phone_number):
             "mediatype": "image",
             "fileName": "qrcode.png"
         }
-        
-        res_media = requests.post(url_send_media, headers=headers, json=payload_media)
+        res_media = requests.post(url_send_media, headers=headers, json=payload_media, timeout=10)
         res_media.raise_for_status()
         return True
     except Exception as e:
@@ -225,9 +226,8 @@ def gerar_e_enviar_qrcode_central(phone_number):
         return False
 
 # ==========================================
-#     📢 ROTINA AUTOMÁTICA DE LEMBRETES
+#       📢 ROTINA AUTOMÁTICA DE LEMBRETES
 # ==========================================
-
 def enviar_lembretes_em_massa(periodo="dia"):
     try:
         print(f"⏰ [ROTINA] Iniciando disparo de lembretes do período da {periodo}...")
@@ -235,7 +235,6 @@ def enviar_lembretes_em_massa(periodo="dia"):
         central_instance = os.getenv('EVOLUTION_INSTANCE_NAME')
         
         saudacao = "Bom dia" if periodo == "manhã" else "Boa tarde"
-        
         mensagem_lembrete = (
             f"👋 *{saudacao}! Passando com um aviso importante sobre o seu Negobot Moz.* 🤖\n\n"
             "Lembramos que o seu período de teste gratuito de 2 dias está ativo e em andamento. "
@@ -270,41 +269,49 @@ def disparar_lembretes_via_url():
     return f"A rotina automatizada de lembretes da {periodo} foi disparada em segundo plano!", 200
 
 # ==========================================
-#   🎛️ WEBHOOK UNIFICADO E CENTRALIZADO (GLOBAL)
+#   🎛️ FASE 1: WEBHOOK E RESPOSTA IMEDIATA
 # ==========================================
-
 @app.route('/webhook-global', methods=['POST'])
 @app.route('/webhook-cliente', methods=['POST'])
 @app.route('/webhook', methods=['POST'])
 def universal_webhook():
     data = request.json
+    if not data:
+        return 'OK', 200
+        
+    # Fase 1: Desvia todo o processamento para segundo plano imediatamente
+    threading.Thread(target=processar_webhook_background, args=(data,)).start()
+    
+    # Responde imediatamente com HTTP 200 OK para cortar a duplicação por timeout
+    return 'OK', 200
+
+# ==========================================
+#   🧠 MOTOR DE PROCESSAMENTO ASSÍNCRONO
+# ==========================================
+def processar_webhook_background(data):
     try:
-        if not data:
-            return 'OK', 200
-            
-        # Tratamento case-insensitive para o evento da Evolution API
         event_name = data.get('event', '').lower()
-        if event_name != "messages.upsert" or "data" in data is False:
-            return 'OK', 200
+        if event_name != "messages.upsert" or "data" not in data:
+            return
 
         msg_data = data['data']
         key = msg_data.get('key', {})
+        
+        # Fase 2: Roteamento Dinâmico de Instâncias
         nome_instancia_atual = data.get('instance')
         central_instance = os.getenv('EVOLUTION_INSTANCE_NAME')
+        if not nome_instancia_atual:
+            return
 
-        # 🚨 BLINDAGEM SUPREMA ANTI-LOOP: Se a mensagem foi enviada pelo próprio Bot, ignora na hora!
-        from_me = key.get('fromMe')
-        if from_me is True or str(from_me).lower() == 'true':
-            return 'OK', 200
-
+        # Captura e validação do remetente
         phone_number = key.get('remoteJid', '')
         if not phone_number or '@g.us' in phone_number:
-            return 'OK', 200
+            return
             
         if NUMERO_ASSISTANTE and NUMERO_ASSISTANTE in phone_number:
-            return 'OK', 200
+            return
 
-        # Captura o texto da mensagem tratando as estruturas da API
+        # Captura estruturada de texto da mensagem
         message = msg_data.get('message', {})
         message_text = ""
         if 'conversation' in message:
@@ -313,9 +320,31 @@ def universal_webhook():
             message_text = message['extendedTextMessage'].get('text', '')
 
         if not message_text:
-            return 'OK', 200
+            return
 
         msg_clean = message_text.lower().strip()
+        agora = datetime.now(timezone.utc)
+
+        # 🚨 FASE 2: FILTRO DE OURO (fromMe) - Resposta Manual do Dono da Instância
+        from_me = key.get('fromMe')
+        is_from_me = from_me is True or str(from_me).lower() == 'true'
+
+        if is_from_me:
+            # Apenas se a mensagem veio de uma instância de cliente ativo
+            if nome_instancia_atual != central_instance:
+                conversa_ref = db.collection('clientes_bot').document(nome_instancia_atual).collection('conversas').document(phone_number)
+                conversa_ref.set({
+                    "status_atendimento": "bot", # Restaura o bot ao responder ou assume controlo total
+                    "ultima_mensagem_por": "atendente",
+                    "ultima_interacao": agora
+                }, merge=True)
+                
+                conversa_ref.collection('historico').add({
+                    "role": "atendente",
+                    "text": message_text,
+                    "timestamp": agora
+                })
+            return  # Encerra fluxo. Sem chamada à Gemini.
 
         # =======================================================
         # 🏢 FLUXO A: MENSAGEM RECEBIDA PELA INSTÂNCIA CENTRAL (ADMIN)
@@ -354,20 +383,26 @@ def universal_webhook():
                     resposta_status = "⛔ *Acesso Negado:* Comando restrito ao administrador."
                     
                 send_whatsapp(phone_number, resposta_status, instance_name=central_instance)
-                return 'OK', 200
+                return
 
-            # --- CONFIRMAÇÃO DE PAGAMENTO ---
+            # --- CONFIRMAÇÃO DE PAGAMENTO M-PESA ---
             if "recebeu" in msg_clean or "confirmado" in msg_clean or "transacao" in msg_clean:
                 db.collection('clientes').document(phone_number).update({
                     "status": "active",
                     "pago": True,
-                    "data_ativacao": datetime.now(timezone.utc)
+                    "data_ativacao": agora
                 })
+                # Atualiza também o nó isolado do tenant
+                db.collection('clientes_bot').document(phone_number.split('@')[0]).set({
+                    "status_plano": "active",
+                    "data_ativacao": agora
+                }, merge=True)
+                
                 criar_e_configurar_instancia_automatica(phone_number)
                 time.sleep(2)
                 send_whatsapp(phone_number, "🎉 *Pagamento Confirmado!* O seu Negobot Moz foi atualizado com sucesso para o modo ilimitado.", instance_name=central_instance)
                 gerar_e_enviar_qrcode_central(phone_number)
-                return 'OK', 200
+                return
             
             # --- INÍCIO E CRIAÇÃO DO TESTE DE 2 DIAS ---
             gatilhos_teste = ["teste", "testar", "quero o bot", "começar", "criar bot"]
@@ -380,7 +415,6 @@ def universal_webhook():
                     
                     sucesso_infra = criar_e_configurar_instancia_automatica(phone_number)
                     if sucesso_infra:
-                        agora = datetime.now(timezone.utc)
                         dados_cliente = {
                             "phone_number": phone_number,
                             "data_registro": agora,
@@ -389,6 +423,15 @@ def universal_webhook():
                             "diretrizes_corporativas": "Atenda o cliente focado estritamente nas regras do seu negócio corporativo."
                         }
                         cliente_ref.set(dados_cliente)
+                        
+                        # Espelha configuração no nó isolado do tenant (Fase 3/4)
+                        tenant_id = re.sub(r'\D', '', phone_number)
+                        db.collection('clientes_bot').document(tenant_id).set({
+                            "status_plano": "demonstracao",
+                            "data_ativacao": agora,
+                            "data_expiracao": agora + timedelta(days=2),
+                            "diretrizes_corporativas": "Atenda o cliente de forma séria e focado estritamente nos serviços comerciais e planos da empresa."
+                        })
                         time.sleep(3)
                         gerar_e_enviar_qrcode_central(phone_number)
                 else:
@@ -399,7 +442,7 @@ def universal_webhook():
                         send_whatsapp(phone_number, "✅ O seu plano está Ativo! Se precisar de reconectar, digite *#qrcode*.", instance_name=central_instance)
                     elif status_atual == 'trial':
                         send_whatsapp(phone_number, "✅ O seu teste de 2 dias já está a decorrer! Se precisar do QR Code novamente, digite *#qrcode*.", instance_name=central_instance)
-                return 'OK', 200
+                return
 
             # --- RECONEXÃO MANDATÓRIA ---
             if msg_clean == "#qrcode":
@@ -407,7 +450,7 @@ def universal_webhook():
                 criar_e_configurar_instancia_automatica(phone_number)
                 time.sleep(2)
                 gerar_e_enviar_qrcode_central(phone_number)
-                return 'OK', 200
+                return
 
             # --- IA DE ATENDIMENTO CENTRAL (SUPORTE MASTER) ---
             raw_history = get_chat_history(phone_number)
@@ -429,74 +472,117 @@ Planos: Inicial (500 MT) e Avançado (1000 MT). Teste gratuito de 2 dias dispon�
 
             config = types.GenerateContentConfig(system_instruction=sys_instruction_central, temperature=0.3)
             response = client.models.generate_content(model=MODEL_NAME, contents=contents, config=config)
-            response_text = response.text
+            response_text = response.text if response.text else ""
             
             contents.append(types.Content(role="model", parts=[types.Part.from_text(text=response_text)]))
             save_chat_history(phone_number, [{"role": c.role, "parts": [{"text": p.text} for p in c.parts]} for c in contents[-10:]])
-
             send_whatsapp(phone_number, response_text, instance_name=central_instance)
 
         # =======================================================
         # 🤖 FLUXO B: MENSAGEM RECEBIDA PELA INSTÂNCIA DO CLIENTE
         # =======================================================
         else:
-            # --- GATILHOS DE SUPORTE HUMANO ---
-            gatilhos_humano = ["falar com atendente", "suporte humano", "atendente", "falar com humano", "#suporte"]
+            # 📂 FASE 3: Endereçamento e Estrutura Firestore Totalmente Isolada por Tenant
+            client_doc_ref = db.collection('clientes_bot').document(nome_instancia_atual)
+            conversa_ref = client_doc_ref.collection('conversas').document(phone_number)
+            historico_ref = conversa_ref.collection('historico')
+
+            # Carrega definições do Tenant com proteção contra documentos ausentes
+            client_doc = client_doc_ref.get()
+            if not client_doc.exists:
+                # Criação automática em caso de novos Tenants
+                dados_cliente = {
+                    "status_plano": "demonstracao",
+                    "data_ativacao": agora,
+                    "data_expiracao": agora + timedelta(days=2),
+                    "diretrizes_corporativas": "Atenda o cliente focado estritamente nas regras do seu negócio corporativo."
+                }
+                client_doc_ref.set(dados_cliente)
+            else:
+                dados_cliente = client_doc.to_dict()
+
+            # 💵 FASE 4: CONTROLO DE LIMITES POR TEMPO (Paywall de 2 Dias)
+            status_plano = dados_cliente.get("status_plano", "demonstracao")
+            data_expiracao = dados_cliente.get("data_expiracao")
+            
+            if data_expiracao and data_expiracao.tzinfo is None:
+                data_expiracao = data_expiracao.replace(tzinfo=timezone.utc)
+
+            if status_plano == "demonstracao" and agora > data_expiracao:
+                print(f"⛔ [PAYWALL] Instância {nome_instancia_atual} com período experimental expirado.")
+                msg_bloqueio = (
+                    "⚠️ NEGOBOT MOZ ⚠️\n\n"
+                    "Olá! O seu período de teste gratuito de 2 dias chegou ao fim. "
+                    "Para continuar a usar a nossa automação inteligente e ativar o seu plano completo, "
+                    "por favor contacte o nosso suporte comercial."
+                )
+                send_whatsapp(phone_number, msg_bloqueio, instance_name=nome_instancia_atual)
+                time.sleep(2)
+                desconectar_instancia_evolution(nome_instancia_atual)
+                return
+
+            # 🎛️ FASE 6: Verificação Prévia do Estado de Transição Humana
+            conversa_doc = conversa_ref.get()
+            status_atendimento = "bot"
+            if conversa_doc.exists:
+                status_atendimento = conversa_doc.to_dict().get("status_atendimento", "bot")
+
+            # Se o atendimento estiver delegado ao Humano, apenas arquiva no Firestore e chama o monitor
+            if status_atendimento == "humano":
+                conversa_ref.set({"ultima_mensagem_por": "cliente_final", "ultima_interacao": agora}, merge=True)
+                historico_ref.add({"role": "user", "text": message_text, "timestamp": agora})
+                threading.Thread(target=verificar_espera_humano_isolado, args=(nome_instancia_atual, phone_number)).start()
+                return
+
+            # Gatilhos Textuais Explícitos para Atendimento Humano Imediato
+            gatilhos_humano = ["falar com atendente", "suporte humano", "atendente", "falar com humano", "#suporte", "humano", "suporte"]
             if any(g in msg_clean for g in gatilhos_humano):
+                conversa_ref.set({
+                    "status_atendimento": "humano",
+                    "ultima_mensagem_por": "cliente_final",
+                    "ultima_interacao": agora
+                }, merge=True)
+                historico_ref.add({"role": "user", "text": message_text, "timestamp": agora})
+                
                 resposta_suporte = (
                     "🔔 *Pedido de Suporte Humano recebido!*\n\n"
                     "Vou chamar um dos nossos especialistas para dar continuidade ao seu atendimento. "
                     "Por favor, aguarde um momento que a equipa já o vai contactar aqui! 🤝"
                 )
                 send_whatsapp(phone_number, resposta_suporte, instance_name=nome_instancia_atual)
-                return 'OK', 200
+                threading.Thread(target=verificar_espera_humano_isolado, args=(nome_instancia_atual, phone_number)).start()
+                return
 
-            cliente, eh_primeira_msg = verificar_ou_criar_cliente(phone_number)
-            agora = datetime.now(timezone.utc)
+            # 🧠 FASE 3: Controlo de Memória Otimizada via Firestore (.limit(10))
+            docs_historico = historico_ref.order_by('timestamp', direction=firestore.Query.DESCENDING).limit(10).stream()
             
-            diretrizes_corporativas = "Atenda o cliente focado estritamente nas regras do seu negócio corporativo."
-            if cliente:
-                status = cliente.get('status', 'trial')
-                trial_start = cliente.get('trial_start')
-                diretrizes_corporativas = cliente.get('diretrizes_corporativas', diretrizes_corporativas)
-                
-                if trial_start.tzinfo is None:
-                    trial_start = trial_start.replace(tzinfo=timezone.utc)
-                
-                # CONTROLO TEMPORAL DO TRIAL (BLOQUEIA APÓS 2 DIAS)
-                if status == "trial" and agora > (trial_start + timedelta(days=2)):
-                    status = "bloqueado"
-                    db.collection('clientes').document(phone_number).update({"status": "bloqueado"})
-                
-                if status == "bloqueado":
-                    resposta_bloqueio = (
-                        "⚠️ *Aviso de Expiração - Negobot Moz* ⚠️\n\n"
-                        "O seu período de teste gratuito de **2 dias** chegou ao fim.\n\n"
-                        "Para reativar o seu assistente virtual, faça o seguinte:\n\n"
-                        "1️⃣ Efetue o pagamento da subscrição via **M-Pesa**:\n"
-                        "    • **Número M-Pesa:** 855000929\n"
-                        "    • **Titular:** Abel Francisco\n\n"
-                        "2️⃣ 📲 *PASSO CRÍTICO:* **Encaminhe o SMS de confirmação da transferência** para o nosso WhatsApp Central de Suporte.\n\n"
-                        "🤖 O nosso sistema integrado vai validar o depósito e libertar o seu acesso de imediato! 🚀"
-                    )
-                    send_whatsapp(phone_number, resposta_bloqueio, instance_name=nome_instancia_atual)
-                    time.sleep(3)
-                    desconectar_instancia_evolution(phone_number)
-                    return 'OK', 200
+            lista_mensagens = []
+            for d in docs_historico:
+                lista_mensagens.append(d.to_dict())
+            lista_mensagens.reverse()
 
-            # EXECUÇÃO DO ROBÔ DO CLIENTE CORRESPONDENTE
-            raw_history = get_chat_history(phone_number)
-            recent_history = raw_history[-16:]
-            
+            # Reconstrução estruturada do histórico para a SDK da Gemini
             contents = []
-            for msg in recent_history:
-                role = "model" if msg.get('role') == "assistant" else msg.get('role')
-                parts = [types.Part.from_text(text=p.get('text', '')) for p in msg.get('parts', [])]
-                contents.append(types.Content(role=role, parts=parts))
+            for m in lista_mensagens:
+                role_bruto = m.get('role')
+                role_gemini = "model" if role_bruto in ["assistant", "model", "atendente"] else "user"
+                contents.append(types.Content(
+                    role=role_gemini,
+                    parts=[types.Part.from_text(text=m.get('text', ''))]
+                ))
             
+            # Adiciona a entrada atual do utilizador
             contents.append(types.Content(role="user", parts=[types.Part.from_text(text=message_text)]))
 
+            # 📝 FASE 5: Engenharia de Prompt e Alinhamento Humano (Anti-Robô)
+            diretrizes_corporativas = dados_cliente.get("diretrizes_corporativas", "")
+            
             sys_instruction = f"""Você é o Negobot Moz, um assistente comercial virtual altamente inteligente, profissional e estritamente focado em fechar negócios no mercado corporativo. Sua comunicação deve ser feita exclusivamente na norma padrão e culta da Língua Portuguesa (Língua Oficial de Moçambique), mantendo um tom sério, polido, claro e corporativo.
+
+🚨 REGRAS CRÍTICAS DE COMPORTAMENTO HUMANO (PROIBIÇÃO DE LINGUAGEM ARTIFICIAL):
+1. É EXPRESSAMENTE PROIBIBO utilizar terminologias tecnológicas, tais como: "Como uma inteligência artificial", "diretrizes de automação", "protocolos do sistema", "sou um modelo de linguagem", "sou um robô" ou similares. Responda estritamente como um membro humano da equipa comercial.
+2. Limite de Saída: Desenvolva mensagens curtas, ágeis e altamente diretas ao ponto, contendo no máximo de 2 a 3 linhas por bloco de resposta. Evite blocos massivos de texto.
+3. Tratamento de Repetições: Caso o utilizador demonstre insatisfação ou acuse repetição de falas, peça desculpas de forma simples e natural, alterando a abordagem comercial imediatamente.
 
 🚨 REGRA CRÍTICA DE ATIVAÇÃO E TESTE:
 - O período de teste de 2 dias é 100% GRATUITO, IMEDIATO e AUTOMÁTICO.
@@ -506,44 +592,69 @@ Planos: Inicial (500 MT) e Avançado (1000 MT). Teste gratuito de 2 dias dispon�
 
 🎯 DIRETRIZES DE CONDUTA E LINGUAGEM:
 - É expressamente proibido o uso de dialetos locais, regionalismos informais, gírias ou termos coloquiais.
-- Mantenha total seriedade: bloqueie firmemente qualquer tipo de piada, brincadeira ou assunto alheio ao escopo comercial.
-- Responda sempre de forma clara e objetiva, utilizando parágrafos curtos e estruturados. Aplique negritos de forma cirúrgica para destacar informações essenciais.
+- Mantenha total seriedade comercial: bloqueie firmemente qualquer tipo de assunto alheio ao escopo de vendas da empresa.
 
 📋 INFORMAÇÕES ESPECÍFICAS DA EMPRESA E REGRAS DE NEGÓCIO:
 {diretrizes_corporativas}
 
-📋 DADOS INSTITUCIONAIS GERAIS:
+📋 DADOS INSTITUCIONAIS GERAIS (NEGOBOT):
 1. ABORDAGEM INICIAL: Caso seja a primeira interação do cliente, forneça uma recepção formal: 'Olá! Seja bem-vindo. Já imaginou o seu WhatsApp a trabalhar pelo seu negócio 24 horas por dia? O seu período de teste gratuito de 2 dias já está ativo! Como posso ajudar a sua empresa hoje?'
-2. FOCO E ESCOPO: Restrinja o atendimento estritamente ao esclarecimento de dúvidas sobre os serviços comerciais do Negobot Moz.
-3. CRIADOR: Você foi desenvolvido pelo empresário Abel Francisco, licenciado em Contabilidade e Auditoria.
-4. PLANOS DISPONÍVEIS:
+2. CRIADOR: Você foi desenvolvido pelo empresário Abel Francisco, licenciado em Contabilidade e Auditoria.
+3. PLANOS DISPONÍVEIS:
    - Plano Inicial (500 MT/mês): Atendimento automático 24h/7 para perguntas frequentes por texto manual (não lê PDFs), limite de 1.500 mensagens/mês, sem suporte humano.
    - Plano Avançado (1000 MT/mês): Mensagens ilimitadas, leitura de catálogos/tabelas complexas via PDF e SUPORTE HUMANO integrado sempre que solicitado.
-5. MÉTODO DE COBRANÇA: Pagamentos via M-Pesa pelo número 855000929 em nome de Abel Francisco (apenas após os 2 dias de teste)."""
+4. MÉTODO DE COBRANÇA: Pagamentos via M-Pesa pelo número 855000929 em nome de Abel Francisco (apenas após os 2 dias de teste).
 
-            if eh_primeira_msg:
-                sys_instruction += "\n[CONTEXTO]: Primeira mensagem do cliente."
+📌 REGRA DE TRANSIÇÃO: Se o cliente insistir em falar com o suporte, pedir por um atendente humano, gerente, ou se a dúvida dele fugir completamente da base de conhecimento acima, confirme o encaminhamento de forma polida e termine a resposta adicionando EXATAMENTE a tag: [TRANSICAO_HUMANO]"""
 
             config = types.GenerateContentConfig(system_instruction=sys_instruction, temperature=0.2)
-            response = client.models.generate_content(model=MODEL_NAME, contents=contents, config=config)
-            response_text = response.text
             
-            contents.append(types.Content(role="model", parts=[types.Part.from_text(text=response_text)]))
-            save_chat_history(phone_number, [{"role": c.role, "parts": [{"text": p.text} for p in c.parts]} for c in contents[-14:]])
+            # Executa a chamada à API Gemini
+            response = client.models.generate_content(model=MODEL_NAME, contents=contents, config=config)
+            response_text = response.text if response.text else ""
+            
+            # Regista a mensagem recebida no histórico do par isolado
+            historico_ref.add({"role": "user", "text": message_text, "timestamp": agora})
 
-            send_whatsapp(phone_number, response_text, instance_name=nome_instancia_atual)
+            # Tratamento do gatilho dinâmico de transição humana (Fase 6)
+            if "[TRANSICAO_HUMANO]" in response_text:
+                response_text = response_text.replace("[TRANSICAO_HUMANO]", "").strip()
+                
+                conversa_ref.set({
+                    "status_atendimento": "humano",
+                    "ultima_mensagem_por": "cliente_final",
+                    "ultima_interacao": agora
+                }, merge=True)
+                
+                if response_text:
+                    send_whatsapp(phone_number, response_text, instance_name=nome_instancia_atual)
+                else:
+                    send_whatsapp(phone_number, "Entendido. Estou a transferir o seu atendimento para a nossa equipa de suporte humano agora mesmo. Por favor, aguarde.", instance_name=nome_instancia_atual)
+                    
+                historico_ref.add({
+                    "role": "model",
+                    "text": response_text if response_text else "Encaminhado para o suporte humano.",
+                    "timestamp": agora
+                })
+                
+                # Dispara o temporizador em background de 4 minutos
+                threading.Thread(target=verificar_espera_humano_isolado, args=(nome_instancia_atual, phone_number)).start()
+                return
+
+            # Fluxo Normal de Envio Comercial
+            if response_text:
+                send_whatsapp(phone_number, response_text, instance_name=nome_instancia_atual)
+                historico_ref.add({"role": "model", "text": response_text, "timestamp": agora})
+                conversa_ref.set({"ultima_mensagem_por": "bot", "ultima_interacao": agora}, merge=True)
 
     except Exception as e:
         erro_completo = f"Erro na rota Webhook Universal (Instância: {data.get('instance')}): {e}"
         print(f"❌ {erro_completo}")
         notificar_erro_admin(erro_completo)
-        
-    return 'OK', 200
 
 # ==========================================
-#     ⏰ SINCRO DE LOOP INTERNO EM SEGUNDO PLANO
+#       ⏰ SINCRO DE LOOP INTERNO (CRON)
 # ==========================================
-
 def loop_interno_lembretes():
     print("⏰ [SISTEMA] Monitor de lembretes em segundo plano ativo.")
     ultima_execucao_chave = ""
