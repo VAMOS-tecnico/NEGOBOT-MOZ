@@ -281,12 +281,6 @@ def gerar_url_imagem_pollinations(prompt_otimizado):
 #   ⏱️ LÓGICA DE TIMEOUT AUTOMÁTICO
 # ==========================================
 def checar_timeout_atendimento_humano(conversa_ref, conversa_dados, agora):
-    """
-    VERIFICAÇÃO DE TIMEOUT AUTOMÁTICO:
-    Se a conversa estiver com status 'humano' e o tempo decorrido desde a última 
-    mensagem do cliente for >= TIMEOUT_HUMANO_MINUTOS sem resposta de um atendente,
-    reseta o status para 'bot' automaticamente.
-    """
     if conversa_dados and conversa_dados.get("status_atendimento") == "humano":
         ultima_interacao = conversa_dados.get("ultima_interacao")
         ultima_msg_por = conversa_dados.get("ultima_mensagem_por")
@@ -304,18 +298,6 @@ def checar_timeout_atendimento_humano(conversa_ref, conversa_dados, agora):
                 return True
     return False
 
-def checar_instancia_conectada(instance_name):
-    try:
-        url = f"{os.getenv('EVOLUTION_API_URL')}/instance/connectionState/{instance_name}"
-        headers = {"apikey": os.getenv('EVOLUTION_API_KEY')}
-        res = requests.get(url, headers=headers, timeout=5)
-        if res.status_code == 200:
-            dados = res.json()
-            return dados.get("instance", {}).get("state") == "open"
-    except Exception as e:
-        print(f"⚠️ Erro ao verificar estado da instância {instance_name}: {e}")
-    return False
-
 def criar_e_configurar_instancia_automatica(phone_number):
     try:
         client_instance = re.sub(r'\D', '', phone_number)
@@ -329,9 +311,21 @@ def criar_e_configurar_instancia_automatica(phone_number):
         payload_create = {"instanceName": client_instance, "qrcode": True, "integration": "WHATSAPP-BAILEYS"}
         res_create = requests.post(url_create, headers=headers, json=payload_create, timeout=10)
         res_create.raise_for_status()
+        
+        # Configuração automática do Webhook para a nova instância
+        webhook_target_url = os.getenv('WEBHOOK_URL')
+        if webhook_target_url:
+            url_webhook = f"{os.getenv('EVOLUTION_API_URL')}/webhook/set/{client_instance}"
+            payload_webhook = {
+                "url": webhook_target_url,
+                "enabled": True,
+                "events": ["MESSAGES_UPSERT"]
+            }
+            requests.post(url_webhook, headers=headers, json=payload_webhook, timeout=10)
+
         return True
     except Exception as e:
-        erro_msg = f"Erro ao automatizar criação para {phone_number}: {e}"
+        erro_msg = f"Erro ao automatizar criação/webhook para {phone_number}: {e}"
         notificar_erro_admin(erro_msg)
         return False
 
@@ -442,7 +436,6 @@ def processar_webhook_background(data):
         key = msg_data.get('key', {})
         msg_id = key.get('id')
         
-        # Trava contra mensagens duplicadas
         if msg_id:
             with processados_lock:
                 agora_tempo = time.time()
@@ -495,7 +488,6 @@ def processar_webhook_background(data):
         # =======================================================
         # 🏢 FLUXO A: INSTÂNCIA CENTRAL (SUPORTE E VENDAS NEGOBOT)
         # =======================================================
-        # ROTA ISOLADA: Mensagens destinadas ao WhatsApp do Negobot Moz caem SEMPRE aqui.
         if nome_instancia_atual == central_instance:
             chat_ref = db.collection('chats').document(phone_number)
             chat_doc = chat_ref.get()
@@ -512,35 +504,6 @@ def processar_webhook_background(data):
                     "data_registro": agora,
                     "status": "prospect"
                 }, merge=True)
-
-            # Comandos de Administração
-            if msg_clean.startswith('#status'):
-                remetente_puro = phone_number.split('@')[0]
-                if ADMIN_NUMBER and remetente_puro in ADMIN_NUMBER:
-                    partes = message_text.split()
-                    if len(partes) > 1:
-                        jid_pesquisa = partes[1].strip() if "@" in partes[1] else f"{partes[1].strip()}@s.whatsapp.net"
-                        doc_c = db.collection('clientes').document(jid_pesquisa).get()
-                        if doc_c.exists:
-                            c_dados = doc_c.to_dict()
-                            resposta_status = f"📊 *NEGOBOT MOZ*\n• Cliente: {partes[1]}\n• Estado: {c_dados.get('status', 'N/A').upper()}\n• Pago: {'Sim ✅' if c_dados.get('pago') else 'Não ❌'}"
-                        else:
-                            resposta_status = f"❌ Número `{partes[1]}` não encontrado."
-                    else:
-                        resposta_status = "💡 Uso: `#status 25884xxxxxxx`"
-                else:
-                    resposta_status = "⛔ Restrito ao admin."
-                send_whatsapp(phone_number, resposta_status, instance_name=central_instance)
-                return
-
-            if "recebeu" in msg_clean or "confirmado" in msg_clean or "transacao" in msg_clean:
-                db.collection('clientes').document(phone_number).update({"status": "active", "pago": True, "data_ativacao": agora})
-                db.collection('clientes_bot').document(phone_number.split('@')[0]).set({"status_plano": "active", "data_ativacao": agora}, merge=True)
-                criar_e_configurar_instancia_automatica(phone_number)
-                time.sleep(2)
-                send_whatsapp(phone_number, "🎉 *Pagamento Confirmado!* O seu Negobot foi ativado.", instance_name=central_instance)
-                gerar_e_enviar_qrcode_central(phone_number)
-                return
 
             if msg_clean == "#qrcode":
                 send_whatsapp(phone_number, "🔄 A gerar QR Code...", instance_name=central_instance)
@@ -570,34 +533,23 @@ def processar_webhook_background(data):
                         time.sleep(3)
                         gerar_e_enviar_qrcode_central(phone_number)
                     return
-                elif status_atual == 'bloqueado':
-                    send_whatsapp(phone_number, "⚠️ O seu teste expirou. Faça o pagamento via M-Pesa (855000929 - Abel Francisco) para reativar o seu bot.", instance_name=central_instance)
-                    return
-                else:
-                    send_whatsapp(phone_number, "✅ O seu robô já está ativo! Digite *#qrcode* se precisar de reconectar o WhatsApp.", instance_name=central_instance)
 
-            # ESTADO HUMANO E TIMEOUT AUTOMÁTICO (CENTRAL)
+            # --- ANTIGRIPAGEM / REATIVAÇÃO AUTOMÁTICA (ANTI-MORTE DE FLUXO) ---
             status_atendimento = chat_dados.get("status_atendimento", "bot")
-
             if status_atendimento == "humano":
                 if checar_timeout_atendimento_humano(chat_ref, chat_dados, agora):
-                    send_whatsapp(
-                        phone_number,
-                        f"🕒 *Atendimento Reativado:* O tempo de espera ({TIMEOUT_HUMANO_MINUTOS} min) expirou. O assistente virtual foi reativado!",
-                        instance_name=central_instance
-                    )
                     status_atendimento = "bot"
                 else:
-                    if msg_clean in ["/bot", "/reset", "continuar", "bot"]:
+                    # Se mandou bom dia, ola, oy, etc., força a reativação imediata para a IA
+                    if msg_clean in ["/bot", "/reset", "continuar", "bot", "bom dia", "boa tarde", "boa noite", "ola", "olá", "oy", "oi"]:
                         chat_ref.set({"status_atendimento": "bot", "ultima_interacao": agora}, merge=True)
-                        send_whatsapp(phone_number, "🤖 O assistente virtual foi reativado!", instance_name=central_instance)
+                        status_atendimento = "bot"
+                    else:
+                        chat_ref.set({"ultima_interacao": agora, "ultima_mensagem_por": "cliente_final"}, merge=True)
+                        hist = chat_dados.get("history", [])
+                        hist.append({"role": "user", "parts": [{"text": message_text}]})
+                        save_chat_history(phone_number, hist[-10:])
                         return
-                    
-                    chat_ref.set({"ultima_interacao": agora, "ultima_mensagem_por": "cliente_final"}, merge=True)
-                    hist = chat_dados.get("history", [])
-                    hist.append({"role": "user", "parts": [{"text": message_text}]})
-                    save_chat_history(phone_number, hist[-10:])
-                    return
 
             gatilhos_humano = ["falar com atendente", "suporte humano", "atendente", "humano", "#suporte"]
             if any(g in msg_clean for g in gatilhos_humano):
@@ -613,7 +565,9 @@ def processar_webhook_background(data):
                 )
                 return
 
-            # RESPOSTA IA CENTRAL
+            # RESPOSTA IA CENTRAL (SEMPRE ATIVA PARA NOVAS MENSAGENS)
+            chat_ref.set({"status_atendimento": "bot", "ultima_mensagem_por": "cliente_final", "ultima_interacao": agora}, merge=True)
+            
             raw_history = get_chat_history(phone_number)[-10:]
             contents = []
             for msg in raw_history:
@@ -624,8 +578,8 @@ def processar_webhook_background(data):
             contents.append({"role": "user", "parts": [{"text": message_text}]})
 
             sys_instruction_central = """Você é o assistente comercial e de suporte oficial do Negobot Moz.
-Sua função é tirar dúvidas sobre o sistema, explicar planos (Inicial: 500 MT, Avançado: 1000 MT; M-Pesa 855000929 Abel Francisco) e instruir novos utilizadores a digitar 'TESTAR' para iniciar a demonstração de 2 dias.
-Responda sempre com cortesia e clareza em Português de Moçambique."""
+Responda sempre com cortesia, clareza e dinamismo em Português de Moçambique.
+ATENÇÃO: Nunca ignore novas saudações (como 'Bom dia', 'Boa noite', 'Oy'). Retome a conversa de forma natural, prestativa e ativa, independentemente de despedidas anteriores."""
 
             response_text = chamar_groq_rest(contents, system_instruction=sys_instruction_central, temperature=0.3)
             if response_text:
@@ -665,7 +619,6 @@ Responda sempre com cortesia e clareza em Português de Moçambique."""
                 send_whatsapp(phone_number, "⚠️ O período de teste deste assistente expirou.", instance_name=nome_instancia_atual)
                 return
 
-            # Comando de Arte
             if msg_clean.startswith("/criar-arte"):
                 pedido = message_text.replace("/criar-arte", "").strip()
                 if not pedido:
@@ -679,7 +632,6 @@ Responda sempre com cortesia e clareza em Português de Moçambique."""
                 requests.post(f"{os.getenv('EVOLUTION_API_URL')}/message/sendMedia/{nome_instancia_atual}", headers={"apikey": os.getenv('EVOLUTION_API_KEY'), "Content-Type": "application/json"}, json=payload, timeout=25)
                 return
 
-            # Anexos (Excel / PDF)
             if document_message and phone_number.split('@')[0] in nome_instancia_atual:
                 url_doc = document_message.get('url')
                 file_name = document_message.get('fileName', '').lower()
@@ -700,28 +652,22 @@ Responda sempre com cortesia e clareza em Português de Moçambique."""
                         send_whatsapp(phone_number, "✅ *PDF Carregado!* Conteúdo incorporado às diretrizes.", instance_name=nome_instancia_atual)
                     return
 
-            # ESTADO HUMANO E TIMEOUT AUTOMÁTICO (CLIENTE)
+            # --- ANTIGRIPAGEM / REATIVAÇÃO AUTOMÁTICA (CLIENTE) ---
             conversa_doc = conversa_ref.get()
             conversa_dados = conversa_doc.to_dict() if conversa_doc.exists else {}
             status_atendimento = conversa_dados.get("status_atendimento", "bot")
 
             if status_atendimento == "humano":
                 if checar_timeout_atendimento_humano(conversa_ref, conversa_dados, agora):
-                    send_whatsapp(
-                        phone_number,
-                        f"🕒 *Atendimento Reativado:* O tempo de espera ({TIMEOUT_HUMANO_MINUTOS} min) expirou. O assistente virtual retoma o seu atendimento!",
-                        instance_name=nome_instancia_atual
-                    )
                     status_atendimento = "bot"
                 else:
-                    if msg_clean in ["/bot", "/reset", "continuar", "bot"]:
+                    if msg_clean in ["/bot", "/reset", "continuar", "bot", "bom dia", "boa tarde", "boa noite", "ola", "olá", "oy", "oi"]:
                         conversa_ref.set({"status_atendimento": "bot", "ultima_interacao": agora}, merge=True)
-                        send_whatsapp(phone_number, "🤖 Assistente virtual reativado com sucesso!", instance_name=nome_instancia_atual)
+                        status_atendimento = "bot"
+                    else:
+                        conversa_ref.set({"ultima_mensagem_por": "cliente_final", "ultima_interacao": agora}, merge=True)
+                        historico_ref.add({"role": "user", "text": message_text, "timestamp": agora})
                         return
-
-                    conversa_ref.set({"ultima_mensagem_por": "cliente_final", "ultima_interacao": agora}, merge=True)
-                    historico_ref.add({"role": "user", "text": message_text, "timestamp": agora})
-                    return
 
             gatilhos_humano = ["falar com atendente", "suporte humano", "atendente", "humano", "#suporte"]
             if any(g in msg_clean for g in gatilhos_humano):
@@ -738,7 +684,7 @@ Responda sempre com cortesia e clareza em Português de Moçambique."""
                 )
                 return
 
-            # RESPOSTA IA CLIENTE
+            # RESPOSTA IA CLIENTE (SEMPRE ATIVA)
             docs_h = historico_ref.order_by('timestamp', direction=firestore.Query.DESCENDING).limit(10).stream()
             lista_m = [d.to_dict() for d in docs_h]
             lista_m.reverse()
@@ -757,14 +703,15 @@ Português de Moçambique, tom profissional e conciso.
 DIRETRIZES DA EMPRESA:
 {diretrizes}
 
-REGRA DE TRANSIÇÃO:
+REGRA DE REATIVAÇÃO E FLUXO:
+- Nunca ignore novas saudações (como 'Bom dia', 'Boa noite', 'Oy'). Retome a conversa de forma ativa.
 - NUNCA use a tag [TRANSICAO_HUMANO] em saudações simples.
 - Apenas inclua a tag [TRANSICAO_HUMANO] se o cliente exigir expressamente um humano e você não tiver a resposta."""
 
             response_text = chamar_groq_rest(contents, system_instruction=sys_instruction, temperature=0.1)
             historico_ref.add({"role": "user", "text": message_text, "timestamp": agora})
 
-            e_saudacao = any(s in msg_clean for s in ["bom dia", "boa tarde", "boa noite", "olá", "ola", "oi"])
+            e_saudacao = any(s in msg_clean for s in ["bom dia", "boa tarde", "boa noite", "olá", "ola", "oi", "oy"])
             
             if "[TRANSICAO_HUMANO]" in response_text and not e_saudacao:
                 response_text = response_text.replace("[TRANSICAO_HUMANO]", "").strip()
