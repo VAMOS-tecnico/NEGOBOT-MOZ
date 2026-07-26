@@ -511,21 +511,18 @@ def processar_webhook_background(data):
 
         message = msg_data.get('message', {})
         
-        # Audio, Text, Documents and Images Detection
         audio_message = message.get('audioMessage')
         document_message = message.get('documentMessage') or message.get('documentWithCaptionMessage', {}).get('message', {}).get('documentMessage')
         image_message = message.get('imageMessage') or message.get('extendedTextMessage', {}).get('contextInfo', {}).get('quotedMessage', {}).get('imageMessage')
 
         message_text = message.get('conversation') or message.get('extendedTextMessage', {}).get('text', '')
 
-        # 🎙️ Handle Voice Audio via Groq Whisper
         if audio_message:
             url_audio = audio_message.get('url')
             if url_audio:
                 send_whatsapp(phone_number, "🎙️ *A ouvir o seu áudio...*", instance_name=nome_instancia_atual)
                 message_text = transcrever_audio_groq(url_audio)
 
-        # 👁️ Handle Images / Receipts / Photos via Groq Vision
         if image_message and not message_text.startswith('/criar-arte'):
             url_imagem = image_message.get('url')
             caption = image_message.get('caption', '')
@@ -673,7 +670,6 @@ Planos: Inicial (500 MT) e Avançado (1000 MT). M-Pesa: 855000929 (Abel Francisc
                 requests.post(f"{os.getenv('EVOLUTION_API_URL')}/message/sendMedia/{nome_instancia_atual}", headers={"apikey": os.getenv('EVOLUTION_API_KEY'), "Content-Type": "application/json"}, json=payload, timeout=25)
                 return
 
-            # 📊 Document Extraction (Excel & PDF) by Instance Owner
             if document_message and phone_number.split('@')[0] in nome_instancia_atual:
                 url_doc = document_message.get('url')
                 file_name = document_message.get('fileName', '').lower()
@@ -697,7 +693,7 @@ Planos: Inicial (500 MT) e Avançado (1000 MT). M-Pesa: 855000929 (Abel Francisc
             if msg_clean == "/grupos":
                 grupos = listar_grupos_instancia(nome_instancia_atual)
                 if not grupos:
-                    send_whatsapp(phone_number, "❌ Nenhum grupo encontrado.", instance_name=nome_instancia_atual)
+                    send_whatsapp(phone_number, "❌ Não foi possível encontrar nenhum grupo ativo nesta instância. Certifique-se de que o WhatsApp está conectado corretamente e possui grupos sincronizados.", instance_name=nome_instancia_atual)
                     return
                 db.collection("clientes_bot").document(nome_instancia_atual).collection("temp_grupos").document("mapeamento").set({"grupos": grupos, "timestamp": firestore.SERVER_TIMESTAMP})
                 txt_resp = "📋 *SELECIONE OS GRUPOS:*\n\n" + "\n".join([f"*{g['indice']}* - {g['nome']} ({g['qtd']} membros)" for g in grupos]) + "\n\nResponda ex: `1, 3`"
@@ -739,7 +735,6 @@ Planos: Inicial (500 MT) e Avançado (1000 MT). M-Pesa: 855000929 (Abel Francisc
                 threading.Thread(target=verificar_espera_humano_isolado, args=(nome_instancia_atual, phone_number)).start()
                 return
 
-            # History retrieval
             docs_h = historico_ref.order_by('timestamp', direction=firestore.Query.DESCENDING).limit(10).stream()
             lista_m = [d.to_dict() for d in docs_h]
             lista_m.reverse()
