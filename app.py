@@ -208,10 +208,33 @@ def analisar_imagem_groq(url_imagem, instrucao="Analise e extraia todas as infor
     return ""
 
 # ==========================================
-#   🛡️ DUPLICATE CONTROL
+#   🛡️ DUPLICATE CONTROL & VERIFICATION
 # ==========================================
 PROCESSADOS = {}
 processados_lock = threading.Lock()
+
+def verificar_instancia_conectada(client_instance):
+    """Verifica se a instância na Evolution API está ativa e conectada (state == 'open')."""
+    try:
+        headers = {"apikey": os.getenv('EVOLUTION_API_KEY')}
+        url = f"{os.getenv('EVOLUTION_API_URL')}/instance/connectionState/{client_instance}"
+        response = requests.get(url, headers=headers, timeout=5)
+        if response.status_code == 200:
+            dados = response.json()
+            state = dados.get("instance", {}).get("state") or dados.get("connectionState", {}).get("state") or dados.get("state")
+            if state == "open":
+                return True
+
+        # Fallback de verificação secundária
+        url_connect = f"{os.getenv('EVOLUTION_API_URL')}/instance/connect/{client_instance}"
+        response_connect = requests.get(url_connect, headers=headers, timeout=5)
+        if response_connect.status_code == 200:
+            dados_c = response_connect.json()
+            if dados_c.get("instance", {}).get("state") == "open":
+                return True
+    except Exception as e:
+        print(f"❌ Erro ao verificar estado da instância {client_instance}: {e}")
+    return False
 
 def notificar_erro_admin(erro_msg):
     if ADMIN_NUMBER:
@@ -460,7 +483,7 @@ def executar_campanha_duas_etapas(instance_name, telefones, mensagem_saudacao):
     send_whatsapp(instance_name, f"✅ *Campanha Concluída!* {contador} mensagens enviadas.", instance_name=instance_name)
 
 # ==========================================
-#   🔔 DISPARO DE LEMBRETES COM TEMPO DINÂMICO
+#   🔔 DISPARO DE LEMBRETES (SÓ PARA INSTÂNCIAS CONECTADAS)
 # ==========================================
 def enviar_lembretes_em_massa(periodo="dia"):
     try:
@@ -476,6 +499,12 @@ def enviar_lembretes_em_massa(periodo="dia"):
                 continue
 
             tenant_id = re.sub(r'\D', '', phone)
+
+            # 🛑 VALIDAÇÃO: Se o cliente não estiver com o WhatsApp conectado na Evolution, pula o envio
+            if not verificar_instancia_conectada(tenant_id):
+                print(f"⏭️ Lembrete ignorado para {tenant_id}: Instância não está conectada na Evolution API.")
+                continue
+
             doc_bot = db.collection('clientes_bot').document(tenant_id).get()
 
             data_exp = None
