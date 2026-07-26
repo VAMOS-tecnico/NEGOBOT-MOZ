@@ -61,14 +61,14 @@ GROQ_VISION_MODEL = os.getenv('GROQ_VISION_MODEL', 'qwen-2.5-32b')
 NUMERO_ASSISTANTE = os.getenv('ASSISTANT_NUMBER')
 ADMIN_NUMBER = os.getenv('ADMIN_NUMBER')
 
-# Helper para garantir formato de URL da Evolution API
-def get_evo_url():
-    return (os.getenv('EVOLUTION_API_URL') or '').rstrip('/')
-
 # ==========================================
 #   🌐 DIRECT REST CALL TO GROQ API (LLAMA 3.3)
 # ==========================================
 def chamar_groq_rest(contents_payload, system_instruction="", temperature=0.1):
+    """
+    Realiza chamadas de texto ultrarrápidas à API da Groq.
+    Sem bloqueios de IP/Servidor e sem erros de cota do Render.
+    """
     if not GROQ_API_KEY:
         print("❌ GROQ_API_KEY não encontrada nas variáveis de ambiente.")
         return ""
@@ -101,25 +101,16 @@ def chamar_groq_rest(contents_payload, system_instruction="", temperature=0.1):
         "max_tokens": 600
     }
 
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            response = requests.post(url, headers=headers, json=payload, timeout=20)
-            
-            if response.status_code == 200:
-                data = response.json()
-                if "choices" in data and len(data["choices"]) > 0:
-                    return data["choices"][0]["message"]["content"].strip()
-            elif response.status_code == 429:
-                print(f"⚠️ [GROQ] Rate limit atingido (429). Tentativa {attempt + 1} de {max_retries}. A aguardar 2s...")
-                time.sleep(2)
-                continue
-            else:
-                print(f"❌ Erro na API do Groq (Status {response.status_code}): {response.text}")
-                break
-        except Exception as e:
-            print(f"❌ Exceção ao chamar Groq API: {e}")
-            time.sleep(1)
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=20)
+        data = response.json()
+        
+        if response.status_code == 200 and "choices" in data and len(data["choices"]) > 0:
+            return data["choices"][0]["message"]["content"].strip()
+        else:
+            print(f"❌ Erro na API do Groq (Status {response.status_code}): {data}")
+    except Exception as e:
+        print(f"❌ Exceção ao chamar Groq API: {e}")
 
     return "Desculpe, estamos a receber muitas mensagens ao mesmo tempo. Por favor, tente novamente dentro de alguns segundos!"
 
@@ -127,6 +118,7 @@ def chamar_groq_rest(contents_payload, system_instruction="", temperature=0.1):
 #   🎙️ AUDIO TRANSCRIPTION VIA GROQ (WHISPER)
 # ==========================================
 def transcrever_audio_groq(url_audio_whatsapp):
+    """Descarrega áudios do WhatsApp e converte em texto via Whisper no Groq"""
     if not GROQ_API_KEY:
         return ""
     try:
@@ -163,6 +155,7 @@ def transcrever_audio_groq(url_audio_whatsapp):
 #   👁️ IMAGE & DOCUMENT ANALYSIS (GROQ VISION)
 # ==========================================
 def analisar_imagem_groq(url_imagem, instrucao="Analise e extraia todas as informações relevantes desta imagem ou comprovativo:"):
+    """Baixa a imagem enviada no WhatsApp e analisa via modelo Vision da Groq"""
     if not GROQ_API_KEY:
         return ""
     try:
@@ -212,39 +205,16 @@ def analisar_imagem_groq(url_imagem, instrucao="Analise e extraia todas as infor
     return ""
 
 # ==========================================
-#   🛡️ DUPLICATE CONTROL & VERIFICATION
+#   🛡️ DUPLICATE CONTROL
 # ==========================================
 PROCESSADOS = {}
 processados_lock = threading.Lock()
-
-def verificar_instancia_conectada(client_instance):
-    """Verifica se a instância na Evolution API está ativa e conectada (state == 'open')."""
-    try:
-        headers = {"apikey": os.getenv('EVOLUTION_API_KEY')}
-        url = f"{get_evo_url()}/instance/connectionState/{client_instance}"
-        response = requests.get(url, headers=headers, timeout=5)
-        if response.status_code == 200:
-            dados = response.json()
-            state = dados.get("instance", {}).get("state") or dados.get("connectionState", {}).get("state") or dados.get("state")
-            if state == "open":
-                return True
-
-        # Fallback de verificação secundária
-        url_connect = f"{get_evo_url()}/instance/connect/{client_instance}"
-        response_connect = requests.get(url_connect, headers=headers, timeout=5)
-        if response_connect.status_code == 200:
-            dados_c = response_connect.json()
-            if dados_c.get("instance", {}).get("state") == "open":
-                return True
-    except Exception as e:
-        print(f"❌ Erro ao verificar estado da instância {client_instance}: {e}")
-    return False
 
 def notificar_erro_admin(erro_msg):
     if ADMIN_NUMBER:
         central_instance = os.getenv('EVOLUTION_INSTANCE_NAME')
         headers = {"apikey": os.getenv('EVOLUTION_API_KEY'), "Content-Type": "application/json"}
-        url = f"{get_evo_url()}/message/sendText/{central_instance}"
+        url = f"{os.getenv('EVOLUTION_API_URL')}/message/sendText/{central_instance}"
         
         to_number = ADMIN_NUMBER if "@" in ADMIN_NUMBER else f"{ADMIN_NUMBER}@s.whatsapp.net"
         payload = {
@@ -259,7 +229,7 @@ def notificar_erro_admin(erro_msg):
 # ==========================================
 #   📄 EXTRACTION MODULES (PDF, EXCEL & ART)
 # ==========================================
-def extrair_texto_pdf_url(pdf_url, max_caracteres=10000):
+def extrair_texto_pdf_url(pdf_url):
     try:
         response = requests.get(pdf_url, timeout=25)
         if response.status_code == 200:
@@ -270,15 +240,12 @@ def extrair_texto_pdf_url(pdf_url, max_caracteres=10000):
                 conteudo_pagina = page.extract_text()
                 if conteudo_pagina:
                     texto_completo += f"\n--- PÁGINA {idx} ---\n" + conteudo_pagina
-                if len(texto_completo) >= max_caracteres:
-                    texto_completo = texto_completo[:max_caracteres] + "\n\n[...Texto do PDF truncado para otimizar tamanho...]"
-                    break
             return texto_completo
     except Exception as e:
         print(f"❌ Erro ao ler PDF da URL {pdf_url}: {e}")
     return ""
 
-def extrair_texto_excel_url(excel_url, max_linhas_por_aba=100, max_caracteres=10000):
+def extrair_texto_excel_url(excel_url):
     try:
         response = requests.get(excel_url, timeout=25)
         if response.status_code == 200:
@@ -287,11 +254,7 @@ def extrair_texto_excel_url(excel_url, max_linhas_por_aba=100, max_caracteres=10
             texto_completo = ""
             for nome_aba, df in todas_abas.items():
                 texto_completo += f"\n--- ABA EXCEL: {nome_aba} ---\n"
-                df_resumido = df.head(max_linhas_por_aba)
-                texto_completo += df_resumido.to_string(index=False) + "\n"
-                if len(texto_completo) >= max_caracteres:
-                    texto_completo = texto_completo[:max_caracteres] + "\n\n[...Dados do Excel truncados para otimizar tamanho...]"
-                    break
+                texto_completo += df.to_string(index=False) + "\n"
             return texto_completo
     except Exception as e:
         print(f"❌ Erro ao ler Excel da URL {excel_url}: {e}")
@@ -315,14 +278,13 @@ def criar_prompt_profissional_groq(pedido_utilizador):
 
 def gerar_url_imagem_pollinations(prompt_otimizado):
     prompt_encoded = urllib.parse.quote(prompt_otimizado)
-    seed_aleatorio = random.randint(1, 999999)
-    return f"https://pollinations.ai/p/{prompt_encoded}?width=1024&height=1024&model=flux&seed={seed_aleatorio}"
+    return f"https://pollinations.ai/p/{prompt_encoded}?width=1024&height=1024&model=flux&seed=42"
 
 # ==========================================
 #   ⏱️ VERIFICAÇÃO AUTOMÁTICA DE ESPERA HUMANA
 # ==========================================
 def verificar_espera_humano_isolado(instancia_cliente, numero_remetente):
-    time.sleep(180)
+    time.sleep(180)  # Aguarda 3 minutos exatos
     try:
         conversa_ref = db.collection('clientes_bot').document(instancia_cliente).collection('conversas').document(numero_remetente)
         doc = conversa_ref.get()
@@ -345,36 +307,15 @@ def criar_e_configurar_instancia_automatica(phone_number):
     try:
         client_instance = re.sub(r'\D', '', phone_number)
         headers = {"apikey": os.getenv('EVOLUTION_API_KEY'), "Content-Type": "application/json"}
-        api_url = get_evo_url()
-
-        requests.delete(f"{api_url}/instance/logout/{client_instance}", headers=headers, timeout=5)
-        requests.delete(f"{api_url}/instance/delete/{client_instance}", headers=headers, timeout=5)
+        
+        requests.delete(f"{os.getenv('EVOLUTION_API_URL')}/instance/logout/{client_instance}", headers=headers, timeout=5)
+        requests.delete(f"{os.getenv('EVOLUTION_API_URL')}/instance/delete/{client_instance}", headers=headers, timeout=5)
         time.sleep(2)
         
-        url_create = f"{api_url}/instance/create"
+        url_create = f"{os.getenv('EVOLUTION_API_URL')}/instance/create"
         payload_create = {"instanceName": client_instance, "qrcode": True, "integration": "WHATSAPP-BAILEYS"}
         res_create = requests.post(url_create, headers=headers, json=payload_create, timeout=10)
         res_create.raise_for_status()
-
-        # 🔧 CORREÇÃO CRÍTICA: Configura o Webhook na nova instância criada!
-        webhook_global_url = os.getenv('WEBHOOK_GLOBAL_URL')
-        if not webhook_global_url:
-            # Fallback automático usando o domínio do Render se a variável não existir
-            render_host = os.getenv('RENDER_EXTERNAL_HOSTNAME')
-            webhook_global_url = f"https://{render_host}/webhook-global" if render_host else ""
-
-        if webhook_global_url:
-            url_webhook = f"{api_url}/webhook/set/{client_instance}"
-            payload_webhook = {
-                "enabled": True,
-                "url": webhook_global_url,
-                "byEvents": False,
-                "base64": False,
-                "events": ["MESSAGES_UPSERT"]
-            }
-            requests.post(url_webhook, headers=headers, json=payload_webhook, timeout=10)
-            print(f"✅ Webhook configurado com sucesso para a instância {client_instance}")
-
         return True
     except Exception as e:
         erro_msg = f"Erro ao automatizar criação para {phone_number}: {e}"
@@ -398,7 +339,6 @@ def save_chat_history(phone_number, history):
     except Exception as e:
         print(f"Erro ao salvar histórico: {e}")
 
-# 🔧 CORREÇÃO CRÍTICA: Isolamento da presença (sendPresence) para nunca cancelar a mensagem
 def send_whatsapp(to, text, instance_name=None):
     if not text or not str(text).strip():
         return False
@@ -406,34 +346,27 @@ def send_whatsapp(to, text, instance_name=None):
     if not instance_name:
         instance_name = os.getenv('EVOLUTION_INSTANCE_NAME')
         
-    api_url = get_evo_url()
     headers = {"apikey": os.getenv('EVOLUTION_API_KEY'), "Content-Type": "application/json"}
     
-    # 1. Tenta enviar "digitando..." de forma independente (sem travar se der erro)
     try:
-        url_presence = f"{api_url}/chat/sendPresence/{instance_name}"
-        requests.post(url_presence, headers=headers, json={"number": to, "presence": "composing"}, timeout=3)
-    except Exception as e:
-        print(f"⚠️ Aviso: Falha ao enviar presença 'composing': {e}")
-
-    # 2. Envia o texto da mensagem principal
-    try:
-        url = f"{api_url}/message/sendText/{instance_name}"
-        res = requests.post(url, headers=headers, json={"number": to, "text": text}, timeout=12)
+        url_presence = f"{os.getenv('EVOLUTION_API_URL')}/chat/sendPresence/{instance_name}"
+        requests.post(url_presence, headers=headers, json={"number": to, "presence": "composing"}, timeout=5)
+        time.sleep(1)
+        
+        url = f"{os.getenv('EVOLUTION_API_URL')}/message/sendText/{instance_name}"
+        res = requests.post(url, headers=headers, json={"number": to, "text": text}, timeout=10)
         res.raise_for_status()
-        print(f"✅ Mensagem enviada para {to} [{instance_name}]")
         return True
     except Exception as e:
-        print(f"❌ ERRO Crítico ao enviar mensagem para {to} na instância '{instance_name}': {e}")
+        print(f"ERRO ao enviar mensagem: {e}")
         return False
 
 def gerar_e_enviar_qrcode_central(phone_number):
     try:
         client_instance = re.sub(r'\D', '', phone_number)
         headers = {"apikey": os.getenv('EVOLUTION_API_KEY'), "Content-Type": "application/json"}
-        api_url = get_evo_url()
-
-        url_connect = f"{api_url}/instance/connect/{client_instance}"
+        
+        url_connect = f"{os.getenv('EVOLUTION_API_URL')}/instance/connect/{client_instance}"
         response_connect = requests.get(url_connect, headers=headers, timeout=10)
         response_connect.raise_for_status()
         
@@ -450,7 +383,7 @@ def gerar_e_enviar_qrcode_central(phone_number):
             base64_qrcode = base64_qrcode.split(",")[1]
 
         central_instance = os.getenv('EVOLUTION_INSTANCE_NAME')
-        url_send_media = f"{api_url}/message/sendMedia/{central_instance}"
+        url_send_media = f"{os.getenv('EVOLUTION_API_URL')}/message/sendMedia/{central_instance}"
         
         caption_text = (
             "🤖 *Aqui está o seu QR Code do Negobot Moz!* 🚀\n\n"
@@ -474,7 +407,7 @@ def gerar_e_enviar_qrcode_central(phone_number):
         return False
 
 def listar_grupos_instancia(instance_name):
-    url = f"{get_evo_url()}/group/fetchAllGroups/{instance_name}"
+    url = f"{os.getenv('EVOLUTION_API_URL')}/group/fetchAllGroups/{instance_name}"
     headers = {"apikey": os.getenv('EVOLUTION_API_KEY')}
     try:
         response = requests.get(url, headers=headers, timeout=15)
@@ -515,78 +448,23 @@ def executar_campanha_duas_etapas(instance_name, telefones, mensagem_saudacao):
             time.sleep(900)
     send_whatsapp(instance_name, f"✅ *Campanha Concluída!* {contador} mensagens enviadas.", instance_name=instance_name)
 
-# ==========================================
-#   🔔 DISPARO DE LEMBRETES (SÓ PARA INSTÂNCIAS CONECTADAS)
-# ==========================================
 def enviar_lembretes_em_massa(periodo="dia"):
     try:
         clientes_ref = db.collection('clientes').where('status', '==', 'trial').stream()
         central_instance = os.getenv('EVOLUTION_INSTANCE_NAME')
         saudacao = "Bom dia" if periodo == "manhã" else "Boa tarde"
-        agora = datetime.now(timezone.utc)
-
+        mensagem_lembrete = (
+            f"👋 *{saudacao}! Passando com um aviso importante sobre o seu Negobot Moz.* 🤖\n\n"
+            "O seu teste gratuito de 2 dias está ativo. "
+            "**Faça o pagamento da subscrição para não perder o acesso!** ⚠️\n\n"
+            "💵 *M-Pesa:* 855000929 (Abel Francisco)\n"
+            "📄 Envie o seu catálogo em PDF ou Excel para personalizar o seu robô!"
+        )
         for doc in clientes_ref:
-            dados_c = doc.to_dict()
-            phone = dados_c.get('phone_number')
-            if not phone:
-                continue
-
-            tenant_id = re.sub(r'\D', '', phone)
-
-            if not verificar_instancia_conectada(tenant_id):
-                print(f"⏭️ Lembrete ignorado para {tenant_id}: Instância não está conectada na Evolution API.")
-                continue
-
-            doc_bot = db.collection('clientes_bot').document(tenant_id).get()
-
-            data_exp = None
-            if doc_bot.exists:
-                data_exp = doc_bot.to_dict().get('data_expiracao')
-            
-            if not data_exp:
-                trial_start = dados_c.get('trial_start')
-                if trial_start:
-                    data_exp = trial_start + timedelta(days=2)
-
-            if data_exp:
-                if data_exp.tzinfo is None:
-                    data_exp = data_exp.replace(tzinfo=timezone.utc)
-                
-                diferenca = data_exp - agora
-                if diferenca.total_seconds() > 0:
-                    dias = diferenca.days
-                    horas, resto = divmod(diferenca.seconds, 3600)
-                    minutos, _ = divmod(resto, 60)
-
-                    partes = []
-                    if dias > 0:
-                        partes.append(f"{dias} dia{'s' if dias > 1 else ''}")
-                    if horas > 0:
-                        partes.append(f"{horas} hora{'s' if horas > 1 else ''}")
-                    if minutos > 0:
-                        partes.append(f"{minutos} minuto{'s' if minutos > 1 else ''}")
-
-                    if len(partes) > 1:
-                        tempo_restante = ", ".join(partes[:-1]) + " e " + partes[-1]
-                    elif len(partes) == 1:
-                        tempo_restante = partes[0]
-                    else:
-                        tempo_restante = "poucos minutos"
-                else:
-                    tempo_restante = "poucos instantes (a expirar)"
-            else:
-                tempo_restante = "pouco tempo"
-
-            mensagem_lembrete = (
-                f"👋 *{saudacao}! Passando com um aviso importante sobre o seu Negobot Moz.* 🤖\n\n"
-                f"Faltam *{tempo_restante}* para terminar o seu teste gratuito de 2 dias. "
-                "**Faça o pagamento da subscrição para não perder o acesso!** ⚠️\n\n"
-                "💵 *M-Pesa:* 855000929 (Abel Francisco)\n"
-                "📄 Envie o seu catálogo em PDF ou Excel para personalizar o seu robô!"
-            )
-            
-            send_whatsapp(phone, mensagem_lembrete, instance_name=central_instance)
-            time.sleep(1.5)
+            phone = doc.to_dict().get('phone_number')
+            if phone:
+                send_whatsapp(phone, mensagem_lembrete, instance_name=central_instance)
+                time.sleep(1.5)
     except Exception as e:
         notificar_erro_admin(f"Erro lembretes: {e}")
 
@@ -597,7 +475,7 @@ def disparar_lembretes_via_url():
     return f"Lembretes ({periodo}) iniciados!", 200
 
 # ==========================================
-#   🎛 MAIN UNIVERSAL WEBHOOK
+#   🎛 MAIN UNIVERSAL WEBHOOK (TODAS AS ROTAS)
 # ==========================================
 @app.route('/webhook-global', methods=['POST'])
 @app.route('/webhook-cliente', methods=['POST'])
@@ -618,17 +496,8 @@ def processar_webhook_background(data):
         msg_data = data['data']
         key = msg_data.get('key', {})
         msg_id = key.get('id')
-        
-        if msg_id:
-            with processados_lock:
-                agora_tempo = time.time()
-                for k in [k for k, v in PROCESSADOS.items() if agora_tempo - v > 60]:
-                    del PROCESSADOS[k]
-                if msg_id in PROCESSADOS:
-                    return
-                PROCESSADOS[msg_id] = agora_tempo
 
-        # 🔧 CORREÇÃO CRÍTICA: Trata 'instance' tanto como dicionário (v2) quanto string (v1)
+        # Extração flexível da instância (compatível com Evolution v1 e v2)
         instancia_raw = data.get('instance')
         if isinstance(instancia_raw, dict):
             nome_instancia_atual = instancia_raw.get('name') or instancia_raw.get('instanceName')
@@ -639,8 +508,19 @@ def processar_webhook_background(data):
         if not nome_instancia_atual:
             return
 
+        # 🔑 CORREÇÃO CRÍTICA DE DUPLICAÇÃO: isolada por instância (instancia + msg_id)
+        if msg_id:
+            dedup_key = f"{nome_instancia_atual}:{msg_id}"
+            with processados_lock:
+                agora_tempo = time.time()
+                for k in [k for k, v in PROCESSADOS.items() if agora_tempo - v > 60]:
+                    del PROCESSADOS[k]
+                if dedup_key in PROCESSADOS:
+                    return
+                PROCESSADOS[dedup_key] = agora_tempo
+
         phone_number = key.get('remoteJid', '')
-        if not phone_number or '@g.us' in phone_number or '@broadcast' in phone_number:
+        if not phone_number or '@g.us' in phone_number or (NUMERO_ASSISTANTE and NUMERO_ASSISTANTE in phone_number):
             return
 
         message = msg_data.get('message', {})
@@ -674,27 +554,12 @@ def processar_webhook_background(data):
         agora = datetime.now(timezone.utc)
         is_from_me = key.get('fromMe') is True or str(key.get('fromMe')).lower() == 'true'
 
-        # =======================================================
-        # 👑 TRATAMENTO DE MENSAGENS ENVIADAS PELO PRÓPRIO DONO (FROM ME)
-        # =======================================================
         if is_from_me:
-            doc_map = db.collection("clientes_bot").document(nome_instancia_atual).collection("temp_grupos").document("mapeamento").get()
-            doc_temp = db.collection("clientes_bot").document(nome_instancia_atual).collection("temp_listas").document("dados").get()
-            
-            eh_comando_proprio = (
-                msg_clean.startswith('/') or 
-                msg_clean.startswith('#') or 
-                (msg_clean == "sim" and doc_temp.exists) or 
-                (doc_map.exists and re.match(r'^[\d\s,]+$', msg_clean)) or
-                document_message is not None
-            )
-
-            if not eh_comando_proprio:
-                if nome_instancia_atual != central_instance:
-                    conversa_ref = db.collection('clientes_bot').document(nome_instancia_atual).collection('conversas').document(phone_number)
-                    conversa_ref.set({"status_atendimento": "bot", "ultima_mensagem_por": "atendente", "ultima_interacao": agora}, merge=True)
-                    conversa_ref.collection('historico').add({"role": "atendente", "text": message_text, "timestamp": agora})
-                return
+            if nome_instancia_atual != central_instance:
+                conversa_ref = db.collection('clientes_bot').document(nome_instancia_atual).collection('conversas').document(phone_number)
+                conversa_ref.set({"status_atendimento": "bot", "ultima_mensagem_por": "atendente", "ultima_interacao": agora}, merge=True)
+                conversa_ref.collection('historico').add({"role": "atendente", "text": message_text, "timestamp": agora})
+            return
 
         # =======================================================
         # 🏢 FLOW A: CENTRAL SALES INSTANCE
@@ -816,7 +681,7 @@ Planos: Inicial (500 MT) e Avançado (1000 MT). M-Pesa: 855000929 (Abel Francisc
                 link_imagem = gerar_url_imagem_pollinations(prompt_ingles)
                 
                 payload = {"number": phone_number, "caption": f"✨ *Arte Gerada!*\n🎯 _{pedido}_", "media": link_imagem, "mediatype": "image", "fileName": "arte.jpg"}
-                requests.post(f"{get_evo_url()}/message/sendMedia/{nome_instancia_atual}", headers={"apikey": os.getenv('EVOLUTION_API_KEY'), "Content-Type": "application/json"}, json=payload, timeout=25)
+                requests.post(f"{os.getenv('EVOLUTION_API_URL')}/message/sendMedia/{nome_instancia_atual}", headers={"apikey": os.getenv('EVOLUTION_API_KEY'), "Content-Type": "application/json"}, json=payload, timeout=25)
                 return
 
             if document_message and phone_number.split('@')[0] in nome_instancia_atual:
@@ -869,9 +734,6 @@ Planos: Inicial (500 MT) e Avançado (1000 MT). M-Pesa: 855000929 (Abel Francisc
                     threading.Thread(target=executar_campanha_duas_etapas, args=(nome_instancia_atual, telefones, "Bom dia! Tudo bem?")).start()
                     db.collection("clientes_bot").document(nome_instancia_atual).collection("temp_listas").document("dados").delete()
                     return
-
-            if is_from_me:
-                return
 
             # =======================================================
             # 🔄 GESTÃO DE ESTADO DE ATENDIMENTO HUMANO
