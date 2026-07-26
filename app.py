@@ -54,7 +54,7 @@ db = firestore.client()
 #   CONFIGURAÇÕES DA API DO GEMINI (REST)
 # ==========================================
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
-# Ajustado para gemini-2.0-flash para compatibilidade com a REST API v1beta
+# Ajustado para o modelo v1beta compatível com a API REST
 MODEL_NAME = 'gemini-2.0-flash'  
 
 NUMERO_ASSISTANTE = os.getenv('ASSISTANT_NUMBER')
@@ -275,9 +275,14 @@ def save_chat_history(phone_number, history):
         print(f"Erro ao salvar histórico do painel central: {e}")
 
 # ==========================================
-#   📞 COMUNICAÇÃO DE SAÍDA COM "A ESCREVER..." REAL
+#   📞 COMUNICAÇÃO DE SAÍDA COM PROTEÇÃO ANTI-MENSAGEM VAZIA
 # ==========================================
 def send_whatsapp(to, text, instance_name=None):
+    # Proteção: Impede disparo de mensagens vazias e previne erro 400 Bad Request
+    if not text or not str(text).strip():
+        print("⚠️ [SISTEMA] Tentativa de enviar mensagem vazia abortada.")
+        return False
+
     if not instance_name:
         instance_name = os.getenv('EVOLUTION_INSTANCE_NAME')
         
@@ -679,9 +684,10 @@ Planos: Inicial (500 MT) e Avançado (1000 MT). Teste gratuito de 2 dias dispon�
 
             response_text = chamar_gemini_rest(contents, system_instruction=sys_instruction_central, temperature=0.3)
             
-            contents.append({"role": "model", "parts": [{"text": response_text}]})
-            save_chat_history(phone_number, [{"role": c["role"], "parts": c["parts"]} for c in contents[-10:]])
-            send_whatsapp(phone_number, response_text, instance_name=central_instance)
+            if response_text:
+                contents.append({"role": "model", "parts": [{"text": response_text}]})
+                save_chat_history(phone_number, [{"role": c["role"], "parts": c["parts"]} for c in contents[-10:]])
+                send_whatsapp(phone_number, response_text, instance_name=central_instance)
 
         # =======================================================
         # 🤖 FLUXO B: MENSAGEM RECEBIDA PELA INSTÂNCIA DO CLIENTE
