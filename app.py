@@ -54,53 +54,70 @@ db = firestore.client()
 #   CONFIGURAÇÕES DA API DO GEMINI (REST)
 # ==========================================
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
-# Ajustado para o modelo v1beta compatível com a API REST
-MODEL_NAME = 'gemini-2.0-flash'  
+
+# Modelo primário: Gemini 3.1 Flash Lite
+MODEL_NAME = 'gemini-3.1-flash-lite'
 
 NUMERO_ASSISTANTE = os.getenv('ASSISTANT_NUMBER')
 ADMIN_NUMBER = os.getenv('ADMIN_NUMBER')
 
 # ==========================================
-#   🌐 CHAMADA REST DIRETA À API DO GEMINI
+#   🌐 CHAMADA REST DIRETA À API DO GEMINI (COM FALLBACK)
 # ==========================================
 def chamar_gemini_rest(contents_payload, system_instruction="", temperature=0.3):
     """
-    Realiza chamadas HTTP diretas à API REST v1beta do Gemini, 
-    contornando erros de região do Render e utilizando endpoints válidos.
+    Realiza chamadas HTTP à API REST do Gemini utilizando o Gemini 3.1 Flash Lite.
+    Conta com fallback automático para outros modelos leves caso receba o erro 429 (Rate Limit).
     """
     if not GEMINI_API_KEY:
         print("❌ GEMINI_API_KEY não encontrada nas variáveis de ambiente.")
         return ""
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_NAME}:generateContent?key={GEMINI_API_KEY}"
-    headers = {"Content-Type": "application/json"}
+    # Fila de tentativa caso o modelo primário atinja o limite temporário de cota
+    modelos_tentativa = [
+        MODEL_NAME,                # gemini-3.1-flash-lite
+        'gemini-3-flash-preview',  # Prévia do Gemini 3 Flash
+        'gemini-2.0-flash',        # Modelo estável alternativo
+        'gemini-1.5-flash'         # Último recurso
+    ]
     
-    payload = {
-        "contents": contents_payload,
-        "generationConfig": {
-            "temperature": temperature
-        }
-    }
-    
-    if system_instruction:
-        payload["systemInstruction"] = {
-            "parts": [{"text": system_instruction}]
+    for modelo in modelos_tentativa:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}:generateContent?key={GEMINI_API_KEY}"
+        headers = {"Content-Type": "application/json"}
+        
+        payload = {
+            "contents": contents_payload,
+            "generationConfig": {
+                "temperature": temperature
+            }
         }
         
-    try:
-        response = requests.post(url, headers=headers, json=payload, timeout=30)
-        data = response.json()
-        
-        if response.status_code == 200 and "candidates" in data and len(data["candidates"]) > 0:
-            parts = data["candidates"][0].get("content", {}).get("parts", [])
-            texto_gerado = "".join([p.get("text", "") for p in parts])
-            return texto_gerado.strip()
-        else:
-            print(f"❌ Erro na API REST do Gemini (Status {response.status_code}): {data}")
-            return ""
-    except Exception as e:
-        print(f"❌ Exceção ao chamar a API REST do Gemini: {e}")
-        return ""
+        if system_instruction:
+            payload["systemInstruction"] = {
+                "parts": [{"text": system_instruction}]
+            }
+            
+        try:
+            response = requests.post(url, headers=headers, json=payload, timeout=30)
+            data = response.json()
+            
+            if response.status_code == 200 and "candidates" in data and len(data["candidates"]) > 0:
+                parts = data["candidates"][0].get("content", {}).get("parts", [])
+                texto_gerado = "".join([p.get("text", "") for p in parts])
+                return texto_gerado.strip()
+            
+            elif response.status_code == 429:
+                print(f"⚠️ [429 RATE LIMIT] Limite atingido no modelo '{modelo}'. Tentando o próximo da fila...")
+                time.sleep(1)  # Pausa estratégica para aliviar a cota antes da próxima tentativa
+                continue
+                
+            else:
+                print(f"❌ Erro na API REST do Gemini ({modelo} - Status {response.status_code}): {data}")
+                
+        except Exception as e:
+            print(f"❌ Exceção ao chamar a API REST do Gemini ({modelo}): {e}")
+            
+    return "Desculpe, estamos a receber muitas mensagens ao mesmo tempo. Por favor, tente novamente dentro de alguns segundos!"
 
 # ==========================================
 #   🛡️ CONTROLO DE DUPLICADOS (ANTI-DUPLICAÇÃO)
@@ -278,7 +295,7 @@ def save_chat_history(phone_number, history):
 #   📞 COMUNICAÇÃO DE SAÍDA COM PROTEÇÃO ANTI-MENSAGEM VAZIA
 # ==========================================
 def send_whatsapp(to, text, instance_name=None):
-    # Proteção: Impede disparo de mensagens vazias e previne erro 400 Bad Request
+    # Proteção: Impede disparo de mensagens vazias e previne erro 400 Bad Request da Evolution API
     if not text or not str(text).strip():
         print("⚠️ [SISTEMA] Tentativa de enviar mensagem vazia abortada.")
         return False
