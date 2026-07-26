@@ -278,14 +278,14 @@ def gerar_url_imagem_pollinations(prompt_otimizado):
     return f"https://pollinations.ai/p/{prompt_encoded}?width=1024&height=1024&model=flux&seed=42"
 
 # ==========================================
-#   ⏱️ LÓGICA DE TIMEOUT E RECONEXÃO
+#   ⏱️ LÓGICA DE TIMEOUT AUTOMÁTICO
 # ==========================================
 def checar_timeout_atendimento_humano(conversa_ref, conversa_dados, agora):
     """
-    MÓDULO DE TIMEOUT AUTOMÁTICO:
-    Verifica se a conversa está aguardando atendente humano e se já transcorreram
-    X minutos (TIMEOUT_HUMANO_MINUTOS) desde a última interação do cliente sem resposta do operador.
-    Caso tenha expirado, reseta o estado para 'bot' e retorna True.
+    VERIFICAÇÃO DE TIMEOUT AUTOMÁTICO:
+    Se a conversa estiver com status 'humano' e o tempo decorrido desde a última 
+    mensagem do cliente for >= TIMEOUT_HUMANO_MINUTOS sem resposta de um atendente,
+    reseta o status para 'bot' automaticamente.
     """
     if conversa_dados and conversa_dados.get("status_atendimento") == "humano":
         ultima_interacao = conversa_dados.get("ultima_interacao")
@@ -442,6 +442,7 @@ def processar_webhook_background(data):
         key = msg_data.get('key', {})
         msg_id = key.get('id')
         
+        # Trava contra mensagens duplicadas
         if msg_id:
             with processados_lock:
                 agora_tempo = time.time()
@@ -479,10 +480,10 @@ def processar_webhook_background(data):
             caption = image_message.get('caption', '')
             if url_imagem:
                 send_whatsapp(phone_number, "👁️ *A analisar o documento/imagem...*", instance_name=nome_instancia_atual)
-                instrucao = caption if caption else "Analise e extraia todas as informações, valores, datas e dados deste comprovativo ou imagem."
+                instrucao = caption if caption else "Analise e extraia todas as informações deste comprovativo ou imagem."
                 analise_foto = analisar_imagem_groq(url_imagem, instrucao=instrucao)
                 if analise_foto:
-                    message_text = f"[O CLIENTE ENVIOU UMA IMAGEM/COMPROVATIVO. ANÁLISE DA IMAGEM: {analise_foto}]\nTexto do cliente: {caption}"
+                    message_text = f"[ANÁLISE DA IMAGEM/DOCUMENTO: {analise_foto}]\nTexto do cliente: {caption}"
 
         if not message_text and not document_message:
             return
@@ -494,8 +495,7 @@ def processar_webhook_background(data):
         # =======================================================
         # 🏢 FLUXO A: INSTÂNCIA CENTRAL (SUPORTE E VENDAS NEGOBOT)
         # =======================================================
-        # ISOLAMENTO DE ROTA: Se veio para a instância central, atende SEMPRE pelo Robô Suporte Central,
-        # independentemente de o cliente ter QR Code escaneado ou instância própria rodando.
+        # ROTA ISOLADA: Mensagens destinadas ao WhatsApp do Negobot Moz caem SEMPRE aqui.
         if nome_instancia_atual == central_instance:
             chat_ref = db.collection('chats').document(phone_number)
             chat_doc = chat_ref.get()
@@ -506,16 +506,14 @@ def processar_webhook_background(data):
                 return
 
             cliente_doc_ref = db.collection('clientes').document(phone_number)
-            cliente_doc = cliente_doc_ref.get()
-            if not cliente_doc.exists:
+            if not cliente_doc_ref.get().exists:
                 cliente_doc_ref.set({
                     "phone_number": phone_number,
                     "data_registro": agora,
-                    "status": "prospect",
-                    "nutrido_followup": False
-                })
+                    "status": "prospect"
+                }, merge=True)
 
-            # Comandos do Admin Central
+            # Comandos de Administração
             if msg_clean.startswith('#status'):
                 remetente_puro = phone_number.split('@')[0]
                 if ADMIN_NUMBER and remetente_puro in ADMIN_NUMBER:
@@ -535,7 +533,6 @@ def processar_webhook_background(data):
                 send_whatsapp(phone_number, resposta_status, instance_name=central_instance)
                 return
 
-            # Confirmação manual de pagamento
             if "recebeu" in msg_clean or "confirmado" in msg_clean or "transacao" in msg_clean:
                 db.collection('clientes').document(phone_number).update({"status": "active", "pago": True, "data_ativacao": agora})
                 db.collection('clientes_bot').document(phone_number.split('@')[0]).set({"status_plano": "active", "data_ativacao": agora}, merge=True)
@@ -545,7 +542,6 @@ def processar_webhook_background(data):
                 gerar_e_enviar_qrcode_central(phone_number)
                 return
 
-            # Comando para gerar QR Code novamente
             if msg_clean == "#qrcode":
                 send_whatsapp(phone_number, "🔄 A gerar QR Code...", instance_name=central_instance)
                 criar_e_configurar_instancia_automatica(phone_number)
@@ -553,10 +549,11 @@ def processar_webhook_background(data):
                 gerar_e_enviar_qrcode_central(phone_number)
                 return
 
-            # Gatilhos de Início de Teste
             gatilhos_teste = ["teste", "testar", "quero o bot", "começar", "criar bot"]
             if any(g in msg_clean for g in gatilhos_teste):
-                status_atual = cliente_doc.to_dict().get('status', 'prospect') if cliente_doc.exists else 'prospect'
+                cliente_data_cur = cliente_doc_ref.get().to_dict() or {}
+                status_atual = cliente_data_cur.get('status', 'prospect')
+                
                 if status_atual == 'prospect':
                     send_whatsapp(phone_number, "⏳ *A preparar o seu teste de 2 dias...* 🚀", instance_name=central_instance)
                     if criar_e_configurar_instancia_automatica(phone_number):
@@ -564,8 +561,7 @@ def processar_webhook_background(data):
                             "phone_number": phone_number,
                             "data_registro": agora,
                             "trial_start": agora,
-                            "status": "trial",
-                            "nutrido_followup": True
+                            "status": "trial"
                         }, merge=True)
                         tenant_id = re.sub(r'\D', '', phone_number)
                         db.collection('clientes_bot').document(tenant_id).set({
@@ -575,39 +571,35 @@ def processar_webhook_background(data):
                         gerar_e_enviar_qrcode_central(phone_number)
                     return
                 elif status_atual == 'bloqueado':
-                    send_whatsapp(phone_number, "⚠️ Teste expirado. Faça o pagamento via M-Pesa (855000929 - Abel Francisco) para reativar o seu bot.", instance_name=central_instance)
+                    send_whatsapp(phone_number, "⚠️ O seu teste expirou. Faça o pagamento via M-Pesa (855000929 - Abel Francisco) para reativar o seu bot.", instance_name=central_instance)
                     return
                 else:
-                    send_whatsapp(phone_number, "✅ O seu robô já se encontra ativado! Digite *#qrcode* se precisar de reconectar o seu WhatsApp.", instance_name=central_instance)
+                    send_whatsapp(phone_number, "✅ O seu robô já está ativo! Digite *#qrcode* se precisar de reconectar o WhatsApp.", instance_name=central_instance)
 
-            # --- GESTÃO DE ESTADO DE ATENDIMENTO HUMANO NA CENTRAL ---
+            # ESTADO HUMANO E TIMEOUT AUTOMÁTICO (CENTRAL)
             status_atendimento = chat_dados.get("status_atendimento", "bot")
 
             if status_atendimento == "humano":
-                # Verifica se o timeout expirou (>= TIMEOUT_HUMANO_MINUTOS)
                 if checar_timeout_atendimento_humano(chat_ref, chat_dados, agora):
                     send_whatsapp(
                         phone_number,
-                        f"🕒 *Atendimento Reativado:* O tempo de espera ({TIMEOUT_HUMANO_MINUTOS} min) por um atendente humano expirou. O assistente virtual foi reativado para continuar o seu atendimento!",
+                        f"🕒 *Atendimento Reativado:* O tempo de espera ({TIMEOUT_HUMANO_MINUTOS} min) expirou. O assistente virtual foi reativado!",
                         instance_name=central_instance
                     )
                     status_atendimento = "bot"
                 else:
-                    # Permite reset manual se o utilizador quiser
                     if msg_clean in ["/bot", "/reset", "continuar", "bot"]:
                         chat_ref.set({"status_atendimento": "bot", "ultima_interacao": agora}, merge=True)
-                        send_whatsapp(phone_number, "🤖 O assistente virtual foi reativado! Como posso ajudar?", instance_name=central_instance)
+                        send_whatsapp(phone_number, "🤖 O assistente virtual foi reativado!", instance_name=central_instance)
                         return
                     
-                    # Grava silenciosamente a mensagem no histórico do operador SEM bombardear com respostas repetidas
                     chat_ref.set({"ultima_interacao": agora, "ultima_mensagem_por": "cliente_final"}, merge=True)
                     hist = chat_dados.get("history", [])
                     hist.append({"role": "user", "parts": [{"text": message_text}]})
                     save_chat_history(phone_number, hist[-10:])
                     return
 
-            # Solicitação de Atendimento Humano pelo Cliente (Aviso enviado APENAS UMA VEZ na transição)
-            gatilhos_humano = ["falar com atendente", "suporte humano", "atendente", "humano", "#suporte", "assistente humano"]
+            gatilhos_humano = ["falar com atendente", "suporte humano", "atendente", "humano", "#suporte"]
             if any(g in msg_clean for g in gatilhos_humano):
                 chat_ref.set({
                     "status_atendimento": "humano",
@@ -616,12 +608,12 @@ def processar_webhook_background(data):
                 }, merge=True)
                 send_whatsapp(
                     phone_number,
-                    f"🔔 *Atendimento Transferido:* A sua mensagem foi encaminhada para a nossa equipa humana. Por favor, aguarde. Se não houver resposta em {TIMEOUT_HUMANO_MINUTOS} minutos, o assistente virtual será reativado automaticamente.",
+                    f"🔔 *Atendimento Transferido:* Encaminhamos para a nossa equipa. Se não houver resposta em {TIMEOUT_HUMANO_MINUTOS} minutos, o assistente responderá automaticamente.",
                     instance_name=central_instance
                 )
                 return
 
-            # Processamento Normal pela IA Central
+            # RESPOSTA IA CENTRAL
             raw_history = get_chat_history(phone_number)[-10:]
             contents = []
             for msg in raw_history:
@@ -632,9 +624,8 @@ def processar_webhook_background(data):
             contents.append({"role": "user", "parts": [{"text": message_text}]})
 
             sys_instruction_central = """Você é o assistente comercial e de suporte oficial do Negobot Moz.
-Sanar dúvidas sobre a plataforma, funcionamento do robô, planos (Inicial: 500 MT, Avançado: 1000 MT; M-Pesa: 855000929 Abel Francisco) e instruir novos clientes a digitar 'TESTAR' para ativar o seu teste grátis de 2 dias.
-Para clientes que já possuem o robô ativado, preste suporte amigável e informe que podem digitar '#qrcode' caso precisem de reconectar a instância.
-Norma: Português padrão de Moçambique, tom profissional e prestativo."""
+Sua função é tirar dúvidas sobre o sistema, explicar planos (Inicial: 500 MT, Avançado: 1000 MT; M-Pesa 855000929 Abel Francisco) e instruir novos utilizadores a digitar 'TESTAR' para iniciar a demonstração de 2 dias.
+Responda sempre com cortesia e clareza em Português de Moçambique."""
 
             response_text = chamar_groq_rest(contents, system_instruction=sys_instruction_central, temperature=0.3)
             if response_text:
@@ -657,11 +648,7 @@ Norma: Português padrão de Moçambique, tom profissional e prestativo."""
                 return
 
             client_doc = client_doc_ref.get()
-            default_rules = (
-                "És o assistente virtual oficial do promotor de vendas de crédito. "
-                "Objectivo: atender solicitantes de crédito, recolher documentos e orientar sobre simulações.\n"
-                "Respostas curtas, profissionais e puramente em português de Moçambique."
-            )
+            default_rules = "És o assistente virtual oficial de atendimento. Responda de forma profissional e objetiva."
 
             if not client_doc.exists:
                 dados_cliente = {"status_plano": "demonstracao", "data_ativacao": agora, "data_expiracao": agora + timedelta(days=2), "diretrizes_corporativas": default_rules}
@@ -675,16 +662,16 @@ Norma: Português padrão de Moçambique, tom profissional e prestativo."""
                 data_expiracao = data_expiracao.replace(tzinfo=timezone.utc)
 
             if status_plano == "demonstracao" and agora > data_expiracao:
-                send_whatsapp(phone_number, "⚠️ O período de teste gratuito deste assistente expirou.", instance_name=nome_instancia_atual)
+                send_whatsapp(phone_number, "⚠️ O período de teste deste assistente expirou.", instance_name=nome_instancia_atual)
                 return
 
-            # Comando para Arte Visual
+            # Comando de Arte
             if msg_clean.startswith("/criar-arte"):
                 pedido = message_text.replace("/criar-arte", "").strip()
                 if not pedido:
-                    send_whatsapp(phone_number, "✍️ Exemplo: `/criar-arte Banner de crédito rápido`", instance_name=nome_instancia_atual)
+                    send_whatsapp(phone_number, "✍️ Exemplo: `/criar-arte Banner de oferta de crédito`", instance_name=nome_instancia_atual)
                     return
-                send_whatsapp(phone_number, "🎨 A criar a sua arte com IA...", instance_name=nome_instancia_atual)
+                send_whatsapp(phone_number, "🎨 A criar a sua imagem...", instance_name=nome_instancia_atual)
                 prompt_ingles = criar_prompt_profissional_groq(pedido)
                 link_imagem = gerar_url_imagem_pollinations(prompt_ingles)
                 
@@ -692,54 +679,51 @@ Norma: Português padrão de Moçambique, tom profissional e prestativo."""
                 requests.post(f"{os.getenv('EVOLUTION_API_URL')}/message/sendMedia/{nome_instancia_atual}", headers={"apikey": os.getenv('EVOLUTION_API_KEY'), "Content-Type": "application/json"}, json=payload, timeout=25)
                 return
 
-            # Upload e Leitura de Documentos (Excel / PDF)
+            # Anexos (Excel / PDF)
             if document_message and phone_number.split('@')[0] in nome_instancia_atual:
                 url_doc = document_message.get('url')
                 file_name = document_message.get('fileName', '').lower()
 
                 if file_name.endswith(('.xlsx', '.xls')):
-                    send_whatsapp(phone_number, "📊 A processar folha de cálculo Excel...", instance_name=nome_instancia_atual)
+                    send_whatsapp(phone_number, "📊 A processar documento Excel...", instance_name=nome_instancia_atual)
                     texto_excel = extrair_texto_excel_url(url_doc)
                     if texto_excel:
                         client_doc_ref.set({"diretrizes_corporativas": f"{dados_cliente.get('diretrizes_corporativas', '')}\n\n=== EXCEL ===\n{texto_excel}"}, merge=True)
-                        send_whatsapp(phone_number, "✅ *Excel Integrado!* Simulador e dados atualizados.", instance_name=nome_instancia_atual)
+                        send_whatsapp(phone_number, "✅ *Excel Carregado!* Tabela assimilada com sucesso.", instance_name=nome_instancia_atual)
                     return
 
                 elif file_name.endswith('.pdf') or not file_name:
-                    send_whatsapp(phone_number, "📄 A processar documento PDF...", instance_name=nome_instancia_atual)
+                    send_whatsapp(phone_number, "📄 A ler arquivo PDF...", instance_name=nome_instancia_atual)
                     texto_pdf = extrair_texto_pdf_url(url_doc)
                     if texto_pdf:
                         client_doc_ref.set({"diretrizes_corporativas": f"{dados_cliente.get('diretrizes_corporativas', '')}\n\n=== PDF ===\n{texto_pdf}"}, merge=True)
-                        send_whatsapp(phone_number, "✅ *PDF Integrado!* Dados atualizados.", instance_name=nome_instancia_atual)
+                        send_whatsapp(phone_number, "✅ *PDF Carregado!* Conteúdo incorporado às diretrizes.", instance_name=nome_instancia_atual)
                     return
 
-            # --- GESTÃO DE ESTADO DE ATENDIMENTO HUMANO NO ROBÔ DO CLIENTE ---
+            # ESTADO HUMANO E TIMEOUT AUTOMÁTICO (CLIENTE)
             conversa_doc = conversa_ref.get()
             conversa_dados = conversa_doc.to_dict() if conversa_doc.exists else {}
             status_atendimento = conversa_dados.get("status_atendimento", "bot")
 
             if status_atendimento == "humano":
-                # Verifica se o tempo de espera do humano expirou
                 if checar_timeout_atendimento_humano(conversa_ref, conversa_dados, agora):
                     send_whatsapp(
                         phone_number,
-                        f"🕒 *Atendimento Reativado:* O tempo de espera ({TIMEOUT_HUMANO_MINUTOS} min) pelo atendente humano expirou. O assistente virtual foi reativado para continuar a ajudá-lo!",
+                        f"🕒 *Atendimento Reativado:* O tempo de espera ({TIMEOUT_HUMANO_MINUTOS} min) expirou. O assistente virtual retoma o seu atendimento!",
                         instance_name=nome_instancia_atual
                     )
                     status_atendimento = "bot"
                 else:
                     if msg_clean in ["/bot", "/reset", "continuar", "bot"]:
                         conversa_ref.set({"status_atendimento": "bot", "ultima_interacao": agora}, merge=True)
-                        send_whatsapp(phone_number, "🤖 O assistente virtual foi reativado com sucesso! Como posso ajudar?", instance_name=nome_instancia_atual)
+                        send_whatsapp(phone_number, "🤖 Assistente virtual reativado com sucesso!", instance_name=nome_instancia_atual)
                         return
 
-                    # Grava no histórico silenciosamente sem repetir avisos
                     conversa_ref.set({"ultima_mensagem_por": "cliente_final", "ultima_interacao": agora}, merge=True)
                     historico_ref.add({"role": "user", "text": message_text, "timestamp": agora})
                     return
 
-            # Transferência de Atendimento Humano acionada pelo Cliente
-            gatilhos_humano = ["falar com atendente", "suporte humano", "atendente", "humano", "#suporte", "assistente humano"]
+            gatilhos_humano = ["falar com atendente", "suporte humano", "atendente", "humano", "#suporte"]
             if any(g in msg_clean for g in gatilhos_humano):
                 conversa_ref.set({
                     "status_atendimento": "humano",
@@ -749,12 +733,12 @@ Norma: Português padrão de Moçambique, tom profissional e prestativo."""
                 historico_ref.add({"role": "user", "text": message_text, "timestamp": agora})
                 send_whatsapp(
                     phone_number, 
-                    f"🔔 *Atendimento Transferido:* A sua solicitação foi encaminhada para a nossa equipa humana. Por favor, aguarde. Se não houver resposta em {TIMEOUT_HUMANO_MINUTOS} minutos, o assistente virtual será reativado automaticamente.", 
+                    f"🔔 *Atendimento Transferido:* A mensagem foi enviada para o nosso operador. Se não houver resposta em {TIMEOUT_HUMANO_MINUTOS} minutos, o assistente retomará o atendimento.", 
                     instance_name=nome_instancia_atual
                 )
                 return
 
-            # --- PROCESSAMENTO DA IA DO CLIENTE ---
+            # RESPOSTA IA CLIENTE
             docs_h = historico_ref.order_by('timestamp', direction=firestore.Query.DESCENDING).limit(10).stream()
             lista_m = [d.to_dict() for d in docs_h]
             lista_m.reverse()
@@ -767,22 +751,20 @@ Norma: Português padrão de Moçambique, tom profissional e prestativo."""
             contents.append({"role": "user", "parts": [{"text": message_text}]})
 
             diretrizes = dados_cliente.get("diretrizes_corporativas", default_rules)
-            
-            sys_instruction = f"""Você é um assistente comercial profissional e focado em negócios.
-Comunicação em Português de Moçambique, tom sério e corporativo.
-Respostas curtas e diretas (2 a 3 linhas por bloco).
+            sys_instruction = f"""Você é um assistente comercial atencioso.
+Português de Moçambique, tom profissional e conciso.
 
-INFORMAÇÕES E TABELAS CARREGADAS:
+DIRETRIZES DA EMPRESA:
 {diretrizes}
 
-REGRA OBRIGATÓRIA DE TRANSIÇÃO:
-- NUNCA adicione [TRANSICAO_HUMANO] em saudações (ex: "bom dia", "olá", "boa tarde") nem em perguntas normais.
-- APENAS adicione a tag [TRANSICAO_HUMANO] no final da resposta se o cliente EXIGIR explicitamente falar com uma pessoa/atendente humano e você não conseguir resolver."""
+REGRA DE TRANSIÇÃO:
+- NUNCA use a tag [TRANSICAO_HUMANO] em saudações simples.
+- Apenas inclua a tag [TRANSICAO_HUMANO] se o cliente exigir expressamente um humano e você não tiver a resposta."""
 
             response_text = chamar_groq_rest(contents, system_instruction=sys_instruction, temperature=0.1)
             historico_ref.add({"role": "user", "text": message_text, "timestamp": agora})
 
-            e_saudacao = any(s in msg_clean for s in ["bom dia", "boa tarde", "boa noite", "olá", "ola", "oy", "oi"])
+            e_saudacao = any(s in msg_clean for s in ["bom dia", "boa tarde", "boa noite", "olá", "ola", "oi"])
             
             if "[TRANSICAO_HUMANO]" in response_text and not e_saudacao:
                 response_text = response_text.replace("[TRANSICAO_HUMANO]", "").strip()
@@ -791,7 +773,7 @@ REGRA OBRIGATÓRIA DE TRANSIÇÃO:
                 if response_text:
                     send_whatsapp(phone_number, response_text, instance_name=nome_instancia_atual)
                 else:
-                    send_whatsapp(phone_number, f"🔔 *Atendimento Transferido:* A sua solicitação foi encaminhada para a nossa equipa humana. Por favor, aguarde. Se não houver resposta em {TIMEOUT_HUMANO_MINUTOS} minutos, o assistente virtual será reativado automaticamente.", instance_name=nome_instancia_atual)
+                    send_whatsapp(phone_number, f"🔔 *Atendimento Transferido:* A sua mensagem foi encaminhada para a equipa humana. Aguarde por favor.", instance_name=nome_instancia_atual)
                 
                 historico_ref.add({"role": "assistant", "text": response_text, "timestamp": agora})
                 return
