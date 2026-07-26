@@ -64,7 +64,7 @@ ADMIN_NUMBER = os.getenv('ADMIN_NUMBER')
 # ==========================================
 #   🌐 DIRECT REST CALL TO GROQ API (LLAMA 3.3)
 # ==========================================
-def chamar_groq_rest(contents_payload, system_instruction="", temperature=0.3):
+def chamar_groq_rest(contents_payload, system_instruction="", temperature=0.1):
     """
     Realiza chamadas de texto ultrarrápidas à API da Groq.
     Sem bloqueios de IP/Servidor e sem erros de cota do Render.
@@ -196,7 +196,7 @@ def analisar_imagem_groq(url_imagem, instrucao="Analise e extraia todas as infor
             data = resp.json()
             if resp.status_code == 200 and "choices" in data and len(data["choices"]) > 0:
                 resultado = data["choices"][0]["message"]["content"].strip()
-                print(f"👁️ Imagem Analisada com sucesso!")
+                print("👁️ Imagem Analisada com sucesso!")
                 return resultado
             else:
                 print(f"❌ Erro resposta Groq Vision: {data}")
@@ -280,17 +280,22 @@ def gerar_url_imagem_pollinations(prompt_otimizado):
     prompt_encoded = urllib.parse.quote(prompt_otimizado)
     return f"https://pollinations.ai/p/{prompt_encoded}?width=1024&height=1024&model=flux&seed=42"
 
+# ==========================================
+#   ⏱️ VERIFICAÇÃO AUTOMÁTICA DE ESPERA HUMANA
+# ==========================================
 def verificar_espera_humano_isolado(instancia_cliente, numero_remetente):
-    time.sleep(180)  # 3 minutos exatos
+    time.sleep(180)  # Aguarda 3 minutos exatos
     try:
         conversa_ref = db.collection('clientes_bot').document(instancia_cliente).collection('conversas').document(numero_remetente)
         doc = conversa_ref.get()
         if doc.exists:
             dados = doc.to_dict()
+            # Se continuar em modo humano e o atendente não respondeu
             if dados.get("status_atendimento") == "humano" and dados.get("ultima_mensagem_por") == "cliente_final":
-                # Reativa automaticamente o bot para que o cliente não precise de escrever /reset
+                # 1. Reativa automaticamente o bot no Firestore
                 conversa_ref.set({"status_atendimento": "bot", "ultima_interacao": datetime.now(timezone.utc)}, merge=True)
                 
+                # 2. Envia a mensagem de reativação para o cliente
                 msg_aviso = (
                     "🕒 *AVISO DE ATENDIMENTO* ⚠️\n\n"
                     "Todos os nossos assistentes humanos estão ocupados no momento. "
@@ -726,7 +731,7 @@ Planos: Inicial (500 MT) e Avançado (1000 MT). M-Pesa: 855000929 (Abel Francisc
                     return
 
             # =======================================================
-            # 🔄 GESTÃO DE ESTADO DE ATENDIMENTO HUMANO COM AVISO DE TEMPO
+            # 🔄 GESTÃO DE ESTADO DE ATENDIMENTO HUMANO
             # =======================================================
             conversa_doc = conversa_ref.get()
             if conversa_doc.exists and conversa_doc.to_dict().get("status_atendimento") == "humano":
@@ -739,6 +744,7 @@ Planos: Inicial (500 MT) e Avançado (1000 MT). M-Pesa: 855000929 (Abel Francisc
                 historico_ref.add({"role": "user", "text": message_text, "timestamp": agora})
                 return
 
+            # Gatilhos explícitos para transferência de atendente
             gatilhos_humano = ["falar com atendente", "suporte humano", "atendente", "humano", "#suporte", "assistente humano"]
             if any(g in msg_clean for g in gatilhos_humano):
                 conversa_ref.set({"status_atendimento": "humano", "ultima_mensagem_por": "cliente_final", "ultima_interacao": agora}, merge=True)
@@ -751,6 +757,9 @@ Planos: Inicial (500 MT) e Avançado (1000 MT). M-Pesa: 855000929 (Abel Francisc
                 threading.Thread(target=verificar_espera_humano_isolado, args=(nome_instancia_atual, phone_number)).start()
                 return
 
+            # =======================================================
+            # 🤖 PROCESSAMENTO DE MENSAGENS COM A IA (GROQ ENGINE)
+            # =======================================================
             docs_h = historico_ref.order_by('timestamp', direction=firestore.Query.DESCENDING).limit(10).stream()
             lista_m = [d.to_dict() for d in docs_h]
             lista_m.reverse()
@@ -763,6 +772,8 @@ Planos: Inicial (500 MT) e Avançado (1000 MT). M-Pesa: 855000929 (Abel Francisc
             contents.append({"role": "user", "parts": [{"text": message_text}]})
 
             diretrizes = dados_cliente.get("diretrizes_corporativas", default_rules)
+            
+            # Instrução reforçada para proibir a transição humana em saudações e dúvidas simples
             sys_instruction = f"""Você é um assistente comercial profissional e focado em negócios.
 Comunicação em Português de Moçambique, tom sério e corporativo.
 Respostas curtas e diretas (2 a 3 linhas por bloco).
@@ -770,26 +781,35 @@ Respostas curtas e diretas (2 a 3 linhas por bloco).
 INFORMAÇÕES E TABELAS CARREGADAS:
 {diretrizes}
 
-Se o cliente insistir em suporte humano ou se a questão fugir totalmente ao contexto, adicione no final: [TRANSICAO_HUMANO]"""
+REGRA OBRIGATÓRIA DE TRANSIÇÃO:
+- NUNCA adicione [TRANSICAO_HUMANO] em saudações (ex: "bom dia", "olá", "boa tarde") nem em perguntas normais.
+- APENAS adicione a tag [TRANSICAO_HUMANO] no final da resposta se o cliente EXIGIR explicitamente falar com uma pessoa/atendente humano e você não conseguir resolver."""
 
-            response_text = chamar_groq_rest(contents, system_instruction=sys_instruction, temperature=0.2)
+            response_text = chamar_groq_rest(contents, system_instruction=sys_instruction, temperature=0.1)
             historico_ref.add({"role": "user", "text": message_text, "timestamp": agora})
 
-            if "[TRANSICAO_HUMANO]" in response_text:
+            # Verifica transição humana (com proteção para evitar ativação por saudações)
+            e_saudacao = any(s in msg_clean for s in ["bom dia", "boa tarde", "boa noite", "olá", "ola", "oy", "oi"])
+            
+            if "[TRANSICAO_HUMANO]" in response_text and not e_saudacao:
                 response_text = response_text.replace("[TRANSICAO_HUMANO]", "").strip()
                 conversa_ref.set({"status_atendimento": "humano", "ultima_mensagem_por": "cliente_final", "ultima_interacao": agora}, merge=True)
+                
                 if response_text:
                     send_whatsapp(phone_number, response_text, instance_name=nome_instancia_atual)
                 else:
                     send_whatsapp(phone_number, "A transferir o seu atendimento para a equipa humana... Por favor, aguarde até 3 minutos!", instance_name=nome_instancia_atual)
+                
                 historico_ref.add({"role": "assistant", "text": response_text, "timestamp": agora})
                 threading.Thread(target=verificar_espera_humano_isolado, args=(nome_instancia_atual, phone_number)).start()
                 return
 
+            # Resposta normal do robô
             if response_text:
+                response_text = response_text.replace("[TRANSICAO_HUMANO]", "").strip()
                 send_whatsapp(phone_number, response_text, instance_name=nome_instancia_atual)
                 historico_ref.add({"role": "assistant", "text": response_text, "timestamp": agora})
-                conversa_ref.set({"ultima_mensagem_por": "bot", "ultima_interacao": agora}, merge=True)
+                conversa_ref.set({"status_atendimento": "bot", "ultima_mensagem_por": "bot", "ultima_interacao": agora}, merge=True)
 
     except Exception as e:
         erro_completo = f"Erro Webhook (Instância: {data.get('instance')}): {e}"
