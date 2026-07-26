@@ -288,10 +288,14 @@ def verificar_espera_humano_isolado(instancia_cliente, numero_remetente):
         if doc.exists:
             dados = doc.to_dict()
             if dados.get("status_atendimento") == "humano" and dados.get("ultima_mensagem_por") == "cliente_final":
+                # Reativa automaticamente o bot para que o cliente não precise de escrever /reset
+                conversa_ref.set({"status_atendimento": "bot", "ultima_interacao": datetime.now(timezone.utc)}, merge=True)
+                
                 msg_aviso = (
                     "🕒 *AVISO DE ATENDIMENTO* ⚠️\n\n"
                     "Todos os nossos assistentes humanos estão ocupados no momento. "
-                    "Assim que houver disponibilidade, responderão diretamente aqui. Obrigado pela paciência!"
+                    "Para que não fique sem resposta, o nosso assistente virtual foi reativado automaticamente para continuar a ajudá-lo!\n\n"
+                    "Como posso continuar a ajudar?"
                 )
                 send_whatsapp(numero_remetente, msg_aviso, instance_name=instancia_cliente)
     except Exception as e:
