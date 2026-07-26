@@ -401,8 +401,16 @@ def gerar_e_enviar_qrcode_central(phone_number):
         return False
 
 def listar_grupos_instancia(instance_name):
-    url = f"{os.getenv('EVOLUTION_API_URL')}/group/fetchAllGroups/{instance_name}"
     headers = {"apikey": os.getenv('EVOLUTION_API_KEY')}
+    
+    # Força a sincronização/atualização de chats na Evolution API antes de buscar os grupos
+    try:
+        requests.get(f"{os.getenv('EVOLUTION_API_URL')}/chat/findChats/{instance_name}", headers=headers, timeout=10)
+        time.sleep(1)
+    except Exception:
+        pass
+
+    url = f"{os.getenv('EVOLUTION_API_URL')}/group/fetchAllGroups/{instance_name}"
     try:
         response = requests.get(url, headers=headers, timeout=15)
         if response.status_code != 200:
