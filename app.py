@@ -12,7 +12,7 @@ import urllib.parse
 from flask import Flask, request
 from datetime import datetime, timedelta, timezone
 
-# Document & Spreadsheet Processing (PDF and Excel)
+# Processamento de Documentos e Planilhas (PDF e Excel)
 from pypdf import PdfReader
 import pandas as pd
 
@@ -22,12 +22,15 @@ from firebase_admin import credentials, firestore
 
 app = Flask(__name__)
 
+# Configuração de Timeout para Atendimento Humano (Tempo em minutos)
+TIMEOUT_HUMANO_MINUTOS = int(os.getenv('TIMEOUT_HUMANO_MINUTOS', 2))
+
 @app.route('/', methods=['GET'])
 def health_check():
-    return "O ecossistema Negobot 100% Automático (Groq Engine) está online! 🚀", 200
+    return "O ecossistema Negobot 100% Automático está online! 🚀", 200
 
 # ==========================================
-#   📦 FIREBASE SECURE INITIALIZATION
+#   📦 INICIALIZAÇÃO SEGURA DO FIREBASE
 # ==========================================
 firebase_config_env = os.getenv('FIREBASE_CONFIG')
 if firebase_config_env:
@@ -37,7 +40,7 @@ if firebase_config_env:
         firebase_admin.initialize_app(cred)
         print("📦 [SISTEMA] Firebase inicializado com credenciais da ENV.")
     except Exception as e:
-        print(f"⚠️ [SISTEMA] Falha ao carregar FIREBASE_CONFIG da ENV: {e}. Tentando inicialização padrão...")
+        print(f"⚠️ [SISTEMA] Falha ao carregar FIREBASE_CONFIG da ENV: {e}. Tentando padrão...")
         try:
             firebase_admin.initialize_app()
         except Exception as ex:
@@ -52,7 +55,7 @@ else:
 db = firestore.client()
 
 # ==========================================
-#   GROQ API CONFIGURATIONS
+#   CONFIGURAÇÕES DA API GROQ
 # ==========================================
 GROQ_API_KEY = os.getenv('GROQ_API_KEY')
 GROQ_MODEL = os.getenv('GROQ_MODEL', 'llama-3.3-70b-versatile')
@@ -62,13 +65,9 @@ NUMERO_ASSISTANTE = os.getenv('ASSISTANT_NUMBER')
 ADMIN_NUMBER = os.getenv('ADMIN_NUMBER')
 
 # ==========================================
-#   🌐 DIRECT REST CALL TO GROQ API (LLAMA 3.3)
+#   🌐 CHAMADA REST DIRETA PARA GROQ API
 # ==========================================
 def chamar_groq_rest(contents_payload, system_instruction="", temperature=0.1):
-    """
-    Realiza chamadas de texto ultrarrápidas à API da Groq.
-    Sem bloqueios de IP/Servidor e sem erros de cota do Render.
-    """
     if not GROQ_API_KEY:
         print("❌ GROQ_API_KEY não encontrada nas variáveis de ambiente.")
         return ""
@@ -115,10 +114,9 @@ def chamar_groq_rest(contents_payload, system_instruction="", temperature=0.1):
     return "Desculpe, estamos a receber muitas mensagens ao mesmo tempo. Por favor, tente novamente dentro de alguns segundos!"
 
 # ==========================================
-#   🎙️ AUDIO TRANSCRIPTION VIA GROQ (WHISPER)
+#   🎙️ TRANSCRIÇÃO DE ÁUDIO VIA GROQ (WHISPER)
 # ==========================================
 def transcrever_audio_groq(url_audio_whatsapp):
-    """Descarrega áudios do WhatsApp e converte em texto via Whisper no Groq"""
     if not GROQ_API_KEY:
         return ""
     try:
@@ -152,10 +150,9 @@ def transcrever_audio_groq(url_audio_whatsapp):
     return ""
 
 # ==========================================
-#   👁️ IMAGE & DOCUMENT ANALYSIS (GROQ VISION)
+#   👁️ ANÁLISE DE IMAGEM & COMPROVANTES (GROQ VISION)
 # ==========================================
 def analisar_imagem_groq(url_imagem, instrucao="Analise e extraia todas as informações relevantes desta imagem ou comprovativo:"):
-    """Baixa a imagem enviada no WhatsApp e analisa via modelo Vision da Groq"""
     if not GROQ_API_KEY:
         return ""
     try:
@@ -205,7 +202,7 @@ def analisar_imagem_groq(url_imagem, instrucao="Analise e extraia todas as infor
     return ""
 
 # ==========================================
-#   🛡️ DUPLICATE CONTROL
+#   🛡️ CONTROLE DE DUPLICADOS E ALERTAS
 # ==========================================
 PROCESSADOS = {}
 processados_lock = threading.Lock()
@@ -219,7 +216,7 @@ def notificar_erro_admin(erro_msg):
         to_number = ADMIN_NUMBER if "@" in ADMIN_NUMBER else f"{ADMIN_NUMBER}@s.whatsapp.net"
         payload = {
             "number": to_number,
-            "text": f"⚠️ *[ALERTA CRÍTICO - NEGOBOT]*\n\nOcorreu uma falha no servidor:\n❌ `{erro_msg}`\n\n*Verifique a consola do Render imediatamente.*"
+            "text": f"⚠️ *[ALERTA CRÍTICO - NEGOBOT]*\n\nOcorreu uma falha no servidor:\n❌ `{erro_msg}`\n\n*Verifique os logs.*"
         }
         try:
             requests.post(url, headers=headers, json=payload, timeout=10)
@@ -227,7 +224,7 @@ def notificar_erro_admin(erro_msg):
             print(f"Falha ao enviar notificação de erro ao admin: {e}")
 
 # ==========================================
-#   📄 EXTRACTION MODULES (PDF, EXCEL & ART)
+#   📄 EXTRAÇÃO DE CONTEÚDO (PDF E EXCEL)
 # ==========================================
 def extrair_texto_pdf_url(pdf_url):
     try:
@@ -281,10 +278,33 @@ def gerar_url_imagem_pollinations(prompt_otimizado):
     return f"https://pollinations.ai/p/{prompt_encoded}?width=1024&height=1024&model=flux&seed=42"
 
 # ==========================================
-#   ⏱️ HELPER & INSTANCE MANAGEMENT
+#   ⏱️ LÓGICA DE TIMEOUT E RECONEXÃO
 # ==========================================
+def checar_timeout_atendimento_humano(conversa_ref, conversa_dados, agora):
+    """
+    MÓDULO DE TIMEOUT AUTOMÁTICO:
+    Verifica se a conversa está aguardando atendente humano e se já transcorreram
+    X minutos (TIMEOUT_HUMANO_MINUTOS) desde a última interação do cliente sem resposta do operador.
+    Caso tenha expirado, reseta o estado para 'bot' e retorna True.
+    """
+    if conversa_dados and conversa_dados.get("status_atendimento") == "humano":
+        ultima_interacao = conversa_dados.get("ultima_interacao")
+        ultima_msg_por = conversa_dados.get("ultima_mensagem_por")
+        
+        if ultima_msg_por == "cliente_final" and ultima_interacao:
+            if ultima_interacao.tzinfo is None:
+                ultima_interacao = ultima_interacao.replace(tzinfo=timezone.utc)
+            
+            minutos_decorridos = (agora - ultima_interacao).total_seconds() / 60.0
+            if minutos_decorridos >= TIMEOUT_HUMANO_MINUTOS:
+                conversa_ref.set({
+                    "status_atendimento": "bot",
+                    "ultima_interacao": agora
+                }, merge=True)
+                return True
+    return False
+
 def checar_instancia_conectada(instance_name):
-    """Verifica na Evolution API se o cliente realmente escaneou o QR Code e está conectado"""
     try:
         url = f"{os.getenv('EVOLUTION_API_URL')}/instance/connectionState/{instance_name}"
         headers = {"apikey": os.getenv('EVOLUTION_API_KEY')}
@@ -295,26 +315,6 @@ def checar_instancia_conectada(instance_name):
     except Exception as e:
         print(f"⚠️ Erro ao verificar estado da instância {instance_name}: {e}")
     return False
-
-def verificar_espera_humano_isolado(instancia_cliente, numero_remetente):
-    time.sleep(180)  # Aguarda 3 minutos exatos
-    try:
-        conversa_ref = db.collection('clientes_bot').document(instancia_cliente).collection('conversas').document(numero_remetente)
-        doc = conversa_ref.get()
-        if doc.exists:
-            dados = doc.to_dict()
-            if dados.get("status_atendimento") == "humano" and dados.get("ultima_mensagem_por") == "cliente_final":
-                conversa_ref.set({"status_atendimento": "bot", "ultima_interacao": datetime.now(timezone.utc)}, merge=True)
-                
-                msg_aviso = (
-                    "🕒 *AVISO DE ATENDIMENTO* ⚠️\n\n"
-                    "Todos os nossos assistentes humanos estão ocupados no momento. "
-                    "Para que não fique sem resposta, o nosso assistente virtual foi reativado automaticamente para continuar a ajudá-lo!\n\n"
-                    "Como posso continuar a ajudar?"
-                )
-                send_whatsapp(numero_remetente, msg_aviso, instance_name=instancia_cliente)
-    except Exception as e:
-        print(f"❌ Falha na verificação de tempo de espera: {e}")
 
 def criar_e_configurar_instancia_automatica(phone_number):
     try:
@@ -419,169 +419,8 @@ def gerar_e_enviar_qrcode_central(phone_number):
         print(f"Erro ao gerar QR Code: {e}")
         return False
 
-def listar_grupos_instancia(instance_name):
-    url = f"{os.getenv('EVOLUTION_API_URL')}/group/fetchAllGroups/{instance_name}"
-    headers = {"apikey": os.getenv('EVOLUTION_API_KEY')}
-    try:
-        response = requests.get(url, headers=headers, timeout=15)
-        if response.status_code != 200:
-            return []
-            
-        grupos_brutos = response.json()
-        lista_grupos = []
-        for idx, g in enumerate(grupos_brutos, start=1):
-            lista_grupos.append({
-                "indice": idx, "id": g.get("id", ""), "nome": g.get("subject", "Grupo sem nome"),
-                "qtd": len(g.get("participants", [])), "dados_brutos": g
-            })
-        return lista_grupos
-    except Exception as e:
-        print(f"Erro ao listar grupos: {e}")
-        return []
-
-def extrair_participantes_de_grupos_especificos(grupos_selecionados):
-    telefones_unicos = set()
-    for g in grupos_selecionados:
-        for p in g.get("dados_brutos", {}).get("participants", []):
-            numero_limpo = re.sub(r'\D', '', p.get("id", "").split("@")[0])
-            if len(numero_limpo) >= 9:
-                telefones_unicos.add(numero_limpo)
-    return list(telefones_unicos)
-
-def executar_campanha_duas_etapas(instance_name, telefones, mensagem_saudacao):
-    contador = 0
-    for phone in telefones:
-        if send_whatsapp(phone, mensagem_saudacao, instance_name=instance_name):
-            contador += 1
-            db.collection("clientes_bot").document(instance_name).collection("campanha_leads").document(phone).set({
-                "status": "saudacao_enviada", "timestamp": firestore.SERVER_TIMESTAMP
-            })
-        time.sleep(random.randint(25, 50))
-        if contador > 0 and contador % 40 == 0:
-            time.sleep(900)
-    send_whatsapp(instance_name, f"✅ *Campanha Concluída!* {contador} mensagens enviadas.", instance_name=instance_name)
-
 # ==========================================
-#   📢 FLUXO 1: LEMBRETES DE EXPIRAÇÃO (PARA QUEM ESCANEOU)
-# ==========================================
-def enviar_lembretes_em_massa(periodo="manhã"):
-    try:
-        clientes_ref = db.collection('clientes').where('status', '==', 'trial').stream()
-        central_instance = os.getenv('EVOLUTION_INSTANCE_NAME')
-        saudacao = "Bom dia" if periodo == "manhã" else "Boa tarde"
-        agora = datetime.now(timezone.utc)
-
-        for doc in clientes_ref:
-            dados = doc.to_dict()
-            phone = dados.get('phone_number')
-            trial_start = dados.get('trial_start')
-
-            if not phone:
-                continue
-
-            tenant_id = re.sub(r'\D', '', phone)
-
-            # 🛡️ FILTRO CRÍTICO: Só envia se o cliente realmente escaneou e conectou o QR Code!
-            if not checar_instancia_conectada(tenant_id):
-                print(f"⏭️ Ignorando {phone}: QR Code ainda não foi escaneado.")
-                continue
-
-            # Cálculo dinâmico do tempo restante (Dias, Horas e Minutos)
-            texto_tempo = "pouco tempo"
-            if trial_start:
-                if trial_start.tzinfo is None:
-                    trial_start = trial_start.replace(tzinfo=timezone.utc)
-                
-                expiracao = trial_start + timedelta(days=2)
-                diferenca = expiracao - agora
-
-                if diferenca.total_seconds() > 0:
-                    dias = diferenca.days
-                    horas = diferenca.seconds // 3600
-                    minutos = (diferenca.seconds % 3600) // 60
-
-                    partes = []
-                    if dias > 0:
-                        partes.append(f"{dias} dia{'s' if dias > 1 else ''}")
-                    if horas > 0:
-                        partes.append(f"{horas} hora{'s' if horas > 1 else ''}")
-                    if minutos > 0 or (dias == 0 and horas == 0):
-                        partes.append(f"{minutos} minuto{'s' if minutos > 1 else ''}")
-
-                    if len(partes) == 3:
-                        texto_tempo = f"{partes[0]}, {partes[1]} e {partes[2]}"
-                    elif len(partes) == 2:
-                        texto_tempo = f"{partes[0]} e {partes[1]}"
-                    elif len(partes) == 1:
-                        texto_tempo = partes[0]
-                else:
-                    texto_tempo = "menos de 1 minuto (a expirar)"
-
-            mensagem_lembrete = (
-                f"👋 *{saudacao}! Passando com um aviso importante sobre o seu Negobot Moz.* 🤖\n\n"
-                f"⏳ *Tempo restante de teste:* **{texto_tempo}**\n\n"
-                "**Faça o pagamento da subscrição para não perder o acesso!** ⚠️\n\n"
-                "💵 *M-Pesa:* 855000929 (Abel Francisco)\n"
-                "📄 Envie o seu catálogo em PDF ou Excel para personalizar o seu robô!"
-            )
-
-            send_whatsapp(phone, mensagem_lembrete, instance_name=central_instance)
-            time.sleep(2)
-            
-    except Exception as e:
-        notificar_erro_admin(f"Erro lembretes trial: {e}")
-
-# ==========================================
-#   🎯 FLUXO 2: NUTRIÇÃO DE LEADS DE ANÚNCIOS (FOLLOW-UP 24H)
-# ==========================================
-def nutrir_leads_anuncios():
-    try:
-        prospects_ref = db.collection('clientes').where('status', '==', 'prospect').stream()
-        central_instance = os.getenv('EVOLUTION_INSTANCE_NAME')
-        agora = datetime.now(timezone.utc)
-
-        for doc in prospects_ref:
-            dados = doc.to_dict()
-            phone = dados.get('phone_number')
-            data_registro = dados.get('data_registro')
-            nutrido = dados.get('nutrido_followup', False)
-
-            if not phone or nutrido or not data_registro:
-                continue
-
-            if data_registro.tzinfo is None:
-                data_registro = data_registro.replace(tzinfo=timezone.utc)
-
-            # Se já passaram mais de 24 horas (86400s) desde a primeira mensagem
-            if (agora - data_registro).total_seconds() >= 86400:
-                msg_conversao = (
-                    "👋 *Olá! Tudo bem por aí?*\n\n"
-                    "Vi que esteve interessado em automatizar o seu atendimento com o **Negobot Moz** 🤖.\n\n"
-                    "Sabia que pode testar **gratuitamente por 2 dias** sem qualquer compromisso?\n\n"
-                    "🚀 O robô atende os seus clientes no WhatsApp 24h por dia, responde a dúvidas e faz simulações de vendas sozinho.\n\n"
-                    "👉 Responda com a palavra *TESTAR* para ativar o seu robô agora mesmo!"
-                )
-                
-                send_whatsapp(phone, msg_conversao, instance_name=central_instance)
-                db.collection('clientes').document(phone).update({"nutrido_followup": True})
-                time.sleep(3)
-
-    except Exception as e:
-        print(f"Erro ao nutrir leads: {e}")
-
-@app.route('/cron/lembretes', methods=['GET'])
-def disparar_lembretes_via_url():
-    periodo = request.args.get('periodo', 'manhã')
-    threading.Thread(target=enviar_lembretes_em_massa, args=(periodo,)).start()
-    return f"Lembretes de teste ({periodo}) iniciados!", 200
-
-@app.route('/cron/nutrir', methods=['GET'])
-def disparar_nutricao_via_url():
-    threading.Thread(target=nutrir_leads_anuncios).start()
-    return "Nutrição de leads iniciada!", 200
-
-# ==========================================
-#   🎛 MAIN UNIVERSAL WEBHOOK
+#   🎛 WEBHOOK GLOBAL UNIVERSAL
 # ==========================================
 @app.route('/webhook-global', methods=['POST'])
 @app.route('/webhook-cliente', methods=['POST'])
@@ -652,20 +491,23 @@ def processar_webhook_background(data):
         agora = datetime.now(timezone.utc)
         is_from_me = key.get('fromMe') is True or str(key.get('fromMe')).lower() == 'true'
 
-        if is_from_me:
-            if nome_instancia_atual != central_instance:
-                conversa_ref = db.collection('clientes_bot').document(nome_instancia_atual).collection('conversas').document(phone_number)
-                conversa_ref.set({"status_atendimento": "bot", "ultima_mensagem_por": "atendente", "ultima_interacao": agora}, merge=True)
-                conversa_ref.collection('historico').add({"role": "atendente", "text": message_text, "timestamp": agora})
-            return
-
         # =======================================================
-        # 🏢 FLOW A: CENTRAL SALES INSTANCE
+        # 🏢 FLUXO A: INSTÂNCIA CENTRAL (SUPORTE E VENDAS NEGOBOT)
         # =======================================================
+        # ISOLAMENTO DE ROTA: Se veio para a instância central, atende SEMPRE pelo Robô Suporte Central,
+        # independentemente de o cliente ter QR Code escaneado ou instância própria rodando.
         if nome_instancia_atual == central_instance:
-            # Regista o utilizador como PROSPECT caso seja o primeiro contacto dele
+            chat_ref = db.collection('chats').document(phone_number)
+            chat_doc = chat_ref.get()
+            chat_dados = chat_doc.to_dict() if chat_doc.exists else {}
+
+            if is_from_me:
+                chat_ref.set({"ultima_mensagem_por": "atendente", "ultima_interacao": agora}, merge=True)
+                return
+
             cliente_doc_ref = db.collection('clientes').document(phone_number)
-            if not cliente_doc_ref.get().exists:
+            cliente_doc = cliente_doc_ref.get()
+            if not cliente_doc.exists:
                 cliente_doc_ref.set({
                     "phone_number": phone_number,
                     "data_registro": agora,
@@ -673,6 +515,7 @@ def processar_webhook_background(data):
                     "nutrido_followup": False
                 })
 
+            # Comandos do Admin Central
             if msg_clean.startswith('#status'):
                 remetente_puro = phone_number.split('@')[0]
                 if ADMIN_NUMBER and remetente_puro in ADMIN_NUMBER:
@@ -692,23 +535,32 @@ def processar_webhook_background(data):
                 send_whatsapp(phone_number, resposta_status, instance_name=central_instance)
                 return
 
+            # Confirmação manual de pagamento
             if "recebeu" in msg_clean or "confirmado" in msg_clean or "transacao" in msg_clean:
                 db.collection('clientes').document(phone_number).update({"status": "active", "pago": True, "data_ativacao": agora})
                 db.collection('clientes_bot').document(phone_number.split('@')[0]).set({"status_plano": "active", "data_ativacao": agora}, merge=True)
                 criar_e_configurar_instancia_automatica(phone_number)
                 time.sleep(2)
-                send_whatsapp(phone_number, "🎉 *Pagamento Confirmado!* Negobot ativado.", instance_name=central_instance)
+                send_whatsapp(phone_number, "🎉 *Pagamento Confirmado!* O seu Negobot foi ativado.", instance_name=central_instance)
                 gerar_e_enviar_qrcode_central(phone_number)
                 return
-            
+
+            # Comando para gerar QR Code novamente
+            if msg_clean == "#qrcode":
+                send_whatsapp(phone_number, "🔄 A gerar QR Code...", instance_name=central_instance)
+                criar_e_configurar_instancia_automatica(phone_number)
+                time.sleep(2)
+                gerar_e_enviar_qrcode_central(phone_number)
+                return
+
+            # Gatilhos de Início de Teste
             gatilhos_teste = ["teste", "testar", "quero o bot", "começar", "criar bot"]
             if any(g in msg_clean for g in gatilhos_teste):
-                cliente_ref = db.collection('clientes').document(phone_number)
-                doc = cliente_ref.get()
-                if not doc.exists or doc.to_dict().get('status') == 'prospect':
+                status_atual = cliente_doc.to_dict().get('status', 'prospect') if cliente_doc.exists else 'prospect'
+                if status_atual == 'prospect':
                     send_whatsapp(phone_number, "⏳ *A preparar o seu teste de 2 dias...* 🚀", instance_name=central_instance)
                     if criar_e_configurar_instancia_automatica(phone_number):
-                        cliente_ref.set({
+                        cliente_doc_ref.set({
                             "phone_number": phone_number,
                             "data_registro": agora,
                             "trial_start": agora,
@@ -721,21 +573,55 @@ def processar_webhook_background(data):
                         })
                         time.sleep(3)
                         gerar_e_enviar_qrcode_central(phone_number)
+                    return
+                elif status_atual == 'bloqueado':
+                    send_whatsapp(phone_number, "⚠️ Teste expirado. Faça o pagamento via M-Pesa (855000929 - Abel Francisco) para reativar o seu bot.", instance_name=central_instance)
+                    return
                 else:
-                    status_atual = doc.to_dict().get('status', 'trial')
-                    if status_atual == 'bloqueado':
-                        send_whatsapp(phone_number, "⚠️ Teste expirado. Pague via M-Pesa (855000929) para reativar.", instance_name=central_instance)
-                    else:
-                        send_whatsapp(phone_number, "✅ O seu bot está ativo! Digite *#qrcode* se precisar de novo QR Code.", instance_name=central_instance)
+                    send_whatsapp(phone_number, "✅ O seu robô já se encontra ativado! Digite *#qrcode* se precisar de reconectar o seu WhatsApp.", instance_name=central_instance)
+
+            # --- GESTÃO DE ESTADO DE ATENDIMENTO HUMANO NA CENTRAL ---
+            status_atendimento = chat_dados.get("status_atendimento", "bot")
+
+            if status_atendimento == "humano":
+                # Verifica se o timeout expirou (>= TIMEOUT_HUMANO_MINUTOS)
+                if checar_timeout_atendimento_humano(chat_ref, chat_dados, agora):
+                    send_whatsapp(
+                        phone_number,
+                        f"🕒 *Atendimento Reativado:* O tempo de espera ({TIMEOUT_HUMANO_MINUTOS} min) por um atendente humano expirou. O assistente virtual foi reativado para continuar o seu atendimento!",
+                        instance_name=central_instance
+                    )
+                    status_atendimento = "bot"
+                else:
+                    # Permite reset manual se o utilizador quiser
+                    if msg_clean in ["/bot", "/reset", "continuar", "bot"]:
+                        chat_ref.set({"status_atendimento": "bot", "ultima_interacao": agora}, merge=True)
+                        send_whatsapp(phone_number, "🤖 O assistente virtual foi reativado! Como posso ajudar?", instance_name=central_instance)
+                        return
+                    
+                    # Grava silenciosamente a mensagem no histórico do operador SEM bombardear com respostas repetidas
+                    chat_ref.set({"ultima_interacao": agora, "ultima_mensagem_por": "cliente_final"}, merge=True)
+                    hist = chat_dados.get("history", [])
+                    hist.append({"role": "user", "parts": [{"text": message_text}]})
+                    save_chat_history(phone_number, hist[-10:])
+                    return
+
+            # Solicitação de Atendimento Humano pelo Cliente (Aviso enviado APENAS UMA VEZ na transição)
+            gatilhos_humano = ["falar com atendente", "suporte humano", "atendente", "humano", "#suporte", "assistente humano"]
+            if any(g in msg_clean for g in gatilhos_humano):
+                chat_ref.set({
+                    "status_atendimento": "humano",
+                    "ultima_mensagem_por": "cliente_final",
+                    "ultima_interacao": agora
+                }, merge=True)
+                send_whatsapp(
+                    phone_number,
+                    f"🔔 *Atendimento Transferido:* A sua mensagem foi encaminhada para a nossa equipa humana. Por favor, aguarde. Se não houver resposta em {TIMEOUT_HUMANO_MINUTOS} minutos, o assistente virtual será reativado automaticamente.",
+                    instance_name=central_instance
+                )
                 return
 
-            if msg_clean == "#qrcode":
-                send_whatsapp(phone_number, "🔄 A gerar QR Code...", instance_name=central_instance)
-                criar_e_configurar_instancia_automatica(phone_number)
-                time.sleep(2)
-                gerar_e_enviar_qrcode_central(phone_number)
-                return
-
+            # Processamento Normal pela IA Central
             raw_history = get_chat_history(phone_number)[-10:]
             contents = []
             for msg in raw_history:
@@ -745,23 +631,30 @@ def processar_webhook_background(data):
                     contents.append({"role": role, "parts": [{"text": txt}]})
             contents.append({"role": "user", "parts": [{"text": message_text}]})
 
-            sys_instruction_central = """Você é o assistente comercial oficial do Negobot Moz. Sanar dúvidas e instruir o cliente a digitar a palavra-chave 'TESTAR' para receber o QR Code. 
-Norma: Português padrão de Moçambique, tom sério.
-Planos: Inicial (500 MT) e Avançado (1000 MT). M-Pesa: 855000929 (Abel Francisco)."""
+            sys_instruction_central = """Você é o assistente comercial e de suporte oficial do Negobot Moz.
+Sanar dúvidas sobre a plataforma, funcionamento do robô, planos (Inicial: 500 MT, Avançado: 1000 MT; M-Pesa: 855000929 Abel Francisco) e instruir novos clientes a digitar 'TESTAR' para ativar o seu teste grátis de 2 dias.
+Para clientes que já possuem o robô ativado, preste suporte amigável e informe que podem digitar '#qrcode' caso precisem de reconectar a instância.
+Norma: Português padrão de Moçambique, tom profissional e prestativo."""
 
             response_text = chamar_groq_rest(contents, system_instruction=sys_instruction_central, temperature=0.3)
             if response_text:
                 contents.append({"role": "assistant", "parts": [{"text": response_text}]})
                 save_chat_history(phone_number, [{"role": c["role"], "parts": c["parts"]} for c in contents[-10:]])
                 send_whatsapp(phone_number, response_text, instance_name=central_instance)
+                chat_ref.set({"status_atendimento": "bot", "ultima_mensagem_por": "bot", "ultima_interacao": agora}, merge=True)
 
         # =======================================================
-        # 🤖 FLOW B: CLIENT BOT INSTANCE (FINAL BOT USER)
+        # 🤖 FLUXO B: INSTÂNCIA INDIVIDUAL DO CLIENTE (FINAL USER)
         # =======================================================
         else:
             client_doc_ref = db.collection('clientes_bot').document(nome_instancia_atual)
             conversa_ref = client_doc_ref.collection('conversas').document(phone_number)
             historico_ref = conversa_ref.collection('historico')
+
+            if is_from_me:
+                conversa_ref.set({"status_atendimento": "bot", "ultima_mensagem_por": "atendente", "ultima_interacao": agora}, merge=True)
+                historico_ref.add({"role": "atendente", "text": message_text, "timestamp": agora})
+                return
 
             client_doc = client_doc_ref.get()
             default_rules = (
@@ -785,6 +678,7 @@ Planos: Inicial (500 MT) e Avançado (1000 MT). M-Pesa: 855000929 (Abel Francisc
                 send_whatsapp(phone_number, "⚠️ O período de teste gratuito deste assistente expirou.", instance_name=nome_instancia_atual)
                 return
 
+            # Comando para Arte Visual
             if msg_clean.startswith("/criar-arte"):
                 pedido = message_text.replace("/criar-arte", "").strip()
                 if not pedido:
@@ -798,6 +692,7 @@ Planos: Inicial (500 MT) e Avançado (1000 MT). M-Pesa: 855000929 (Abel Francisc
                 requests.post(f"{os.getenv('EVOLUTION_API_URL')}/message/sendMedia/{nome_instancia_atual}", headers={"apikey": os.getenv('EVOLUTION_API_KEY'), "Content-Type": "application/json"}, json=payload, timeout=25)
                 return
 
+            # Upload e Leitura de Documentos (Excel / PDF)
             if document_message and phone_number.split('@')[0] in nome_instancia_atual:
                 url_doc = document_message.get('url')
                 file_name = document_message.get('fileName', '').lower()
@@ -818,66 +713,48 @@ Planos: Inicial (500 MT) e Avançado (1000 MT). M-Pesa: 855000929 (Abel Francisc
                         send_whatsapp(phone_number, "✅ *PDF Integrado!* Dados atualizados.", instance_name=nome_instancia_atual)
                     return
 
-            if msg_clean == "/grupos":
-                grupos = listar_grupos_instancia(nome_instancia_atual)
-                if not grupos:
-                    send_whatsapp(phone_number, "❌ Não foi possível encontrar nenhum grupo ativo nesta instância. Certifique-se de que o WhatsApp está conectado corretamente e possui grupos sincronizados.", instance_name=nome_instancia_atual)
-                    return
-                db.collection("clientes_bot").document(nome_instancia_atual).collection("temp_grupos").document("mapeamento").set({"grupos": grupos, "timestamp": firestore.SERVER_TIMESTAMP})
-                txt_resp = "📋 *SELECIONE OS GRUPOS:*\n\n" + "\n".join([f"*{g['indice']}* - {g['nome']} ({g['qtd']} membros)" for g in grupos]) + "\n\nResponda ex: `1, 3`"
-                send_whatsapp(phone_number, txt_resp, instance_name=nome_instancia_atual)
-                return
-
-            doc_map = db.collection("clientes_bot").document(nome_instancia_atual).collection("temp_grupos").document("mapeamento").get()
-            if doc_map.exists and re.match(r'^[\d\s,]+$', msg_clean):
-                lista_g = doc_map.to_dict().get("grupos", [])
-                indices = [int(i.strip()) for i in msg_clean.split(",") if i.strip().isdigit()]
-                filtrados = [g for g in lista_g if g["indice"] in indices]
-                telefones = extrair_participantes_de_grupos_especificos(filtrados)
-                
-                db.collection("clientes_bot").document(nome_instancia_atual).collection("temp_listas").document("dados").set({"telefones": telefones})
-                db.collection("clientes_bot").document(nome_instancia_atual).collection("temp_grupos").document("mapeamento").delete()
-                send_whatsapp(phone_number, f"✅ *{len(telefones)} contactos extraídos!* Responda *SIM* para iniciar a campanha.", instance_name=nome_instancia_atual)
-                return
-
-            if msg_clean == "sim":
-                temp_ref = db.collection("clientes_bot").document(nome_instancia_atual).collection("temp_listas").document("dados").get()
-                if temp_ref.exists:
-                    telefones = temp_ref.to_dict().get("telefones", [])
-                    send_whatsapp(phone_number, f"🚀 A disparar para {len(telefones)} contactos...", instance_name=nome_instancia_atual)
-                    threading.Thread(target=executar_campanha_duas_etapas, args=(nome_instancia_atual, telefones, "Bom dia! Tudo bem?")).start()
-                    db.collection("clientes_bot").document(nome_instancia_atual).collection("temp_listas").document("dados").delete()
-                    return
-
-            # =======================================================
-            # 🔄 GESTÃO DE ESTADO DE ATENDIMENTO HUMANO
-            # =======================================================
+            # --- GESTÃO DE ESTADO DE ATENDIMENTO HUMANO NO ROBÔ DO CLIENTE ---
             conversa_doc = conversa_ref.get()
-            if conversa_doc.exists and conversa_doc.to_dict().get("status_atendimento") == "humano":
-                if msg_clean in ["/bot", "/reset", "continuar", "bot"]:
-                    conversa_ref.set({"status_atendimento": "bot", "ultima_interacao": agora}, merge=True)
-                    send_whatsapp(phone_number, "🤖 O assistente virtual foi reativado com sucesso! Como posso ajudar?", instance_name=nome_instancia_atual)
+            conversa_dados = conversa_doc.to_dict() if conversa_doc.exists else {}
+            status_atendimento = conversa_dados.get("status_atendimento", "bot")
+
+            if status_atendimento == "humano":
+                # Verifica se o tempo de espera do humano expirou
+                if checar_timeout_atendimento_humano(conversa_ref, conversa_dados, agora):
+                    send_whatsapp(
+                        phone_number,
+                        f"🕒 *Atendimento Reativado:* O tempo de espera ({TIMEOUT_HUMANO_MINUTOS} min) pelo atendente humano expirou. O assistente virtual foi reativado para continuar a ajudá-lo!",
+                        instance_name=nome_instancia_atual
+                    )
+                    status_atendimento = "bot"
+                else:
+                    if msg_clean in ["/bot", "/reset", "continuar", "bot"]:
+                        conversa_ref.set({"status_atendimento": "bot", "ultima_interacao": agora}, merge=True)
+                        send_whatsapp(phone_number, "🤖 O assistente virtual foi reativado com sucesso! Como posso ajudar?", instance_name=nome_instancia_atual)
+                        return
+
+                    # Grava no histórico silenciosamente sem repetir avisos
+                    conversa_ref.set({"ultima_mensagem_por": "cliente_final", "ultima_interacao": agora}, merge=True)
+                    historico_ref.add({"role": "user", "text": message_text, "timestamp": agora})
                     return
 
-                conversa_ref.set({"ultima_mensagem_por": "cliente_final", "ultima_interacao": agora}, merge=True)
-                historico_ref.add({"role": "user", "text": message_text, "timestamp": agora})
-                return
-
+            # Transferência de Atendimento Humano acionada pelo Cliente
             gatilhos_humano = ["falar com atendente", "suporte humano", "atendente", "humano", "#suporte", "assistente humano"]
             if any(g in msg_clean for g in gatilhos_humano):
-                conversa_ref.set({"status_atendimento": "humano", "ultima_mensagem_por": "cliente_final", "ultima_interacao": agora}, merge=True)
+                conversa_ref.set({
+                    "status_atendimento": "humano",
+                    "ultima_mensagem_por": "cliente_final",
+                    "ultima_interacao": agora
+                }, merge=True)
                 historico_ref.add({"role": "user", "text": message_text, "timestamp": agora})
                 send_whatsapp(
                     phone_number, 
-                    "🔔 A transferir para um atendente humano... Por favor, aguarde até 3 minutos! 🤝", 
+                    f"🔔 *Atendimento Transferido:* A sua solicitação foi encaminhada para a nossa equipa humana. Por favor, aguarde. Se não houver resposta em {TIMEOUT_HUMANO_MINUTOS} minutos, o assistente virtual será reativado automaticamente.", 
                     instance_name=nome_instancia_atual
                 )
-                threading.Thread(target=verificar_espera_humano_isolado, args=(nome_instancia_atual, phone_number)).start()
                 return
 
-            # =======================================================
-            # 🤖 PROCESSAMENTO DE MENSAGENS COM A IA (GROQ ENGINE)
-            # =======================================================
+            # --- PROCESSAMENTO DA IA DO CLIENTE ---
             docs_h = historico_ref.order_by('timestamp', direction=firestore.Query.DESCENDING).limit(10).stream()
             lista_m = [d.to_dict() for d in docs_h]
             lista_m.reverse()
@@ -914,10 +791,9 @@ REGRA OBRIGATÓRIA DE TRANSIÇÃO:
                 if response_text:
                     send_whatsapp(phone_number, response_text, instance_name=nome_instancia_atual)
                 else:
-                    send_whatsapp(phone_number, "A transferir o seu atendimento para a equipa humana... Por favor, aguarde até 3 minutos!", instance_name=nome_instancia_atual)
+                    send_whatsapp(phone_number, f"🔔 *Atendimento Transferido:* A sua solicitação foi encaminhada para a nossa equipa humana. Por favor, aguarde. Se não houver resposta em {TIMEOUT_HUMANO_MINUTOS} minutos, o assistente virtual será reativado automaticamente.", instance_name=nome_instancia_atual)
                 
                 historico_ref.add({"role": "assistant", "text": response_text, "timestamp": agora})
-                threading.Thread(target=verificar_espera_humano_isolado, args=(nome_instancia_atual, phone_number)).start()
                 return
 
             if response_text:
@@ -930,35 +806,6 @@ REGRA OBRIGATÓRIA DE TRANSIÇÃO:
         erro_completo = f"Erro Webhook (Instância: {data.get('instance')}): {e}"
         print(f"❌ {erro_completo}")
         notificar_erro_admin(erro_completo)
-
-# ==========================================
-#   ⏰ LOOP INTERNO DE AGENDAMENTO AUTOMÁTICO
-# ==========================================
-def loop_interno_lembretes():
-    ultima_execucao_chave = ""
-    while True:
-        try:
-            agora = datetime.now(timezone(timedelta(hours=2))) # Fuso Moçambique (CAT UTC+2)
-            chave_atual = f"{agora.strftime('%Y-%m-%d_%H:%M')}"
-            if chave_atual != ultima_execucao_chave:
-                # Dispara Lembretes de Teste Ativo às 09:30 e 17:00
-                if agora.hour == 9 and agora.minute == 30:
-                    enviar_lembretes_em_massa("manhã")
-                    ultima_execucao_chave = chave_atual
-                elif agora.hour == 17 and agora.minute == 0:
-                    enviar_lembretes_em_massa("tarde")
-                    ultima_execucao_chave = chave_atual
-                
-                # Dispara Nutrição de Leads de Anúncios às 11:00
-                elif agora.hour == 11 and agora.minute == 0:
-                    nutrir_leads_anuncios()
-                    ultima_execucao_chave = chave_atual
-
-        except Exception as e:
-            print(f"❌ Erro loop lembretes: {e}")
-        time.sleep(30)
-
-threading.Thread(target=loop_interno_lembretes, daemon=True).start()
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.getenv('PORT', 5000)))
