@@ -50,20 +50,23 @@ else:
 
 db = firestore.client()
 
-# CONFIGURAÇÕES DA API DO GEMINI (REST)
+# ==========================================
+#   CONFIGURAÇÕES DA API DO GEMINI (REST)
+# ==========================================
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
-MODEL_NAME = 'gemini-2.5-flash'  # Modelo oficial estável para a REST API
+# Ajustado para gemini-1.5-flash para compatibilidade com a REST API v1beta
+MODEL_NAME = 'gemini-1.5-flash'  
 
 NUMERO_ASSISTANTE = os.getenv('ASSISTANT_NUMBER')
 ADMIN_NUMBER = os.getenv('ADMIN_NUMBER')
 
 # ==========================================
-#   🌐 CHAMADA REST DIRETA À API DO GEMINI (SEM SDK)
+#   🌐 CHAMADA REST DIRETA À API DO GEMINI
 # ==========================================
 def chamar_gemini_rest(contents_payload, system_instruction="", temperature=0.3):
     """
-    Substitui a biblioteca nativa google-genai para contornar restrições 
-    de localização geográfica em servidores como o Render.
+    Realiza chamadas HTTP diretas à API REST v1beta do Gemini, 
+    contornando erros de região do Render e utilizando endpoints válidos.
     """
     if not GEMINI_API_KEY:
         print("❌ GEMINI_API_KEY não encontrada nas variáveis de ambiente.")
