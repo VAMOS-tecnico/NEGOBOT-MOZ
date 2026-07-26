@@ -65,10 +65,6 @@ ADMIN_NUMBER = os.getenv('ADMIN_NUMBER')
 #   🌐 DIRECT REST CALL TO GROQ API (LLAMA 3.3)
 # ==========================================
 def chamar_groq_rest(contents_payload, system_instruction="", temperature=0.1):
-    """
-    Realiza chamadas de texto à API da Groq com sistema de retry automático
-    em caso de limite de requisições (HTTP 429).
-    """
     if not GROQ_API_KEY:
         print("❌ GROQ_API_KEY não encontrada nas variáveis de ambiente.")
         return ""
@@ -127,7 +123,6 @@ def chamar_groq_rest(contents_payload, system_instruction="", temperature=0.1):
 #   🎙️ AUDIO TRANSCRIPTION VIA GROQ (WHISPER)
 # ==========================================
 def transcrever_audio_groq(url_audio_whatsapp):
-    """Descarrega áudios do WhatsApp e converte em texto via Whisper no Groq"""
     if not GROQ_API_KEY:
         return ""
     try:
@@ -164,7 +159,6 @@ def transcrever_audio_groq(url_audio_whatsapp):
 #   👁️ IMAGE & DOCUMENT ANALYSIS (GROQ VISION)
 # ==========================================
 def analisar_imagem_groq(url_imagem, instrucao="Analise e extraia todas as informações relevantes desta imagem ou comprovativo:"):
-    """Baixa a imagem enviada no WhatsApp e analisa via modelo Vision da Groq"""
     if not GROQ_API_KEY:
         return ""
     try:
@@ -239,7 +233,6 @@ def notificar_erro_admin(erro_msg):
 #   📄 EXTRACTION MODULES (PDF, EXCEL & ART)
 # ==========================================
 def extrair_texto_pdf_url(pdf_url, max_caracteres=10000):
-    """Extrai texto de um PDF limitando o tamanho total para proteger o contexto da IA."""
     try:
         response = requests.get(pdf_url, timeout=25)
         if response.status_code == 200:
@@ -259,7 +252,6 @@ def extrair_texto_pdf_url(pdf_url, max_caracteres=10000):
     return ""
 
 def extrair_texto_excel_url(excel_url, max_linhas_por_aba=100, max_caracteres=10000):
-    """Extrai dados do Excel limitando linhas por aba e total de carateres."""
     try:
         response = requests.get(excel_url, timeout=25)
         if response.status_code == 200:
@@ -295,7 +287,6 @@ def criar_prompt_profissional_groq(pedido_utilizador):
         return pedido_utilizador
 
 def gerar_url_imagem_pollinations(prompt_otimizado):
-    """Gera URL com seed aleatório para garantir imagens variadas."""
     prompt_encoded = urllib.parse.quote(prompt_otimizado)
     seed_aleatorio = random.randint(1, 999999)
     return f"https://pollinations.ai/p/{prompt_encoded}?width=1024&height=1024&model=flux&seed={seed_aleatorio}"
@@ -304,7 +295,7 @@ def gerar_url_imagem_pollinations(prompt_otimizado):
 #   ⏱️ VERIFICAÇÃO AUTOMÁTICA DE ESPERA HUMANA
 # ==========================================
 def verificar_espera_humano_isolado(instancia_cliente, numero_remetente):
-    time.sleep(180)  # Aguarda 3 minutos exatos
+    time.sleep(180)
     try:
         conversa_ref = db.collection('clientes_bot').document(instancia_cliente).collection('conversas').document(numero_remetente)
         doc = conversa_ref.get()
@@ -468,23 +459,73 @@ def executar_campanha_duas_etapas(instance_name, telefones, mensagem_saudacao):
             time.sleep(900)
     send_whatsapp(instance_name, f"✅ *Campanha Concluída!* {contador} mensagens enviadas.", instance_name=instance_name)
 
+# ==========================================
+#   🔔 DISPARO DE LEMBRETES COM TEMPO DINÂMICO
+# ==========================================
 def enviar_lembretes_em_massa(periodo="dia"):
     try:
         clientes_ref = db.collection('clientes').where('status', '==', 'trial').stream()
         central_instance = os.getenv('EVOLUTION_INSTANCE_NAME')
         saudacao = "Bom dia" if periodo == "manhã" else "Boa tarde"
-        mensagem_lembrete = (
-            f"👋 *{saudacao}! Passando com um aviso importante sobre o seu Negobot Moz.* 🤖\n\n"
-            "O seu teste gratuito de 2 dias está ativo. "
-            "**Faça o pagamento da subscrição para não perder o acesso!** ⚠️\n\n"
-            "💵 *M-Pesa:* 855000929 (Abel Francisco)\n"
-            "📄 Envie o seu catálogo em PDF ou Excel para personalizar o seu robô!"
-        )
+        agora = datetime.now(timezone.utc)
+
         for doc in clientes_ref:
-            phone = doc.to_dict().get('phone_number')
-            if phone:
-                send_whatsapp(phone, mensagem_lembrete, instance_name=central_instance)
-                time.sleep(1.5)
+            dados_c = doc.to_dict()
+            phone = dados_c.get('phone_number')
+            if not phone:
+                continue
+
+            tenant_id = re.sub(r'\D', '', phone)
+            doc_bot = db.collection('clientes_bot').document(tenant_id).get()
+
+            data_exp = None
+            if doc_bot.exists:
+                data_exp = doc_bot.to_dict().get('data_expiracao')
+            
+            if not data_exp:
+                trial_start = dados_c.get('trial_start')
+                if trial_start:
+                    data_exp = trial_start + timedelta(days=2)
+
+            if data_exp:
+                if data_exp.tzinfo is None:
+                    data_exp = data_exp.replace(tzinfo=timezone.utc)
+                
+                diferenca = data_exp - agora
+                if diferenca.total_seconds() > 0:
+                    dias = diferenca.days
+                    horas, resto = divmod(diferenca.seconds, 3600)
+                    minutos, _ = divmod(resto, 60)
+
+                    partes = []
+                    if dias > 0:
+                        partes.append(f"{dias} dia{'s' if dias > 1 else ''}")
+                    if horas > 0:
+                        partes.append(f"{horas} hora{'s' if horas > 1 else ''}")
+                    if minutos > 0:
+                        partes.append(f"{minutos} minuto{'s' if minutos > 1 else ''}")
+
+                    if len(partes) > 1:
+                        tempo_restante = ", ".join(partes[:-1]) + " e " + partes[-1]
+                    elif len(partes) == 1:
+                        tempo_restante = partes[0]
+                    else:
+                        tempo_restante = "poucos minutos"
+                else:
+                    tempo_restante = "poucos instantes (a expirar)"
+            else:
+                tempo_restante = "pouco tempo"
+
+            mensagem_lembrete = (
+                f"👋 *{saudacao}! Passando com um aviso importante sobre o seu Negobot Moz.* 🤖\n\n"
+                f"Faltam *{tempo_restante}* para terminar o seu teste gratuito de 2 dias. "
+                "**Faça o pagamento da subscrição para não perder o acesso!** ⚠️\n\n"
+                "💵 *M-Pesa:* 855000929 (Abel Francisco)\n"
+                "📄 Envie o seu catálogo em PDF ou Excel para personalizar o seu robô!"
+            )
+            
+            send_whatsapp(phone, mensagem_lembrete, instance_name=central_instance)
+            time.sleep(1.5)
     except Exception as e:
         notificar_erro_admin(f"Erro lembretes: {e}")
 
@@ -570,11 +611,9 @@ def processar_webhook_background(data):
         # 👑 TRATAMENTO DE MENSAGENS ENVIADAS PELO PRÓPRIO DONO (FROM ME)
         # =======================================================
         if is_from_me:
-            # Verifica se existem sessões de seleção de grupos ou disparos pendentes
             doc_map = db.collection("clientes_bot").document(nome_instancia_atual).collection("temp_grupos").document("mapeamento").get()
             doc_temp = db.collection("clientes_bot").document(nome_instancia_atual).collection("temp_listas").document("dados").get()
             
-            # Identifica se a mensagem enviada por si é um comando operacional do robô
             eh_comando_proprio = (
                 msg_clean.startswith('/') or 
                 msg_clean.startswith('#') or 
@@ -583,7 +622,6 @@ def processar_webhook_background(data):
                 document_message is not None
             )
 
-            # Se NÃO for um comando operacional, regista a conversa de atendimento humano e encerra
             if not eh_comando_proprio:
                 if nome_instancia_atual != central_instance:
                     conversa_ref = db.collection('clientes_bot').document(nome_instancia_atual).collection('conversas').document(phone_number)
@@ -765,7 +803,6 @@ Planos: Inicial (500 MT) e Avançado (1000 MT). M-Pesa: 855000929 (Abel Francisc
                     db.collection("clientes_bot").document(nome_instancia_atual).collection("temp_listas").document("dados").delete()
                     return
 
-            # Se a mensagem veio do próprio dono e já passou pelos comandos acima, não envia para a IA
             if is_from_me:
                 return
 
