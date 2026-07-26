@@ -27,7 +27,7 @@ def health_check():
     return "O ecossistema Negobot 100% Automático com Suporte Humano, Multimodalidade e Campanhas está online! 🚀", 200
 
 # ==========================================
-#   📦 INICIALIZAÇÃO SEGURA DO FIREBASE
+#   📦 INICIALIZAÇÃO SEGURA DO FIREBASE E GEMINI
 # ==========================================
 firebase_config_env = os.getenv('FIREBASE_CONFIG')
 if firebase_config_env:
@@ -51,7 +51,9 @@ else:
 
 db = firestore.client()
 client = genai.Client(api_key=os.getenv('GEMINI_API_KEY'))
-MODEL_NAME = 'gemini-2.5-flash'
+
+# CORREÇÃO CRÍTICA: O modelo oficial e estável da Google para a API
+MODEL_NAME = 'gemini-1.5-flash'
 
 NUMERO_ASSISTANTE = os.getenv('ASSISTANT_NUMBER')
 ADMIN_NUMBER = os.getenv('ADMIN_NUMBER')
@@ -988,6 +990,11 @@ def loop_interno_lembretes():
             
         time.sleep(30)
 
-if __name__ == '__main__':
+# Inicializa o monitor de lembretes no escopo global para compatibilidade total com WSGI/Gunicorn
+def iniciar_servicos_background():
     threading.Thread(target=loop_interno_lembretes, daemon=True).start()
+
+iniciar_servicos_background()
+
+if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.getenv('PORT', 5000)))
