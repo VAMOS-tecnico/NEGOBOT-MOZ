@@ -65,6 +65,10 @@ ADMIN_NUMBER = os.getenv('ADMIN_NUMBER')
 #   🌐 DIRECT REST CALL TO GROQ API (LLAMA 3.3)
 # ==========================================
 def chamar_groq_rest(contents_payload, system_instruction="", temperature=0.3):
+    """
+    Realiza chamadas de texto ultrarrápidas à API da Groq.
+    Sem bloqueios de IP/Servidor e sem erros de cota do Render.
+    """
     if not GROQ_API_KEY:
         print("❌ GROQ_API_KEY não encontrada nas variáveis de ambiente.")
         return ""
@@ -114,6 +118,7 @@ def chamar_groq_rest(contents_payload, system_instruction="", temperature=0.3):
 #   🎙️ AUDIO TRANSCRIPTION VIA GROQ (WHISPER)
 # ==========================================
 def transcrever_audio_groq(url_audio_whatsapp):
+    """Descarrega áudios do WhatsApp e converte em texto via Whisper no Groq"""
     if not GROQ_API_KEY:
         return ""
     try:
@@ -150,6 +155,7 @@ def transcrever_audio_groq(url_audio_whatsapp):
 #   👁️ IMAGE & DOCUMENT ANALYSIS (GROQ VISION)
 # ==========================================
 def analisar_imagem_groq(url_imagem, instrucao="Analise e extraia todas as informações relevantes desta imagem ou comprovativo:"):
+    """Baixa a imagem enviada no WhatsApp e analisa via modelo Vision da Groq"""
     if not GROQ_API_KEY:
         return ""
     try:
@@ -275,7 +281,7 @@ def gerar_url_imagem_pollinations(prompt_otimizado):
     return f"https://pollinations.ai/p/{prompt_encoded}?width=1024&height=1024&model=flux&seed=42"
 
 def verificar_espera_humano_isolado(instancia_cliente, numero_remetente):
-    time.sleep(240)
+    time.sleep(180)  # 3 minutos exatos
     try:
         conversa_ref = db.collection('clientes_bot').document(instancia_cliente).collection('conversas').document(numero_remetente)
         doc = conversa_ref.get()
@@ -283,9 +289,9 @@ def verificar_espera_humano_isolado(instancia_cliente, numero_remetente):
             dados = doc.to_dict()
             if dados.get("status_atendimento") == "humano" and dados.get("ultima_mensagem_por") == "cliente_final":
                 msg_aviso = (
-                    "🕒 AVISO DE ATENDIMENTO ⚠️\n\n"
-                    "Pedimos desculpas pela demora. O nosso assistente está ocupado no momento com outros atendimentos, "
-                    "mas assim que estiver disponível vai responder diretamente aqui. Obrigado pela paciência!"
+                    "🕒 *AVISO DE ATENDIMENTO* ⚠️\n\n"
+                    "Todos os nossos assistentes humanos estão ocupados no momento. "
+                    "Assim que houver disponibilidade, responderão diretamente aqui. Obrigado pela paciência!"
                 )
                 send_whatsapp(numero_remetente, msg_aviso, instance_name=instancia_cliente)
     except Exception as e:
@@ -395,15 +401,8 @@ def gerar_e_enviar_qrcode_central(phone_number):
         return False
 
 def listar_grupos_instancia(instance_name):
-    headers = {"apikey": os.getenv('EVOLUTION_API_KEY')}
-    
-    try:
-        requests.get(f"{os.getenv('EVOLUTION_API_URL')}/chat/findChats/{instance_name}", headers=headers, timeout=10)
-        time.sleep(1)
-    except Exception:
-        pass
-
     url = f"{os.getenv('EVOLUTION_API_URL')}/group/fetchAllGroups/{instance_name}"
+    headers = {"apikey": os.getenv('EVOLUTION_API_KEY')}
     try:
         response = requests.get(url, headers=headers, timeout=15)
         if response.status_code != 200:
@@ -658,25 +657,6 @@ Planos: Inicial (500 MT) e Avançado (1000 MT). M-Pesa: 855000929 (Abel Francisc
                 send_whatsapp(phone_number, "⚠️ O período de teste gratuito deste assistente expirou.", instance_name=nome_instancia_atual)
                 return
 
-            # Verificar se já está em atendimento humano antes de processar comandos do bot
-            conversa_doc = conversa_ref.get()
-            em_atendimento_humano = conversa_doc.exists and conversa_doc.to_dict().get("status_atendimento") == "humano"
-
-            # Gatilhos explícitos para transição para humano
-            if any(g in msg_clean for g in ["falar com atendente", "suporte humano", "atendente", "humano", "#suporte"]):
-                conversa_ref.set({"status_atendimento": "humano", "ultima_mensagem_por": "cliente_final", "ultima_interacao": agora}, merge=True)
-                historico_ref.add({"role": "user", "text": message_text, "timestamp": agora})
-                send_whatsapp(phone_number, "🔔 A transferir para um atendente humano... Por favor aguarde! 🤝", instance_name=nome_instancia_atual)
-                threading.Thread(target=verificar_espera_humano_isolado, args=(nome_instancia_atual, phone_number)).start()
-                return
-
-            # Se já está em atendimento humano, apenas grava e agenda o aviso de espera (se for mensagem de texto comum)
-            if em_atendimento_humano:
-                conversa_ref.set({"ultima_mensagem_por": "cliente_final", "ultima_interacao": agora}, merge=True)
-                historico_ref.add({"role": "user", "text": message_text, "timestamp": agora})
-                threading.Thread(target=verificar_espera_humano_isolado, args=(nome_instancia_atual, phone_number)).start()
-                return
-
             if msg_clean.startswith("/criar-arte"):
                 pedido = message_text.replace("/criar-arte", "").strip()
                 if not pedido:
@@ -740,6 +720,28 @@ Planos: Inicial (500 MT) e Avançado (1000 MT). M-Pesa: 855000929 (Abel Francisc
                     threading.Thread(target=executar_campanha_duas_etapas, args=(nome_instancia_atual, telefones, "Bom dia! Tudo bem?")).start()
                     db.collection("clientes_bot").document(nome_instancia_atual).collection("temp_listas").document("dados").delete()
                     return
+
+            # =======================================================
+            # 🔄 GESTÃO DE ESTADO DE ATENDIMENTO HUMANO CORRIGIDA
+            # =======================================================
+            conversa_doc = conversa_ref.get()
+            if conversa_doc.exists and conversa_doc.to_dict().get("status_atendimento") == "humano":
+                if msg_clean in ["/bot", "/reset", "continuar"]:
+                    conversa_ref.set({"status_atendimento": "bot", "ultima_interacao": agora}, merge=True)
+                    send_whatsapp(phone_number, "🤖 O assistente virtual foi reativado com sucesso! Como posso ajudar?", instance_name=nome_instancia_atual)
+                    return
+
+                conversa_ref.set({"ultima_mensagem_por": "cliente_final", "ultima_interacao": agora}, merge=True)
+                historico_ref.add({"role": "user", "text": message_text, "timestamp": agora})
+                return
+
+            gatilhos_humano = ["falar com atendente", "suporte humano", "atendente", "humano", "#suporte"]
+            if any(g in msg_clean for g in gatilhos_humano):
+                conversa_ref.set({"status_atendimento": "humano", "ultima_mensagem_por": "cliente_final", "ultima_interacao": agora}, merge=True)
+                historico_ref.add({"role": "user", "text": message_text, "timestamp": agora})
+                send_whatsapp(phone_number, "🔔 A transferir para um atendente humano... Por favor aguarde! 🤝", instance_name=nome_instancia_atual)
+                threading.Thread(target=verificar_espera_humano_isolado, args=(nome_instancia_atual, phone_number)).start()
+                return
 
             docs_h = historico_ref.order_by('timestamp', direction=firestore.Query.DESCENDING).limit(10).stream()
             lista_m = [d.to_dict() for d in docs_h]
