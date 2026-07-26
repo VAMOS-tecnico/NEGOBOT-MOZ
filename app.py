@@ -281,8 +281,21 @@ def gerar_url_imagem_pollinations(prompt_otimizado):
     return f"https://pollinations.ai/p/{prompt_encoded}?width=1024&height=1024&model=flux&seed=42"
 
 # ==========================================
-#   ⏱️ VERIFICAÇÃO AUTOMÁTICA DE ESPERA HUMANA
+#   ⏱️ HELPER & INSTANCE MANAGEMENT
 # ==========================================
+def checar_instancia_conectada(instance_name):
+    """Verifica na Evolution API se o cliente realmente escaneou o QR Code e está conectado"""
+    try:
+        url = f"{os.getenv('EVOLUTION_API_URL')}/instance/connectionState/{instance_name}"
+        headers = {"apikey": os.getenv('EVOLUTION_API_KEY')}
+        res = requests.get(url, headers=headers, timeout=5)
+        if res.status_code == 200:
+            dados = res.json()
+            return dados.get("instance", {}).get("state") == "open"
+    except Exception as e:
+        print(f"⚠️ Erro ao verificar estado da instância {instance_name}: {e}")
+    return False
+
 def verificar_espera_humano_isolado(instancia_cliente, numero_remetente):
     time.sleep(180)  # Aguarda 3 minutos exatos
     try:
@@ -290,12 +303,9 @@ def verificar_espera_humano_isolado(instancia_cliente, numero_remetente):
         doc = conversa_ref.get()
         if doc.exists:
             dados = doc.to_dict()
-            # Se continuar em modo humano e o atendente não respondeu
             if dados.get("status_atendimento") == "humano" and dados.get("ultima_mensagem_por") == "cliente_final":
-                # 1. Reativa automaticamente o bot no Firestore
                 conversa_ref.set({"status_atendimento": "bot", "ultima_interacao": datetime.now(timezone.utc)}, merge=True)
                 
-                # 2. Envia a mensagem de reativação para o cliente
                 msg_aviso = (
                     "🕒 *AVISO DE ATENDIMENTO* ⚠️\n\n"
                     "Todos os nossos assistentes humanos estão ocupados no momento. "
@@ -451,31 +461,124 @@ def executar_campanha_duas_etapas(instance_name, telefones, mensagem_saudacao):
             time.sleep(900)
     send_whatsapp(instance_name, f"✅ *Campanha Concluída!* {contador} mensagens enviadas.", instance_name=instance_name)
 
-def enviar_lembretes_em_massa(periodo="dia"):
+# ==========================================
+#   📢 FLUXO 1: LEMBRETES DE EXPIRAÇÃO (PARA QUEM ESCANEOU)
+# ==========================================
+def enviar_lembretes_em_massa(periodo="manhã"):
     try:
         clientes_ref = db.collection('clientes').where('status', '==', 'trial').stream()
         central_instance = os.getenv('EVOLUTION_INSTANCE_NAME')
         saudacao = "Bom dia" if periodo == "manhã" else "Boa tarde"
-        mensagem_lembrete = (
-            f"👋 *{saudacao}! Passando com um aviso importante sobre o seu Negobot Moz.* 🤖\n\n"
-            "O seu teste gratuito de 2 dias está ativo. "
-            "**Faça o pagamento da subscrição para não perder o acesso!** ⚠️\n\n"
-            "💵 *M-Pesa:* 855000929 (Abel Francisco)\n"
-            "📄 Envie o seu catálogo em PDF ou Excel para personalizar o seu robô!"
-        )
+        agora = datetime.now(timezone.utc)
+
         for doc in clientes_ref:
-            phone = doc.to_dict().get('phone_number')
-            if phone:
-                send_whatsapp(phone, mensagem_lembrete, instance_name=central_instance)
-                time.sleep(1.5)
+            dados = doc.to_dict()
+            phone = dados.get('phone_number')
+            trial_start = dados.get('trial_start')
+
+            if not phone:
+                continue
+
+            tenant_id = re.sub(r'\D', '', phone)
+
+            # 🛡️ FILTRO CRÍTICO: Só envia se o cliente realmente escaneou e conectou o QR Code!
+            if not checar_instancia_conectada(tenant_id):
+                print(f"⏭️ Ignorando {phone}: QR Code ainda não foi escaneado.")
+                continue
+
+            # Cálculo dinâmico do tempo restante (Dias, Horas e Minutos)
+            texto_tempo = "pouco tempo"
+            if trial_start:
+                if trial_start.tzinfo is None:
+                    trial_start = trial_start.replace(tzinfo=timezone.utc)
+                
+                expiracao = trial_start + timedelta(days=2)
+                diferenca = expiracao - agora
+
+                if diferenca.total_seconds() > 0:
+                    dias = diferenca.days
+                    horas = diferenca.seconds // 3600
+                    minutos = (diferenca.seconds % 3600) // 60
+
+                    partes = []
+                    if dias > 0:
+                        partes.append(f"{dias} dia{'s' if dias > 1 else ''}")
+                    if horas > 0:
+                        partes.append(f"{horas} hora{'s' if horas > 1 else ''}")
+                    if minutos > 0 or (dias == 0 and horas == 0):
+                        partes.append(f"{minutos} minuto{'s' if minutos > 1 else ''}")
+
+                    if len(partes) == 3:
+                        texto_tempo = f"{partes[0]}, {partes[1]} e {partes[2]}"
+                    elif len(partes) == 2:
+                        texto_tempo = f"{partes[0]} e {partes[1]}"
+                    elif len(partes) == 1:
+                        texto_tempo = partes[0]
+                else:
+                    texto_tempo = "menos de 1 minuto (a expirar)"
+
+            mensagem_lembrete = (
+                f"👋 *{saudacao}! Passando com um aviso importante sobre o seu Negobot Moz.* 🤖\n\n"
+                f"⏳ *Tempo restante de teste:* **{texto_tempo}**\n\n"
+                "**Faça o pagamento da subscrição para não perder o acesso!** ⚠️\n\n"
+                "💵 *M-Pesa:* 855000929 (Abel Francisco)\n"
+                "📄 Envie o seu catálogo em PDF ou Excel para personalizar o seu robô!"
+            )
+
+            send_whatsapp(phone, mensagem_lembrete, instance_name=central_instance)
+            time.sleep(2)
+            
     except Exception as e:
-        notificar_erro_admin(f"Erro lembretes: {e}")
+        notificar_erro_admin(f"Erro lembretes trial: {e}")
+
+# ==========================================
+#   🎯 FLUXO 2: NUTRIÇÃO DE LEADS DE ANÚNCIOS (FOLLOW-UP 24H)
+# ==========================================
+def nutrir_leads_anuncios():
+    try:
+        prospects_ref = db.collection('clientes').where('status', '==', 'prospect').stream()
+        central_instance = os.getenv('EVOLUTION_INSTANCE_NAME')
+        agora = datetime.now(timezone.utc)
+
+        for doc in prospects_ref:
+            dados = doc.to_dict()
+            phone = dados.get('phone_number')
+            data_registro = dados.get('data_registro')
+            nutrido = dados.get('nutrido_followup', False)
+
+            if not phone or nutrido or not data_registro:
+                continue
+
+            if data_registro.tzinfo is None:
+                data_registro = data_registro.replace(tzinfo=timezone.utc)
+
+            # Se já passaram mais de 24 horas (86400s) desde a primeira mensagem
+            if (agora - data_registro).total_seconds() >= 86400:
+                msg_conversao = (
+                    "👋 *Olá! Tudo bem por aí?*\n\n"
+                    "Vi que esteve interessado em automatizar o seu atendimento com o **Negobot Moz** 🤖.\n\n"
+                    "Sabia que pode testar **gratuitamente por 2 dias** sem qualquer compromisso?\n\n"
+                    "🚀 O robô atende os seus clientes no WhatsApp 24h por dia, responde a dúvidas e faz simulações de vendas sozinho.\n\n"
+                    "👉 Responda com a palavra *TESTAR* para ativar o seu robô agora mesmo!"
+                )
+                
+                send_whatsapp(phone, msg_conversao, instance_name=central_instance)
+                db.collection('clientes').document(phone).update({"nutrido_followup": True})
+                time.sleep(3)
+
+    except Exception as e:
+        print(f"Erro ao nutrir leads: {e}")
 
 @app.route('/cron/lembretes', methods=['GET'])
 def disparar_lembretes_via_url():
     periodo = request.args.get('periodo', 'manhã')
     threading.Thread(target=enviar_lembretes_em_massa, args=(periodo,)).start()
-    return f"Lembretes ({periodo}) iniciados!", 200
+    return f"Lembretes de teste ({periodo}) iniciados!", 200
+
+@app.route('/cron/nutrir', methods=['GET'])
+def disparar_nutricao_via_url():
+    threading.Thread(target=nutrir_leads_anuncios).start()
+    return "Nutrição de leads iniciada!", 200
 
 # ==========================================
 #   🎛 MAIN UNIVERSAL WEBHOOK
@@ -560,6 +663,16 @@ def processar_webhook_background(data):
         # 🏢 FLOW A: CENTRAL SALES INSTANCE
         # =======================================================
         if nome_instancia_atual == central_instance:
+            # Regista o utilizador como PROSPECT caso seja o primeiro contacto dele
+            cliente_doc_ref = db.collection('clientes').document(phone_number)
+            if not cliente_doc_ref.get().exists:
+                cliente_doc_ref.set({
+                    "phone_number": phone_number,
+                    "data_registro": agora,
+                    "status": "prospect",
+                    "nutrido_followup": False
+                })
+
             if msg_clean.startswith('#status'):
                 remetente_puro = phone_number.split('@')[0]
                 if ADMIN_NUMBER and remetente_puro in ADMIN_NUMBER:
@@ -595,7 +708,13 @@ def processar_webhook_background(data):
                 if not doc.exists or doc.to_dict().get('status') == 'prospect':
                     send_whatsapp(phone_number, "⏳ *A preparar o seu teste de 2 dias...* 🚀", instance_name=central_instance)
                     if criar_e_configurar_instancia_automatica(phone_number):
-                        cliente_ref.set({"phone_number": phone_number, "data_registro": agora, "trial_start": agora, "status": "trial"})
+                        cliente_ref.set({
+                            "phone_number": phone_number,
+                            "data_registro": agora,
+                            "trial_start": agora,
+                            "status": "trial",
+                            "nutrido_followup": True
+                        }, merge=True)
                         tenant_id = re.sub(r'\D', '', phone_number)
                         db.collection('clientes_bot').document(tenant_id).set({
                             "status_plano": "demonstracao", "data_ativacao": agora, "data_expiracao": agora + timedelta(days=2)
@@ -744,7 +863,6 @@ Planos: Inicial (500 MT) e Avançado (1000 MT). M-Pesa: 855000929 (Abel Francisc
                 historico_ref.add({"role": "user", "text": message_text, "timestamp": agora})
                 return
 
-            # Gatilhos explícitos para transferência de atendente
             gatilhos_humano = ["falar com atendente", "suporte humano", "atendente", "humano", "#suporte", "assistente humano"]
             if any(g in msg_clean for g in gatilhos_humano):
                 conversa_ref.set({"status_atendimento": "humano", "ultima_mensagem_por": "cliente_final", "ultima_interacao": agora}, merge=True)
@@ -773,7 +891,6 @@ Planos: Inicial (500 MT) e Avançado (1000 MT). M-Pesa: 855000929 (Abel Francisc
 
             diretrizes = dados_cliente.get("diretrizes_corporativas", default_rules)
             
-            # Instrução reforçada para proibir a transição humana em saudações e dúvidas simples
             sys_instruction = f"""Você é um assistente comercial profissional e focado em negócios.
 Comunicação em Português de Moçambique, tom sério e corporativo.
 Respostas curtas e diretas (2 a 3 linhas por bloco).
@@ -788,7 +905,6 @@ REGRA OBRIGATÓRIA DE TRANSIÇÃO:
             response_text = chamar_groq_rest(contents, system_instruction=sys_instruction, temperature=0.1)
             historico_ref.add({"role": "user", "text": message_text, "timestamp": agora})
 
-            # Verifica transição humana (com proteção para evitar ativação por saudações)
             e_saudacao = any(s in msg_clean for s in ["bom dia", "boa tarde", "boa noite", "olá", "ola", "oy", "oi"])
             
             if "[TRANSICAO_HUMANO]" in response_text and not e_saudacao:
@@ -804,7 +920,6 @@ REGRA OBRIGATÓRIA DE TRANSIÇÃO:
                 threading.Thread(target=verificar_espera_humano_isolado, args=(nome_instancia_atual, phone_number)).start()
                 return
 
-            # Resposta normal do robô
             if response_text:
                 response_text = response_text.replace("[TRANSICAO_HUMANO]", "").strip()
                 send_whatsapp(phone_number, response_text, instance_name=nome_instancia_atual)
@@ -816,19 +931,29 @@ REGRA OBRIGATÓRIA DE TRANSIÇÃO:
         print(f"❌ {erro_completo}")
         notificar_erro_admin(erro_completo)
 
+# ==========================================
+#   ⏰ LOOP INTERNO DE AGENDAMENTO AUTOMÁTICO
+# ==========================================
 def loop_interno_lembretes():
     ultima_execucao_chave = ""
     while True:
         try:
-            agora = datetime.now(timezone(timedelta(hours=2)))
+            agora = datetime.now(timezone(timedelta(hours=2))) # Fuso Moçambique (CAT UTC+2)
             chave_atual = f"{agora.strftime('%Y-%m-%d_%H:%M')}"
             if chave_atual != ultima_execucao_chave:
+                # Dispara Lembretes de Teste Ativo às 09:30 e 17:00
                 if agora.hour == 9 and agora.minute == 30:
                     enviar_lembretes_em_massa("manhã")
                     ultima_execucao_chave = chave_atual
                 elif agora.hour == 17 and agora.minute == 0:
                     enviar_lembretes_em_massa("tarde")
                     ultima_execucao_chave = chave_atual
+                
+                # Dispara Nutrição de Leads de Anúncios às 11:00
+                elif agora.hour == 11 and agora.minute == 0:
+                    nutrir_leads_anuncios()
+                    ultima_execucao_chave = chave_atual
+
         except Exception as e:
             print(f"❌ Erro loop lembretes: {e}")
         time.sleep(30)
