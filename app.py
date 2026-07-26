@@ -50,9 +50,11 @@ else:
         print(f"❌ [SISTEMA] Erro crítico na inicialização padrão do Firebase: {e}")
 
 db = firestore.client()
+
+# CLIENTE DO GEMINI CONFIGURADO VIA SDK
 client = genai.Client(api_key=os.getenv('GEMINI_API_KEY'))
 
-# CORREÇÃO CRÍTICA: O modelo oficial e estável da Google para a API
+# 🎯 MODELO SELECIONADO CONFORME O TEU AI STUDIO
 MODEL_NAME = 'gemini-3.1-flash-lite'
 
 NUMERO_ASSISTANTE = os.getenv('ASSISTANT_NUMBER')
@@ -990,7 +992,6 @@ def loop_interno_lembretes():
             
         time.sleep(30)
 
-# Inicializa o monitor de lembretes no escopo global para compatibilidade total com WSGI/Gunicorn
 def iniciar_servicos_background():
     threading.Thread(target=loop_interno_lembretes, daemon=True).start()
 
