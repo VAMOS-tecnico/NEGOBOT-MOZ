@@ -53,7 +53,7 @@ db = firestore.client()
 client = genai.Client(api_key=os.getenv('GEMINI_API_KEY'))
 
 # CORREÇÃO CRÍTICA: O modelo oficial e estável da Google para a API
-MODEL_NAME = 'gemini-3.1-flash-lite'
+MODEL_NAME = 'gemini-3.5-flash-lite'
 
 NUMERO_ASSISTANTE = os.getenv('ASSISTANT_NUMBER')
 ADMIN_NUMBER = os.getenv('ADMIN_NUMBER')
