@@ -722,11 +722,11 @@ Planos: Inicial (500 MT) e Avançado (1000 MT). M-Pesa: 855000929 (Abel Francisc
                     return
 
             # =======================================================
-            # 🔄 GESTÃO DE ESTADO DE ATENDIMENTO HUMANO CORRIGIDA
+            # 🔄 GESTÃO DE ESTADO DE ATENDIMENTO HUMANO COM AVISO DE TEMPO
             # =======================================================
             conversa_doc = conversa_ref.get()
             if conversa_doc.exists and conversa_doc.to_dict().get("status_atendimento") == "humano":
-                if msg_clean in ["/bot", "/reset", "continuar"]:
+                if msg_clean in ["/bot", "/reset", "continuar", "bot"]:
                     conversa_ref.set({"status_atendimento": "bot", "ultima_interacao": agora}, merge=True)
                     send_whatsapp(phone_number, "🤖 O assistente virtual foi reativado com sucesso! Como posso ajudar?", instance_name=nome_instancia_atual)
                     return
@@ -735,11 +735,15 @@ Planos: Inicial (500 MT) e Avançado (1000 MT). M-Pesa: 855000929 (Abel Francisc
                 historico_ref.add({"role": "user", "text": message_text, "timestamp": agora})
                 return
 
-            gatilhos_humano = ["falar com atendente", "suporte humano", "atendente", "humano", "#suporte"]
+            gatilhos_humano = ["falar com atendente", "suporte humano", "atendente", "humano", "#suporte", "assistente humano"]
             if any(g in msg_clean for g in gatilhos_humano):
                 conversa_ref.set({"status_atendimento": "humano", "ultima_mensagem_por": "cliente_final", "ultima_interacao": agora}, merge=True)
                 historico_ref.add({"role": "user", "text": message_text, "timestamp": agora})
-                send_whatsapp(phone_number, "🔔 A transferir para um atendente humano... Por favor aguarde! 🤝", instance_name=nome_instancia_atual)
+                send_whatsapp(
+                    phone_number, 
+                    "🔔 A transferir para um atendente humano... Por favor, aguarde até 3 minutos! 🤝", 
+                    instance_name=nome_instancia_atual
+                )
                 threading.Thread(target=verificar_espera_humano_isolado, args=(nome_instancia_atual, phone_number)).start()
                 return
 
@@ -773,7 +777,7 @@ Se o cliente insistir em suporte humano ou se a questão fugir totalmente ao con
                 if response_text:
                     send_whatsapp(phone_number, response_text, instance_name=nome_instancia_atual)
                 else:
-                    send_whatsapp(phone_number, "A transferir o seu atendimento para a equipa humana...", instance_name=nome_instancia_atual)
+                    send_whatsapp(phone_number, "A transferir o seu atendimento para a equipa humana... Por favor, aguarde até 3 minutos!", instance_name=nome_instancia_atual)
                 historico_ref.add({"role": "assistant", "text": response_text, "timestamp": agora})
                 threading.Thread(target=verificar_espera_humano_isolado, args=(nome_instancia_atual, phone_number)).start()
                 return
