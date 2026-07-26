@@ -12,7 +12,7 @@ import urllib.parse
 from flask import Flask, request
 from datetime import datetime, timedelta, timezone
 
-# Manipulação de Documentos e Tabelas (PDF e Excel)
+# Document & Spreadsheet Processing (PDF and Excel)
 from pypdf import PdfReader
 import pandas as pd
 
@@ -27,7 +27,7 @@ def health_check():
     return "O ecossistema Negobot 100% Automático (Groq Engine) está online! 🚀", 200
 
 # ==========================================
-#   📦 INICIALIZAÇÃO SEGURA DO FIREBASE
+#   📦 FIREBASE SECURE INITIALIZATION
 # ==========================================
 firebase_config_env = os.getenv('FIREBASE_CONFIG')
 if firebase_config_env:
@@ -52,20 +52,21 @@ else:
 db = firestore.client()
 
 # ==========================================
-#   CONFIGURAÇÕES DA API DA GROQ (REST)
+#   GROQ API CONFIGURATIONS
 # ==========================================
 GROQ_API_KEY = os.getenv('GROQ_API_KEY')
-GROQ_MODEL = "llama-3.3-70b-versatile"
+GROQ_MODEL = os.getenv('GROQ_MODEL', 'llama-3.3-70b-versatile')
+GROQ_VISION_MODEL = os.getenv('GROQ_VISION_MODEL', 'qwen-2.5-32b')
 
 NUMERO_ASSISTANTE = os.getenv('ASSISTANT_NUMBER')
 ADMIN_NUMBER = os.getenv('ADMIN_NUMBER')
 
 # ==========================================
-#   🌐 CHAMADA REST DIRETA À API DA GROQ (LLAMA 3.3 70B)
+#   🌐 DIRECT REST CALL TO GROQ API (LLAMA 3.3)
 # ==========================================
 def chamar_groq_rest(contents_payload, system_instruction="", temperature=0.3):
     """
-    Realiza chamadas de texto ultrarrápidas à API da Groq (Llama 3.3 70B).
+    Realiza chamadas de texto ultrarrápidas à API da Groq.
     Sem bloqueios de IP/Servidor e sem erros de cota do Render.
     """
     if not GROQ_API_KEY:
@@ -82,7 +83,6 @@ def chamar_groq_rest(contents_payload, system_instruction="", temperature=0.3):
     if system_instruction:
         messages.append({"role": "system", "content": system_instruction})
 
-    # Converte o payload de histórico para o padrão Groq/OpenAI
     for item in contents_payload:
         role = item.get("role", "user")
         if role in ["model", "assistant", "atendente"]:
@@ -115,7 +115,7 @@ def chamar_groq_rest(contents_payload, system_instruction="", temperature=0.3):
     return "Desculpe, estamos a receber muitas mensagens ao mesmo tempo. Por favor, tente novamente dentro de alguns segundos!"
 
 # ==========================================
-#   🎙️ TRANSCRIÇÃO DE ÁUDIOS VIA GROQ (WHISPER)
+#   🎙️ AUDIO TRANSCRIPTION VIA GROQ (WHISPER)
 # ==========================================
 def transcrever_audio_groq(url_audio_whatsapp):
     """Descarrega áudios do WhatsApp e converte em texto via Whisper no Groq"""
@@ -152,7 +152,60 @@ def transcrever_audio_groq(url_audio_whatsapp):
     return ""
 
 # ==========================================
-#   🛡️ CONTROLO DE DUPLICADOS (ANTI-DUPLICAÇÃO)
+#   👁️ IMAGE & DOCUMENT ANALYSIS (GROQ VISION)
+# ==========================================
+def analisar_imagem_groq(url_imagem, instrucao="Analise e extraia todas as informações relevantes desta imagem ou comprovativo:"):
+    """Baixa a imagem enviada no WhatsApp e analisa via modelo Vision da Groq"""
+    if not GROQ_API_KEY:
+        return ""
+    try:
+        headers_evo = {"apikey": os.getenv('EVOLUTION_API_KEY')}
+        res = requests.get(url_imagem, headers=headers_evo, timeout=25)
+        if res.status_code != 200:
+            res = requests.get(url_imagem, timeout=25)
+            
+        if res.status_code == 200:
+            image_base64 = base64.b64encode(res.content).decode('utf-8')
+            
+            url = "https://api.groq.com/openai/v1/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {GROQ_API_KEY}",
+                "Content-Type": "application/json"
+            }
+            
+            payload = {
+                "model": GROQ_VISION_MODEL,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": instrucao},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/jpeg;base64,{image_base64}"
+                                }
+                            }
+                        ]
+                    }
+                ],
+                "max_tokens": 500
+            }
+            
+            resp = requests.post(url, headers=headers, json=payload, timeout=25)
+            data = resp.json()
+            if resp.status_code == 200 and "choices" in data and len(data["choices"]) > 0:
+                resultado = data["choices"][0]["message"]["content"].strip()
+                print(f"👁️ Imagem Analisada com sucesso!")
+                return resultado
+            else:
+                print(f"❌ Erro resposta Groq Vision: {data}")
+    except Exception as e:
+        print(f"❌ Erro ao analisar imagem no Groq Vision: {e}")
+    return ""
+
+# ==========================================
+#   🛡️ DUPLICATE CONTROL
 # ==========================================
 PROCESSADOS = {}
 processados_lock = threading.Lock()
@@ -174,7 +227,7 @@ def notificar_erro_admin(erro_msg):
             print(f"Falha ao enviar notificação de erro ao admin: {e}")
 
 # ==========================================
-#   📄 MÓDULOS DE EXTRAÇÃO (PDF, EXCEL E IMAGEM)
+#   📄 EXTRACTION MODULES (PDF, EXCEL & ART)
 # ==========================================
 def extrair_texto_pdf_url(pdf_url):
     try:
@@ -416,7 +469,7 @@ def disparar_lembretes_via_url():
     return f"Lembretes ({periodo}) iniciados!", 200
 
 # ==========================================
-#   🎛 WEBHOOK PRINCIPAL (COM SUPORTE A GROQ E ÁUDIO)
+#   🎛 MAIN UNIVERSAL WEBHOOK
 # ==========================================
 @app.route('/webhook-global', methods=['POST'])
 @app.route('/webhook-cliente', methods=['POST'])
@@ -458,22 +511,30 @@ def processar_webhook_background(data):
 
         message = msg_data.get('message', {})
         
-        # Leitura de Áudios, Texto, Documentos e Imagens
+        # Audio, Text, Documents and Images Detection
         audio_message = message.get('audioMessage')
         document_message = message.get('documentMessage') or message.get('documentWithCaptionMessage', {}).get('message', {}).get('documentMessage')
         image_message = message.get('imageMessage') or message.get('extendedTextMessage', {}).get('contextInfo', {}).get('quotedMessage', {}).get('imageMessage')
 
         message_text = message.get('conversation') or message.get('extendedTextMessage', {}).get('text', '')
 
-        # Se o cliente enviou um ÁUDIO, faz a transcrição com Groq Whisper
+        # 🎙️ Handle Voice Audio via Groq Whisper
         if audio_message:
             url_audio = audio_message.get('url')
             if url_audio:
                 send_whatsapp(phone_number, "🎙️ *A ouvir o seu áudio...*", instance_name=nome_instancia_atual)
                 message_text = transcrever_audio_groq(url_audio)
 
-        if not message_text and image_message:
-            message_text = image_message.get('caption', 'Analise a imagem enviada.')
+        # 👁️ Handle Images / Receipts / Photos via Groq Vision
+        if image_message and not message_text.startswith('/criar-arte'):
+            url_imagem = image_message.get('url')
+            caption = image_message.get('caption', '')
+            if url_imagem:
+                send_whatsapp(phone_number, "👁️ *A analisar o documento/imagem...*", instance_name=nome_instancia_atual)
+                instrucao = caption if caption else "Analise e extraia todas as informações, valores, datas e dados deste comprovativo ou imagem."
+                analise_foto = analisar_imagem_groq(url_imagem, instrucao=instrucao)
+                if analise_foto:
+                    message_text = f"[O CLIENTE ENVIOU UMA IMAGEM/COMPROVATIVO. ANÁLISE DA IMAGEM: {analise_foto}]\nTexto do cliente: {caption}"
 
         if not message_text and not document_message:
             return
@@ -490,7 +551,7 @@ def processar_webhook_background(data):
             return
 
         # =======================================================
-        # 🏢 FLUXO A: INSTÂNCIA CENTRAL (ATENDIMENTO VENDAS DO BOT)
+        # 🏢 FLOW A: CENTRAL SALES INSTANCE
         # =======================================================
         if nome_instancia_atual == central_instance:
             if msg_clean.startswith('#status'):
@@ -570,7 +631,7 @@ Planos: Inicial (500 MT) e Avançado (1000 MT). M-Pesa: 855000929 (Abel Francisc
                 send_whatsapp(phone_number, response_text, instance_name=central_instance)
 
         # =======================================================
-        # 🤖 FLUXO B: INSTÂNCIA DO CLIENTE (MENSAGENS DO BOT FINAL)
+        # 🤖 FLOW B: CLIENT BOT INSTANCE (FINAL BOT USER)
         # =======================================================
         else:
             client_doc_ref = db.collection('clientes_bot').document(nome_instancia_atual)
@@ -612,7 +673,7 @@ Planos: Inicial (500 MT) e Avançado (1000 MT). M-Pesa: 855000929 (Abel Francisc
                 requests.post(f"{os.getenv('EVOLUTION_API_URL')}/message/sendMedia/{nome_instancia_atual}", headers={"apikey": os.getenv('EVOLUTION_API_KEY'), "Content-Type": "application/json"}, json=payload, timeout=25)
                 return
 
-            # Documentos Excel e PDF do dono
+            # 📊 Document Extraction (Excel & PDF) by Instance Owner
             if document_message and phone_number.split('@')[0] in nome_instancia_atual:
                 url_doc = document_message.get('url')
                 file_name = document_message.get('fileName', '').lower()
@@ -622,7 +683,7 @@ Planos: Inicial (500 MT) e Avançado (1000 MT). M-Pesa: 855000929 (Abel Francisc
                     texto_excel = extrair_texto_excel_url(url_doc)
                     if texto_excel:
                         client_doc_ref.set({"diretrizes_corporativas": f"{dados_cliente.get('diretrizes_corporativas', '')}\n\n=== EXCEL ===\n{texto_excel}"}, merge=True)
-                        send_whatsapp(phone_number, "✅ *Excel Integrado!* Simulador atualizado.", instance_name=nome_instancia_atual)
+                        send_whatsapp(phone_number, "✅ *Excel Integrado!* Simulador e dados atualizados.", instance_name=nome_instancia_atual)
                     return
 
                 elif file_name.endswith('.pdf') or not file_name:
@@ -678,7 +739,7 @@ Planos: Inicial (500 MT) e Avançado (1000 MT). M-Pesa: 855000929 (Abel Francisc
                 threading.Thread(target=verificar_espera_humano_isolado, args=(nome_instancia_atual, phone_number)).start()
                 return
 
-            # Histórico de conversas
+            # History retrieval
             docs_h = historico_ref.order_by('timestamp', direction=firestore.Query.DESCENDING).limit(10).stream()
             lista_m = [d.to_dict() for d in docs_h]
             lista_m.reverse()
