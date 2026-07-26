@@ -290,9 +290,12 @@ def verificar_espera_humano_isolado(instancia_cliente, numero_remetente):
         doc = conversa_ref.get()
         if doc.exists:
             dados = doc.to_dict()
+            # Se continuar em modo humano e o atendente não respondeu
             if dados.get("status_atendimento") == "humano" and dados.get("ultima_mensagem_por") == "cliente_final":
+                # 1. Reativa automaticamente o bot no Firestore
                 conversa_ref.set({"status_atendimento": "bot", "ultima_interacao": datetime.now(timezone.utc)}, merge=True)
                 
+                # 2. Envia a mensagem de reativação para o cliente
                 msg_aviso = (
                     "🕒 *AVISO DE ATENDIMENTO* ⚠️\n\n"
                     "Todos os nossos assistentes humanos estão ocupados no momento. "
@@ -475,7 +478,7 @@ def disparar_lembretes_via_url():
     return f"Lembretes ({periodo}) iniciados!", 200
 
 # ==========================================
-#   🎛 MAIN UNIVERSAL WEBHOOK (TODAS AS ROTAS)
+#   🎛 MAIN UNIVERSAL WEBHOOK
 # ==========================================
 @app.route('/webhook-global', methods=['POST'])
 @app.route('/webhook-cliente', methods=['POST'])
@@ -489,35 +492,27 @@ def universal_webhook():
 
 def processar_webhook_background(data):
     try:
-        event_name = str(data.get('event', '')).lower()
+        event_name = data.get('event', '').lower()
         if event_name not in ["messages.upsert", "messages_upsert"] or "data" not in data:
             return
 
         msg_data = data['data']
         key = msg_data.get('key', {})
         msg_id = key.get('id')
-
-        # Extração flexível da instância (compatível com Evolution v1 e v2)
-        instancia_raw = data.get('instance')
-        if isinstance(instancia_raw, dict):
-            nome_instancia_atual = instancia_raw.get('name') or instancia_raw.get('instanceName')
-        else:
-            nome_instancia_atual = instancia_raw
-
-        central_instance = os.getenv('EVOLUTION_INSTANCE_NAME')
-        if not nome_instancia_atual:
-            return
-
-        # 🔑 CORREÇÃO CRÍTICA DE DUPLICAÇÃO: isolada por instância (instancia + msg_id)
+        
         if msg_id:
-            dedup_key = f"{nome_instancia_atual}:{msg_id}"
             with processados_lock:
                 agora_tempo = time.time()
                 for k in [k for k, v in PROCESSADOS.items() if agora_tempo - v > 60]:
                     del PROCESSADOS[k]
-                if dedup_key in PROCESSADOS:
+                if msg_id in PROCESSADOS:
                     return
-                PROCESSADOS[dedup_key] = agora_tempo
+                PROCESSADOS[msg_id] = agora_tempo
+
+        nome_instancia_atual = data.get('instance')
+        central_instance = os.getenv('EVOLUTION_INSTANCE_NAME')
+        if not nome_instancia_atual:
+            return
 
         phone_number = key.get('remoteJid', '')
         if not phone_number or '@g.us' in phone_number or (NUMERO_ASSISTANTE and NUMERO_ASSISTANTE in phone_number):
@@ -749,6 +744,7 @@ Planos: Inicial (500 MT) e Avançado (1000 MT). M-Pesa: 855000929 (Abel Francisc
                 historico_ref.add({"role": "user", "text": message_text, "timestamp": agora})
                 return
 
+            # Gatilhos explícitos para transferência de atendente
             gatilhos_humano = ["falar com atendente", "suporte humano", "atendente", "humano", "#suporte", "assistente humano"]
             if any(g in msg_clean for g in gatilhos_humano):
                 conversa_ref.set({"status_atendimento": "humano", "ultima_mensagem_por": "cliente_final", "ultima_interacao": agora}, merge=True)
@@ -777,6 +773,7 @@ Planos: Inicial (500 MT) e Avançado (1000 MT). M-Pesa: 855000929 (Abel Francisc
 
             diretrizes = dados_cliente.get("diretrizes_corporativas", default_rules)
             
+            # Instrução reforçada para proibir a transição humana em saudações e dúvidas simples
             sys_instruction = f"""Você é um assistente comercial profissional e focado em negócios.
 Comunicação em Português de Moçambique, tom sério e corporativo.
 Respostas curtas e diretas (2 a 3 linhas por bloco).
@@ -791,6 +788,7 @@ REGRA OBRIGATÓRIA DE TRANSIÇÃO:
             response_text = chamar_groq_rest(contents, system_instruction=sys_instruction, temperature=0.1)
             historico_ref.add({"role": "user", "text": message_text, "timestamp": agora})
 
+            # Verifica transição humana (com proteção para evitar ativação por saudações)
             e_saudacao = any(s in msg_clean for s in ["bom dia", "boa tarde", "boa noite", "olá", "ola", "oy", "oi"])
             
             if "[TRANSICAO_HUMANO]" in response_text and not e_saudacao:
@@ -806,6 +804,7 @@ REGRA OBRIGATÓRIA DE TRANSIÇÃO:
                 threading.Thread(target=verificar_espera_humano_isolado, args=(nome_instancia_atual, phone_number)).start()
                 return
 
+            # Resposta normal do robô
             if response_text:
                 response_text = response_text.replace("[TRANSICAO_HUMANO]", "").strip()
                 send_whatsapp(phone_number, response_text, instance_name=nome_instancia_atual)
