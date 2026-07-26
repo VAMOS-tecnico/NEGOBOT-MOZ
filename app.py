@@ -6,6 +6,7 @@ import threading
 import re
 import random
 import io
+import base64
 import urllib.parse
 from flask import Flask, request
 from datetime import datetime, timedelta, timezone
@@ -14,9 +15,7 @@ from datetime import datetime, timedelta, timezone
 from pypdf import PdfReader
 import pandas as pd
 
-# Google GenAI SDK e Firebase
-from google import genai
-from google.genai import types
+# Firebase Admin
 import firebase_admin
 from firebase_admin import credentials, firestore
 
@@ -27,7 +26,7 @@ def health_check():
     return "O ecossistema Negobot 100% Automático com Suporte Humano, Multimodalidade e Campanhas está online! 🚀", 200
 
 # ==========================================
-#   📦 INICIALIZAÇÃO SEGURA DO FIREBASE E GEMINI
+#   📦 INICIALIZAÇÃO SEGURA DO FIREBASE
 # ==========================================
 firebase_config_env = os.getenv('FIREBASE_CONFIG')
 if firebase_config_env:
@@ -51,14 +50,54 @@ else:
 
 db = firestore.client()
 
-# CLIENTE DO GEMINI CONFIGURADO VIA SDK
-client = genai.Client(api_key=os.getenv('GEMINI_API_KEY'))
-
-# 🎯 MODELO SELECIONADO CONFORME O TEU AI STUDIO
-MODEL_NAME = 'gemini-3.1-flash-lite'
+# CONFIGURAÇÕES DA API DO GEMINI (REST)
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
+MODEL_NAME = 'gemini-2.5-flash'  # Modelo oficial estável para a REST API
 
 NUMERO_ASSISTANTE = os.getenv('ASSISTANT_NUMBER')
 ADMIN_NUMBER = os.getenv('ADMIN_NUMBER')
+
+# ==========================================
+#   🌐 CHAMADA REST DIRETA À API DO GEMINI (SEM SDK)
+# ==========================================
+def chamar_gemini_rest(contents_payload, system_instruction="", temperature=0.3):
+    """
+    Substitui a biblioteca nativa google-genai para contornar restrições 
+    de localização geográfica em servidores como o Render.
+    """
+    if not GEMINI_API_KEY:
+        print("❌ GEMINI_API_KEY não encontrada nas variáveis de ambiente.")
+        return ""
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_NAME}:generateContent?key={GEMINI_API_KEY}"
+    headers = {"Content-Type": "application/json"}
+    
+    payload = {
+        "contents": contents_payload,
+        "generationConfig": {
+            "temperature": temperature
+        }
+    }
+    
+    if system_instruction:
+        payload["systemInstruction"] = {
+            "parts": [{"text": system_instruction}]
+        }
+        
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=30)
+        data = response.json()
+        
+        if response.status_code == 200 and "candidates" in data and len(data["candidates"]) > 0:
+            parts = data["candidates"][0].get("content", {}).get("parts", [])
+            texto_gerado = "".join([p.get("text", "") for p in parts])
+            return texto_gerado.strip()
+        else:
+            print(f"❌ Erro na API REST do Gemini (Status {response.status_code}): {data}")
+            return ""
+    except Exception as e:
+        print(f"❌ Exceção ao chamar a API REST do Gemini: {e}")
+        return ""
 
 # ==========================================
 #   🛡️ CONTROLO DE DUPLICADOS (ANTI-DUPLICAÇÃO)
@@ -134,7 +173,7 @@ def descarregar_imagem_bytes(image_url):
     return None, None
 
 def criar_prompt_profissional_gemini(pedido_utilizador):
-    """O Gemini constrói um prompt publicitário profissional em inglês"""
+    """O Gemini constrói um prompt publicitário profissional em inglês via REST"""
     try:
         sys_instruction = (
             "Você é um especialista em Engenharia de Prompts para geração de imagens publicitárias. "
@@ -144,13 +183,9 @@ def criar_prompt_profissional_gemini(pedido_utilizador):
             "corporate style, photorealistic, 8k resolution, clean focal point'. "
             "Responda APENAS com o prompt em inglês, sem saudações ou textos adicionais."
         )
-        config = types.GenerateContentConfig(system_instruction=sys_instruction, temperature=0.7)
-        response = client.models.generate_content(
-            model=MODEL_NAME, 
-            contents=pedido_utilizador, 
-            config=config
-        )
-        return response.text.strip() if response.text else pedido_utilizador
+        contents = [{"parts": [{"text": pedido_utilizador}]}]
+        resultado = chamar_gemini_rest(contents, system_instruction=sys_instruction, temperature=0.7)
+        return resultado if resultado else pedido_utilizador
     except Exception as e:
         print(f"❌ Erro ao otimizar prompt no Gemini: {e}")
         return pedido_utilizador
@@ -443,7 +478,7 @@ def universal_webhook():
 def processar_webhook_background(data):
     try:
         event_name = data.get('event', '').lower()
-        if event_name != "messages.upsert" or "data" not in data:
+        if event_name not in ["messages.upsert", "messages_upsert"] or "data" not in data:
             return
 
         msg_data = data['data']
@@ -615,16 +650,16 @@ def processar_webhook_background(data):
             contents = []
             for msg in recent_history:
                 role = "model" if msg.get('role') in ["assistant", "model", "atendente"] else "user"
+                txt_msg = ""
                 if msg.get('parts'):
-                    parts = [types.Part.from_text(text=p.get('text', '')) for p in msg.get('parts', []) if isinstance(p, dict)]
+                    txt_msg = " ".join([p.get('text', '') for p in msg.get('parts', []) if isinstance(p, dict)])
                 elif msg.get('text'):
-                    parts = [types.Part.from_text(text=msg.get('text'))]
-                else:
-                    continue
-                if parts:
-                    contents.append(types.Content(role=role, parts=parts))
+                    txt_msg = msg.get('text')
+                
+                if txt_msg:
+                    contents.append({"role": role, "parts": [{"text": txt_msg}]})
             
-            contents.append(types.Content(role="user", parts=[types.Part.from_text(text=message_text)]))
+            contents.append({"role": "user", "parts": [{"text": message_text}]})
 
             sys_instruction_central = """Você é o assistente comercial oficial do Negobot Moz. Seu objetivo é sanar dúvidas sobre os planos e direcionar o cliente para testar a ferramenta. 
             
@@ -639,12 +674,10 @@ Planos: Inicial (500 MT) e Avançado (1000 MT). Teste gratuito de 2 dias dispon�
    - Plano Avançado (1000 MT/mês): Mensagens ilimitadas, leitura de catálogos complexos via PDF e suporte humano integrado.
 3. MÉTODO DE COBRANÇA: Pagamentos via M-Pesa pelo número 855000929 em nome de Abel Francisco."""
 
-            config = types.GenerateContentConfig(system_instruction=sys_instruction_central, temperature=0.3)
-            response = client.models.generate_content(model=MODEL_NAME, contents=contents, config=config)
-            response_text = response.text if response.text else ""
+            response_text = chamar_gemini_rest(contents, system_instruction=sys_instruction_central, temperature=0.3)
             
-            contents.append(types.Content(role="model", parts=[types.Part.from_text(text=response_text)]))
-            save_chat_history(phone_number, [{"role": c.role, "parts": [{"text": p.text} for p in c.parts]} for c in contents[-10:]])
+            contents.append({"role": "model", "parts": [{"text": response_text}]})
+            save_chat_history(phone_number, [{"role": c["role"], "parts": c["parts"]} for c in contents[-10:]])
             send_whatsapp(phone_number, response_text, instance_name=central_instance)
 
         # =======================================================
@@ -885,25 +918,31 @@ Planos: Inicial (500 MT) e Avançado (1000 MT). Teste gratuito de 2 dias dispon�
             for m in lista_mensagens:
                 role_bruto = m.get('role')
                 role_gemini = "model" if role_bruto in ["assistant", "model", "atendente"] else "user"
-                contents.append(types.Content(
-                    role=role_gemini,
-                    parts=[types.Part.from_text(text=m.get('text', ''))]
-                ))
+                contents.append({
+                    "role": role_gemini,
+                    "parts": [{"text": m.get('text', '')}]
+                })
             
             partes_mensagem = []
             
             # -------------------------------------------------------------
-            # 👁️ 4. ATENDIMENTO MULTIMODAL (ANÁLISE DE FOTOS DE BI / RECIBO)
+            # 👁️ 4. ATENDIMENTO MULTIMODAL (ANÁLISE DE FOTOS DE BI / RECIBO VIA REST)
             # -------------------------------------------------------------
             if image_message:
                 url_imagem = image_message.get('url')
                 send_whatsapp(phone_number, "👁️ *A analisar o documento/imagem...*", instance_name=nome_instancia_atual)
                 img_bytes, mime_type = descarregar_imagem_bytes(url_imagem)
                 if img_bytes:
-                    partes_mensagem.append(types.Part.from_bytes(data=img_bytes, mime_type=mime_type))
+                    base64_data = base64.b64encode(img_bytes).decode('utf-8')
+                    partes_mensagem.append({
+                        "inlineData": {
+                            "mimeType": mime_type,
+                            "data": base64_data
+                        }
+                    })
 
-            partes_mensagem.append(types.Part.from_text(text=message_text if message_text else "Analise o documento presente nesta imagem."))
-            contents.append(types.Content(role="user", parts=partes_mensagem))
+            partes_mensagem.append({"text": message_text if message_text else "Analise o documento presente nesta imagem."})
+            contents.append({"role": "user", "parts": partes_mensagem})
 
             diretrizes_corporativas = dados_cliente.get("diretrizes_corporativas", "").strip()
             if not diretrizes_corporativas:
@@ -927,9 +966,7 @@ Planos: Inicial (500 MT) e Avançado (1000 MT). Teste gratuito de 2 dias dispon�
 
 📌 REGRA DE TRANSIÇÃO: Se o cliente voltar a insistir em falar com o suporte, pedir por um atendente humano, gerente, ou se a dúvida dele fugir completamente da base de conhecimento fornecida acima, confirme o encaminhamento de forma polida e termine a resposta adicionando EXATAMENTE a tag: [TRANSICAO_HUMANO]"""
 
-            config = types.GenerateContentConfig(system_instruction=sys_instruction, temperature=0.2)
-            response = client.models.generate_content(model=MODEL_NAME, contents=contents, config=config)
-            response_text = response.text if response.text else ""
+            response_text = chamar_gemini_rest(contents, system_instruction=sys_instruction, temperature=0.2)
             
             historico_ref.add({"role": "user", "text": message_text if message_text else "[Imagem/Documento Enviado]", "timestamp": agora})
 
