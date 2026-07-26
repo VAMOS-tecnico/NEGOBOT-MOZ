@@ -61,6 +61,10 @@ GROQ_VISION_MODEL = os.getenv('GROQ_VISION_MODEL', 'qwen-2.5-32b')
 NUMERO_ASSISTANTE = os.getenv('ASSISTANT_NUMBER')
 ADMIN_NUMBER = os.getenv('ADMIN_NUMBER')
 
+# Helper para garantir formato de URL da Evolution API
+def get_evo_url():
+    return (os.getenv('EVOLUTION_API_URL') or '').rstrip('/')
+
 # ==========================================
 #   🌐 DIRECT REST CALL TO GROQ API (LLAMA 3.3)
 # ==========================================
@@ -217,7 +221,7 @@ def verificar_instancia_conectada(client_instance):
     """Verifica se a instância na Evolution API está ativa e conectada (state == 'open')."""
     try:
         headers = {"apikey": os.getenv('EVOLUTION_API_KEY')}
-        url = f"{os.getenv('EVOLUTION_API_URL')}/instance/connectionState/{client_instance}"
+        url = f"{get_evo_url()}/instance/connectionState/{client_instance}"
         response = requests.get(url, headers=headers, timeout=5)
         if response.status_code == 200:
             dados = response.json()
@@ -226,7 +230,7 @@ def verificar_instancia_conectada(client_instance):
                 return True
 
         # Fallback de verificação secundária
-        url_connect = f"{os.getenv('EVOLUTION_API_URL')}/instance/connect/{client_instance}"
+        url_connect = f"{get_evo_url()}/instance/connect/{client_instance}"
         response_connect = requests.get(url_connect, headers=headers, timeout=5)
         if response_connect.status_code == 200:
             dados_c = response_connect.json()
@@ -240,7 +244,7 @@ def notificar_erro_admin(erro_msg):
     if ADMIN_NUMBER:
         central_instance = os.getenv('EVOLUTION_INSTANCE_NAME')
         headers = {"apikey": os.getenv('EVOLUTION_API_KEY'), "Content-Type": "application/json"}
-        url = f"{os.getenv('EVOLUTION_API_URL')}/message/sendText/{central_instance}"
+        url = f"{get_evo_url()}/message/sendText/{central_instance}"
         
         to_number = ADMIN_NUMBER if "@" in ADMIN_NUMBER else f"{ADMIN_NUMBER}@s.whatsapp.net"
         payload = {
@@ -341,15 +345,36 @@ def criar_e_configurar_instancia_automatica(phone_number):
     try:
         client_instance = re.sub(r'\D', '', phone_number)
         headers = {"apikey": os.getenv('EVOLUTION_API_KEY'), "Content-Type": "application/json"}
-        
-        requests.delete(f"{os.getenv('EVOLUTION_API_URL')}/instance/logout/{client_instance}", headers=headers, timeout=5)
-        requests.delete(f"{os.getenv('EVOLUTION_API_URL')}/instance/delete/{client_instance}", headers=headers, timeout=5)
+        api_url = get_evo_url()
+
+        requests.delete(f"{api_url}/instance/logout/{client_instance}", headers=headers, timeout=5)
+        requests.delete(f"{api_url}/instance/delete/{client_instance}", headers=headers, timeout=5)
         time.sleep(2)
         
-        url_create = f"{os.getenv('EVOLUTION_API_URL')}/instance/create"
+        url_create = f"{api_url}/instance/create"
         payload_create = {"instanceName": client_instance, "qrcode": True, "integration": "WHATSAPP-BAILEYS"}
         res_create = requests.post(url_create, headers=headers, json=payload_create, timeout=10)
         res_create.raise_for_status()
+
+        # 🔧 CORREÇÃO CRÍTICA: Configura o Webhook na nova instância criada!
+        webhook_global_url = os.getenv('WEBHOOK_GLOBAL_URL')
+        if not webhook_global_url:
+            # Fallback automático usando o domínio do Render se a variável não existir
+            render_host = os.getenv('RENDER_EXTERNAL_HOSTNAME')
+            webhook_global_url = f"https://{render_host}/webhook-global" if render_host else ""
+
+        if webhook_global_url:
+            url_webhook = f"{api_url}/webhook/set/{client_instance}"
+            payload_webhook = {
+                "enabled": True,
+                "url": webhook_global_url,
+                "byEvents": False,
+                "base64": False,
+                "events": ["MESSAGES_UPSERT"]
+            }
+            requests.post(url_webhook, headers=headers, json=payload_webhook, timeout=10)
+            print(f"✅ Webhook configurado com sucesso para a instância {client_instance}")
+
         return True
     except Exception as e:
         erro_msg = f"Erro ao automatizar criação para {phone_number}: {e}"
@@ -373,6 +398,7 @@ def save_chat_history(phone_number, history):
     except Exception as e:
         print(f"Erro ao salvar histórico: {e}")
 
+# 🔧 CORREÇÃO CRÍTICA: Isolamento da presença (sendPresence) para nunca cancelar a mensagem
 def send_whatsapp(to, text, instance_name=None):
     if not text or not str(text).strip():
         return False
@@ -380,27 +406,34 @@ def send_whatsapp(to, text, instance_name=None):
     if not instance_name:
         instance_name = os.getenv('EVOLUTION_INSTANCE_NAME')
         
+    api_url = get_evo_url()
     headers = {"apikey": os.getenv('EVOLUTION_API_KEY'), "Content-Type": "application/json"}
     
+    # 1. Tenta enviar "digitando..." de forma independente (sem travar se der erro)
     try:
-        url_presence = f"{os.getenv('EVOLUTION_API_URL')}/chat/sendPresence/{instance_name}"
-        requests.post(url_presence, headers=headers, json={"number": to, "presence": "composing"}, timeout=5)
-        time.sleep(1)
-        
-        url = f"{os.getenv('EVOLUTION_API_URL')}/message/sendText/{instance_name}"
-        res = requests.post(url, headers=headers, json={"number": to, "text": text}, timeout=10)
+        url_presence = f"{api_url}/chat/sendPresence/{instance_name}"
+        requests.post(url_presence, headers=headers, json={"number": to, "presence": "composing"}, timeout=3)
+    except Exception as e:
+        print(f"⚠️ Aviso: Falha ao enviar presença 'composing': {e}")
+
+    # 2. Envia o texto da mensagem principal
+    try:
+        url = f"{api_url}/message/sendText/{instance_name}"
+        res = requests.post(url, headers=headers, json={"number": to, "text": text}, timeout=12)
         res.raise_for_status()
+        print(f"✅ Mensagem enviada para {to} [{instance_name}]")
         return True
     except Exception as e:
-        print(f"ERRO ao enviar mensagem: {e}")
+        print(f"❌ ERRO Crítico ao enviar mensagem para {to} na instância '{instance_name}': {e}")
         return False
 
 def gerar_e_enviar_qrcode_central(phone_number):
     try:
         client_instance = re.sub(r'\D', '', phone_number)
         headers = {"apikey": os.getenv('EVOLUTION_API_KEY'), "Content-Type": "application/json"}
-        
-        url_connect = f"{os.getenv('EVOLUTION_API_URL')}/instance/connect/{client_instance}"
+        api_url = get_evo_url()
+
+        url_connect = f"{api_url}/instance/connect/{client_instance}"
         response_connect = requests.get(url_connect, headers=headers, timeout=10)
         response_connect.raise_for_status()
         
@@ -417,7 +450,7 @@ def gerar_e_enviar_qrcode_central(phone_number):
             base64_qrcode = base64_qrcode.split(",")[1]
 
         central_instance = os.getenv('EVOLUTION_INSTANCE_NAME')
-        url_send_media = f"{os.getenv('EVOLUTION_API_URL')}/message/sendMedia/{central_instance}"
+        url_send_media = f"{api_url}/message/sendMedia/{central_instance}"
         
         caption_text = (
             "🤖 *Aqui está o seu QR Code do Negobot Moz!* 🚀\n\n"
@@ -441,7 +474,7 @@ def gerar_e_enviar_qrcode_central(phone_number):
         return False
 
 def listar_grupos_instancia(instance_name):
-    url = f"{os.getenv('EVOLUTION_API_URL')}/group/fetchAllGroups/{instance_name}"
+    url = f"{get_evo_url()}/group/fetchAllGroups/{instance_name}"
     headers = {"apikey": os.getenv('EVOLUTION_API_KEY')}
     try:
         response = requests.get(url, headers=headers, timeout=15)
@@ -500,7 +533,6 @@ def enviar_lembretes_em_massa(periodo="dia"):
 
             tenant_id = re.sub(r'\D', '', phone)
 
-            # 🛑 VALIDAÇÃO: Se o cliente não estiver com o WhatsApp conectado na Evolution, pula o envio
             if not verificar_instancia_conectada(tenant_id):
                 print(f"⏭️ Lembrete ignorado para {tenant_id}: Instância não está conectada na Evolution API.")
                 continue
@@ -579,7 +611,7 @@ def universal_webhook():
 
 def processar_webhook_background(data):
     try:
-        event_name = data.get('event', '').lower()
+        event_name = str(data.get('event', '')).lower()
         if event_name not in ["messages.upsert", "messages_upsert"] or "data" not in data:
             return
 
@@ -596,13 +628,19 @@ def processar_webhook_background(data):
                     return
                 PROCESSADOS[msg_id] = agora_tempo
 
-        nome_instancia_atual = data.get('instance')
+        # 🔧 CORREÇÃO CRÍTICA: Trata 'instance' tanto como dicionário (v2) quanto string (v1)
+        instancia_raw = data.get('instance')
+        if isinstance(instancia_raw, dict):
+            nome_instancia_atual = instancia_raw.get('name') or instancia_raw.get('instanceName')
+        else:
+            nome_instancia_atual = instancia_raw
+
         central_instance = os.getenv('EVOLUTION_INSTANCE_NAME')
         if not nome_instancia_atual:
             return
 
         phone_number = key.get('remoteJid', '')
-        if not phone_number or '@g.us' in phone_number or (NUMERO_ASSISTANTE and NUMERO_ASSISTANTE in phone_number):
+        if not phone_number or '@g.us' in phone_number or '@broadcast' in phone_number:
             return
 
         message = msg_data.get('message', {})
@@ -778,7 +816,7 @@ Planos: Inicial (500 MT) e Avançado (1000 MT). M-Pesa: 855000929 (Abel Francisc
                 link_imagem = gerar_url_imagem_pollinations(prompt_ingles)
                 
                 payload = {"number": phone_number, "caption": f"✨ *Arte Gerada!*\n🎯 _{pedido}_", "media": link_imagem, "mediatype": "image", "fileName": "arte.jpg"}
-                requests.post(f"{os.getenv('EVOLUTION_API_URL')}/message/sendMedia/{nome_instancia_atual}", headers={"apikey": os.getenv('EVOLUTION_API_KEY'), "Content-Type": "application/json"}, json=payload, timeout=25)
+                requests.post(f"{get_evo_url()}/message/sendMedia/{nome_instancia_atual}", headers={"apikey": os.getenv('EVOLUTION_API_KEY'), "Content-Type": "application/json"}, json=payload, timeout=25)
                 return
 
             if document_message and phone_number.split('@')[0] in nome_instancia_atual:
