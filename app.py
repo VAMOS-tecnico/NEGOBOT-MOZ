@@ -66,8 +66,8 @@ ADMIN_NUMBER = os.getenv('ADMIN_NUMBER')
 # ==========================================
 def chamar_groq_rest(contents_payload, system_instruction="", temperature=0.1):
     """
-    Realiza chamadas de texto ultrarrápidas à API da Groq.
-    Sem bloqueios de IP/Servidor e sem erros de cota do Render.
+    Realiza chamadas de texto à API da Groq com sistema de retry automático
+    em caso de limite de requisições (HTTP 429).
     """
     if not GROQ_API_KEY:
         print("❌ GROQ_API_KEY não encontrada nas variáveis de ambiente.")
@@ -101,16 +101,25 @@ def chamar_groq_rest(contents_payload, system_instruction="", temperature=0.1):
         "max_tokens": 600
     }
 
-    try:
-        response = requests.post(url, headers=headers, json=payload, timeout=20)
-        data = response.json()
-        
-        if response.status_code == 200 and "choices" in data and len(data["choices"]) > 0:
-            return data["choices"][0]["message"]["content"].strip()
-        else:
-            print(f"❌ Erro na API do Groq (Status {response.status_code}): {data}")
-    except Exception as e:
-        print(f"❌ Exceção ao chamar Groq API: {e}")
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            response = requests.post(url, headers=headers, json=payload, timeout=20)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if "choices" in data and len(data["choices"]) > 0:
+                    return data["choices"][0]["message"]["content"].strip()
+            elif response.status_code == 429:
+                print(f"⚠️ [GROQ] Rate limit atingido (429). Tentativa {attempt + 1} de {max_retries}. A aguardar 2s...")
+                time.sleep(2)
+                continue
+            else:
+                print(f"❌ Erro na API do Groq (Status {response.status_code}): {response.text}")
+                break
+        except Exception as e:
+            print(f"❌ Exceção ao chamar Groq API: {e}")
+            time.sleep(1)
 
     return "Desculpe, estamos a receber muitas mensagens ao mesmo tempo. Por favor, tente novamente dentro de alguns segundos!"
 
@@ -229,7 +238,8 @@ def notificar_erro_admin(erro_msg):
 # ==========================================
 #   📄 EXTRACTION MODULES (PDF, EXCEL & ART)
 # ==========================================
-def extrair_texto_pdf_url(pdf_url):
+def extrair_texto_pdf_url(pdf_url, max_caracteres=10000):
+    """Extrai texto de um PDF limitando o tamanho total para proteger o contexto da IA."""
     try:
         response = requests.get(pdf_url, timeout=25)
         if response.status_code == 200:
@@ -240,12 +250,16 @@ def extrair_texto_pdf_url(pdf_url):
                 conteudo_pagina = page.extract_text()
                 if conteudo_pagina:
                     texto_completo += f"\n--- PÁGINA {idx} ---\n" + conteudo_pagina
+                if len(texto_completo) >= max_caracteres:
+                    texto_completo = texto_completo[:max_caracteres] + "\n\n[...Texto do PDF truncado para otimizar tamanho...]"
+                    break
             return texto_completo
     except Exception as e:
         print(f"❌ Erro ao ler PDF da URL {pdf_url}: {e}")
     return ""
 
-def extrair_texto_excel_url(excel_url):
+def extrair_texto_excel_url(excel_url, max_linhas_por_aba=100, max_caracteres=10000):
+    """Extrai dados do Excel limitando linhas por aba e total de carateres."""
     try:
         response = requests.get(excel_url, timeout=25)
         if response.status_code == 200:
@@ -254,7 +268,11 @@ def extrair_texto_excel_url(excel_url):
             texto_completo = ""
             for nome_aba, df in todas_abas.items():
                 texto_completo += f"\n--- ABA EXCEL: {nome_aba} ---\n"
-                texto_completo += df.to_string(index=False) + "\n"
+                df_resumido = df.head(max_linhas_por_aba)
+                texto_completo += df_resumido.to_string(index=False) + "\n"
+                if len(texto_completo) >= max_caracteres:
+                    texto_completo = texto_completo[:max_caracteres] + "\n\n[...Dados do Excel truncados para otimizar tamanho...]"
+                    break
             return texto_completo
     except Exception as e:
         print(f"❌ Erro ao ler Excel da URL {excel_url}: {e}")
@@ -277,8 +295,10 @@ def criar_prompt_profissional_groq(pedido_utilizador):
         return pedido_utilizador
 
 def gerar_url_imagem_pollinations(prompt_otimizado):
+    """Gera URL com seed aleatório para garantir imagens variadas."""
     prompt_encoded = urllib.parse.quote(prompt_otimizado)
-    return f"https://pollinations.ai/p/{prompt_encoded}?width=1024&height=1024&model=flux&seed=42"
+    seed_aleatorio = random.randint(1, 999999)
+    return f"https://pollinations.ai/p/{prompt_encoded}?width=1024&height=1024&model=flux&seed={seed_aleatorio}"
 
 # ==========================================
 #   ⏱️ VERIFICAÇÃO AUTOMÁTICA DE ESPERA HUMANA
@@ -290,12 +310,9 @@ def verificar_espera_humano_isolado(instancia_cliente, numero_remetente):
         doc = conversa_ref.get()
         if doc.exists:
             dados = doc.to_dict()
-            # Se continuar em modo humano e o atendente não respondeu
             if dados.get("status_atendimento") == "humano" and dados.get("ultima_mensagem_por") == "cliente_final":
-                # 1. Reativa automaticamente o bot no Firestore
                 conversa_ref.set({"status_atendimento": "bot", "ultima_interacao": datetime.now(timezone.utc)}, merge=True)
                 
-                # 2. Envia a mensagem de reativação para o cliente
                 msg_aviso = (
                     "🕒 *AVISO DE ATENDIMENTO* ⚠️\n\n"
                     "Todos os nossos assistentes humanos estão ocupados no momento. "
@@ -549,12 +566,30 @@ def processar_webhook_background(data):
         agora = datetime.now(timezone.utc)
         is_from_me = key.get('fromMe') is True or str(key.get('fromMe')).lower() == 'true'
 
+        # =======================================================
+        # 👑 TRATAMENTO DE MENSAGENS ENVIADAS PELO PRÓPRIO DONO (FROM ME)
+        # =======================================================
         if is_from_me:
-            if nome_instancia_atual != central_instance:
-                conversa_ref = db.collection('clientes_bot').document(nome_instancia_atual).collection('conversas').document(phone_number)
-                conversa_ref.set({"status_atendimento": "bot", "ultima_mensagem_por": "atendente", "ultima_interacao": agora}, merge=True)
-                conversa_ref.collection('historico').add({"role": "atendente", "text": message_text, "timestamp": agora})
-            return
+            # Verifica se existem sessões de seleção de grupos ou disparos pendentes
+            doc_map = db.collection("clientes_bot").document(nome_instancia_atual).collection("temp_grupos").document("mapeamento").get()
+            doc_temp = db.collection("clientes_bot").document(nome_instancia_atual).collection("temp_listas").document("dados").get()
+            
+            # Identifica se a mensagem enviada por si é um comando operacional do robô
+            eh_comando_proprio = (
+                msg_clean.startswith('/') or 
+                msg_clean.startswith('#') or 
+                (msg_clean == "sim" and doc_temp.exists) or 
+                (doc_map.exists and re.match(r'^[\d\s,]+$', msg_clean)) or
+                document_message is not None
+            )
+
+            # Se NÃO for um comando operacional, regista a conversa de atendimento humano e encerra
+            if not eh_comando_proprio:
+                if nome_instancia_atual != central_instance:
+                    conversa_ref = db.collection('clientes_bot').document(nome_instancia_atual).collection('conversas').document(phone_number)
+                    conversa_ref.set({"status_atendimento": "bot", "ultima_mensagem_por": "atendente", "ultima_interacao": agora}, merge=True)
+                    conversa_ref.collection('historico').add({"role": "atendente", "text": message_text, "timestamp": agora})
+                return
 
         # =======================================================
         # 🏢 FLOW A: CENTRAL SALES INSTANCE
@@ -730,6 +765,10 @@ Planos: Inicial (500 MT) e Avançado (1000 MT). M-Pesa: 855000929 (Abel Francisc
                     db.collection("clientes_bot").document(nome_instancia_atual).collection("temp_listas").document("dados").delete()
                     return
 
+            # Se a mensagem veio do próprio dono e já passou pelos comandos acima, não envia para a IA
+            if is_from_me:
+                return
+
             # =======================================================
             # 🔄 GESTÃO DE ESTADO DE ATENDIMENTO HUMANO
             # =======================================================
@@ -744,7 +783,6 @@ Planos: Inicial (500 MT) e Avançado (1000 MT). M-Pesa: 855000929 (Abel Francisc
                 historico_ref.add({"role": "user", "text": message_text, "timestamp": agora})
                 return
 
-            # Gatilhos explícitos para transferência de atendente
             gatilhos_humano = ["falar com atendente", "suporte humano", "atendente", "humano", "#suporte", "assistente humano"]
             if any(g in msg_clean for g in gatilhos_humano):
                 conversa_ref.set({"status_atendimento": "humano", "ultima_mensagem_por": "cliente_final", "ultima_interacao": agora}, merge=True)
@@ -773,7 +811,6 @@ Planos: Inicial (500 MT) e Avançado (1000 MT). M-Pesa: 855000929 (Abel Francisc
 
             diretrizes = dados_cliente.get("diretrizes_corporativas", default_rules)
             
-            # Instrução reforçada para proibir a transição humana em saudações e dúvidas simples
             sys_instruction = f"""Você é um assistente comercial profissional e focado em negócios.
 Comunicação em Português de Moçambique, tom sério e corporativo.
 Respostas curtas e diretas (2 a 3 linhas por bloco).
@@ -788,7 +825,6 @@ REGRA OBRIGATÓRIA DE TRANSIÇÃO:
             response_text = chamar_groq_rest(contents, system_instruction=sys_instruction, temperature=0.1)
             historico_ref.add({"role": "user", "text": message_text, "timestamp": agora})
 
-            # Verifica transição humana (com proteção para evitar ativação por saudações)
             e_saudacao = any(s in msg_clean for s in ["bom dia", "boa tarde", "boa noite", "olá", "ola", "oy", "oi"])
             
             if "[TRANSICAO_HUMANO]" in response_text and not e_saudacao:
@@ -804,7 +840,6 @@ REGRA OBRIGATÓRIA DE TRANSIÇÃO:
                 threading.Thread(target=verificar_espera_humano_isolado, args=(nome_instancia_atual, phone_number)).start()
                 return
 
-            # Resposta normal do robô
             if response_text:
                 response_text = response_text.replace("[TRANSICAO_HUMANO]", "").strip()
                 send_whatsapp(phone_number, response_text, instance_name=nome_instancia_atual)
