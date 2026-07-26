@@ -54,8 +54,8 @@ db = firestore.client()
 #   CONFIGURAÇÕES DA API DO GEMINI (REST)
 # ==========================================
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
-# Ajustado para gemini-1.5-flash para compatibilidade com a REST API v1beta
-MODEL_NAME = 'gemini-1.5-flash'  
+# Ajustado para gemini-2.0-flash para compatibilidade com a REST API v1beta
+MODEL_NAME = 'gemini-2.0-flash'  
 
 NUMERO_ASSISTANTE = os.getenv('ASSISTANT_NUMBER')
 ADMIN_NUMBER = os.getenv('ADMIN_NUMBER')
