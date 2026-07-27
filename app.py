@@ -1,6 +1,3 @@
-
----
-
 #### `app.py`
 ```python
 from flask import Flask
