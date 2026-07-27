@@ -1,5 +1,3 @@
-#### `app.py`
-python
 from flask import Flask
 from config import configure_app
 from routes import register_routes
