@@ -14,4 +14,3 @@ def configure_app(app):
     app.config["WEBHOOK_URL"] = os.getenv("WEBHOOK_URL")
     app.config["ADMIN_NUMBER"] = os.getenv("ADMIN_NUMBER")
     app.config["ASSISTANT_NUMBER"] = os.getenv("ASSISTANT_NUMBER")
-
