@@ -1,5 +1,4 @@
-from app import create_app
+from app import app
 
-app = create_app()
-
-# Para WSGI servers (gunicorn): `gunicorn main:app`
+# Para servidores WSGI que prefiram main:app
+# gunicorn main:app --bind 0.0.0.0:$PORT
