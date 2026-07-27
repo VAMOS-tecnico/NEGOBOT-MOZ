@@ -27,7 +27,7 @@ TIMEOUT_HUMANO_MINUTOS = int(os.getenv('TIMEOUT_HUMANO_MINUTOS', 2))
 
 @app.route('/', methods=['GET'])
 def health_check():
-    return "O ecossistema Multilocatário Negobot Moz está 100% operacional! 🚀", 200
+    return "O ecossistema Multilocatário Negobot Moz está 100% operacional, blindado contra alucinações e com memória protegida! 🚀", 200
 
 # ==========================================
 #   📦 INICIALIZAÇÃO SEGURA DO FIREBASE
@@ -66,8 +66,9 @@ ADMIN_NUMBER = os.getenv('ADMIN_NUMBER')
 
 # ==========================================
 #   🌐 CHAMADA REST DIRETA PARA GROQ API
+#   (temperature=0.0 para determinismo estrito)
 # ==========================================
-def chamar_groq_rest(contents_payload, system_instruction="", temperature=0.1):
+def chamar_groq_rest(contents_payload, system_instruction="", temperature=0.0):
     if not GROQ_API_KEY:
         print("❌ GROQ_API_KEY não encontrada nas variáveis de ambiente.")
         return ""
@@ -114,11 +115,13 @@ def chamar_groq_rest(contents_payload, system_instruction="", temperature=0.1):
     return "Desculpe, estamos a receber muitas mensagens. Por favor, tente novamente em instantes!"
 
 # ==========================================
-#   🎙️ TRANSCRIÇÃO DE ÁUDIO (WHISPER)
+#   🎙️ TRANSCRIÇÃO DE ÁUDIO (WHISPER) PROTEGIDA
 # ==========================================
 def transcrever_audio_groq(url_audio_whatsapp):
     if not GROQ_API_KEY:
         return ""
+    
+    temp_path = None
     try:
         headers_evo = {"apikey": os.getenv('EVOLUTION_API_KEY')}
         res = requests.get(url_audio_whatsapp, headers=headers_evo, timeout=25)
@@ -140,11 +143,18 @@ def transcrever_audio_groq(url_audio_whatsapp):
                 }
                 response = requests.post(url_whisper, headers=headers_groq, files=files, timeout=30)
                 
-            os.remove(temp_path)
             if response.status_code == 200:
                 return response.json().get("text", "")
     except Exception as e:
         print(f"❌ Erro ao transcrever áudio: {e}")
+    finally:
+        # Garante a eliminação do ficheiro temporário SEMPRE
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except Exception as e:
+                print(f"⚠️ Aviso: Não foi possível remover o ficheiro temporário {temp_path}: {e}")
+                
     return ""
 
 # ==========================================
@@ -235,7 +245,7 @@ def extrair_texto_excel_url(excel_url):
 
 def criar_prompt_profissional_groq(pedido_utilizador):
     sys_instruction = "Converta o pedido num prompt detalhado em INGLÊS para marketing/publicidade moçambicana. Responda APENAS com o prompt em inglês."
-    return chamar_groq_rest([{"parts": [{"text": pedido_utilizador}]}], system_instruction=sys_instruction, temperature=0.7) or pedido_utilizador
+    return chamar_groq_rest([{"parts": [{"text": pedido_utilizador}]}], system_instruction=sys_instruction, temperature=0.0) or pedido_utilizador
 
 def gerar_url_imagem_pollinations(prompt_otimizado):
     return f"https://pollinations.ai/p/{urllib.parse.quote(prompt_otimizado)}?width=1024&height=1024&model=flux&seed=42"
@@ -439,7 +449,6 @@ def processar_webhook_background(data):
                 gerar_e_enviar_qrcode_central(phone_number)
                 return
 
-            # Se a empresa enviar um PDF ou Excel na central, atualizamos os dados/produtos dela no Firestore
             if document_message:
                 url_doc = document_message.get('url')
                 file_name = document_message.get('fileName', '').lower()
@@ -479,7 +488,6 @@ def processar_webhook_background(data):
                     gerar_e_enviar_qrcode_central(phone_number)
                 return
 
-            # Reativação automática contra "apagão" após boa noite
             status_atendimento = chat_dados.get("status_atendimento", "bot")
             if status_atendimento == "humano":
                 if checar_timeout_atendimento_humano(chat_ref, chat_dados, agora):
@@ -509,7 +517,7 @@ def processar_webhook_background(data):
             sys_instruction_central = """Você é o assistente comercial e de suporte oficial do Negobot Moz.
 Ajude os empresários a configurar os seus catálogos, preços e serviços. Responda em Português de Moçambique com dinamismo e cortesia."""
 
-            response_text = chamar_groq_rest(contents, system_instruction=sys_instruction_central, temperature=0.3)
+            response_text = chamar_groq_rest(contents, system_instruction=sys_instruction_central, temperature=0.0)
             if response_text:
                 contents.append({"role": "assistant", "parts": [{"text": response_text}]})
                 save_chat_history(phone_number, [{"role": c["role"], "parts": c["parts"]} for c in contents[-10:]])
@@ -520,28 +528,25 @@ Ajude os empresários a configurar os seus catálogos, preços e serviços. Resp
         # 🤖 FLUXO B: ATENDIMENTO MULTILOCATÁRIO AO CLIENTE FINAL
         # =======================================================
         else:
-            # 1. Identifica a empresa dona desta instância no Firestore (Coleção 'empresas')
             empresa_doc_ref = db.collection('empresas').document(nome_instancia_atual)
             empresa_doc = empresa_doc_ref.get()
 
-            default_rules = "És o assistente virtual de atendimento da empresa. Responda com base nos serviços e preços registados."
+            default_rules = "Ainda não foram cadastradas informações específicas para esta empresa."
 
             if not empresa_doc.exists:
-                # Se a instância existe mas não tem documento na coleção 'empresas', criamos um padrão
                 dados_empresa = {
                     "empresa_id": nome_instancia_atual,
                     "status_plano": "demonstracao",
                     "data_ativacao": agora,
                     "data_expiracao": agora + timedelta(days=2),
                     "diretrizes_corporativas": default_rules,
-                    "servicos": "Serviços gerais de atendimento",
-                    "precos": "Sob consulta"
+                    "servicos": "Informações indisponíveis",
+                    "precos": "Informações indisponíveis"
                 }
                 empresa_doc_ref.set(dados_empresa, merge=True)
             else:
                 dados_empresa = empresa_doc.to_dict()
 
-            # Verificação de validade do plano da empresa locatária
             status_plano = dados_empresa.get("status_plano", "demonstracao")
             data_expiracao = dados_empresa.get("data_expiracao")
             if data_expiracao:
@@ -572,7 +577,6 @@ Ajude os empresários a configurar os seus catálogos, preços e serviços. Resp
                 requests.post(f"{os.getenv('EVOLUTION_API_URL')}/message/sendMedia/{nome_instancia_atual}", headers={"apikey": os.getenv('EVOLUTION_API_KEY'), "Content-Type": "application/json"}, json=payload, timeout=25)
                 return
 
-            # Permitir que a própria empresa envie atualizações de produtos/serviços via chat (Merge no Firestore)
             if phone_number.split('@')[0] in nome_instancia_atual and (msg_clean.startswith("adicionar produto") or msg_clean.startswith("atualizar preço") or msg_clean.startswith("novo serviço")):
                 empresa_doc_ref.set({
                     "atualizacoes_recentes_chat": firestore.ArrayUnion([{"texto": message_text, "data": agora}]),
@@ -581,7 +585,6 @@ Ajude os empresários a configurar os seus catálogos, preços e serviços. Resp
                 send_whatsapp(phone_number, "✅ *Catálogo atualizado com sucesso no Firestore (Multi-tenant)!*", instance_name=nome_instancia_atual)
                 return
 
-            # Reativação automática cliente final
             conversa_doc = conversa_ref.get()
             conversa_dados = conversa_doc.to_dict() if conversa_doc.exists else {}
             status_atendimento = conversa_dados.get("status_atendimento", "bot")
@@ -605,11 +608,11 @@ Ajude os empresários a configurar os seus catálogos, preços e serviços. Resp
                 send_whatsapp(phone_number, f"🔔 *Atendimento Transferido:* Encaminhado ao operador da empresa. Se não houver resposta em {TIMEOUT_HUMANO_MINUTOS} minutos, o assistente retomará.", instance_name=nome_instancia_atual)
                 return
 
-            # CARREGA DADOS ESPECÍFICOS DA EMPRESA DO FIRESTORE PARA A IA
+            # CARREGA DADOS DO FIRESTORE
             diretrizes = dados_empresa.get("diretrizes_corporativas", default_rules)
             servicos = dados_empresa.get("servicos", "Não especificado")
             precos = dados_empresa.get("precos", "Sob consulta")
-            horario = dados_empresa.get("horario_funcionamento", "Horário comercial padrão")
+            horario = dados_empresa.get("horario_funcionamento", "Horário não cadastrado")
             excel_catalogo = dados_empresa.get("servicos_catalogo_excel", "")
 
             docs_h = historico_ref.order_by('timestamp', direction=firestore.Query.DESCENDING).limit(10).stream()
@@ -622,10 +625,12 @@ Ajude os empresários a configurar os seus catálogos, preços e serviços. Resp
                 contents.append({"role": role_g, "parts": [{"text": m.get('text', '')}]})
             contents.append({"role": "user", "parts": [{"text": message_text}]})
 
-            sys_instruction = f"""Você é o assistente virtual oficial e exclusivo desta empresa locatária.
-Responda em Português de Moçambique com tom profissional, cortês e objetivo.
+            # =====================================================================
+            # 🛠️ SYSTEM PROMPT RIGOROSO ANTI-ALUCINAÇÃO (REGRAS SOLICITADAS)
+            # =====================================================================
+            sys_instruction = f"""Você é o assistente virtual de atendimento ao cliente desta empresa. Responda em Português de Moçambique com tom profissional, cortês e objetivo.
 
-=== DADOS CARREGADOS DO FIRESTORE (BASE DA EMPRESA) ===
+=== DADOS CARREGADOS DA BASE DE DADOS DO FIRESTORE (CONTEXTO OFICIAL) ===
 DIRETRIZES E PRODUTOS:
 {diretrizes}
 
@@ -640,28 +645,30 @@ HORÁRIO DE FUNCIONAMENTO:
 
 CATÁLOGO ADICIONAL (EXCEL):
 {excel_catalogo}
-=====================================================
+=====================================================================
 
-REGRAS:
-- Responda ao cliente final utilizando exclusivamente os dados e catálogos acima desta empresa específica.
-- Nunca ignore novas saudações (como 'Bom dia', 'Boa noite', 'Oy'). Retome a conversa de forma ativa.
-- NUNCA use a tag [TRANSICAO_HUMANO] em saudações simples.
-- Apenas use [TRANSICAO_HUMANO] se o cliente exigir expressamente falar com um humano."""
+REGRAS RÍGIDAS DE ATENDIMENTO (OBRIGATÓRIAS E INEGOCIÁVEIS):
+1. Responda EXCLUSIVAMENTE com base nos dados fornecidos na base de dados/contexto do Firestore acima.
+2. NUNCA invente, deduza ou use conhecimento geral sobre preços, horários, serviços, localização ou regras da empresa.
+3. Se a informação pedida pelo cliente NÃO estiver na base de dados acima, você DEVE responder exatamente:
+"Desculpe, não tenho essa informação no meu sistema no momento. Gostaria que eu te conectasse com um atendente humano?"
+4. Sempre que a informação NÃO estiver na base de dados OU o cliente pedir expressamente um atendente humano, você DEVE obrigatoriamente incluir a tag [TRANSICAO_HUMANO] no final absoluto da resposta.
+5. Em saudações simples (como 'Olá', 'Bom dia', 'Boa tarde', 'Boa noite'), responda de forma cortês apresentando a empresa, mas sem inventar dados não cadastrados e sem acionar a tag a menos que seja solicitada informação ausente."""
 
-            response_text = chamar_groq_rest(contents, system_instruction=sys_instruction, temperature=0.1)
+            # Chamada com temperature=0.0 garantindo resposta estritamente factual
+            response_text = chamar_groq_rest(contents, system_instruction=sys_instruction, temperature=0.0)
             historico_ref.add({"role": "user", "text": message_text, "timestamp": agora})
 
-            e_saudacao = any(s in msg_clean for s in ["bom dia", "boa tarde", "boa noite", "olá", "ola", "oi", "oy"])
-            
-            if "[TRANSICAO_HUMANO]" in response_text and not e_saudacao:
-                response_text = response_text.replace("[TRANSICAO_HUMANO]", "").strip()
+            if "[TRANSICAO_HUMANO]" in response_text:
+                response_text_limpo = response_text.replace("[TRANSICAO_HUMANO]", "").strip()
                 conversa_ref.set({"status_atendimento": "humano", "ultima_mensagem_por": "cliente_final", "ultima_interacao": agora}, merge=True)
-                send_whatsapp(phone_number, response_text or "🔔 Atendimento transferido para a equipa da empresa. Aguarde por favor.", instance_name=nome_instancia_atual)
-                historico_ref.add({"role": "assistant", "text": response_text, "timestamp": agora})
+                
+                texto_envio = response_text_limpo or "Desculpe, não tenho essa informação no meu sistema no momento. Gostaria que eu te conectasse com um atendente humano?"
+                send_whatsapp(phone_number, texto_envio, instance_name=nome_instancia_atual)
+                historico_ref.add({"role": "assistant", "text": texto_envio, "timestamp": agora})
                 return
 
             if response_text:
-                response_text = response_text.replace("[TRANSICAO_HUMANO]", "").strip()
                 send_whatsapp(phone_number, response_text, instance_name=nome_instancia_atual)
                 historico_ref.add({"role": "assistant", "text": response_text, "timestamp": agora})
                 conversa_ref.set({"status_atendimento": "bot", "ultima_mensagem_por": "bot", "ultima_interacao": agora}, merge=True)
