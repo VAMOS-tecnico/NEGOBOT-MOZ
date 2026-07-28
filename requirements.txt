@@ -4,9 +4,9 @@ requests==2.31.0
 gunicorn==21.2.0
 firebase-admin==6.5.0
 flask-cors==4.0.0
-pypdf==3.17.0
-pillow==10.0.0
-pandas==2.1.0
-openpyxl==3.10.0
-groq==0.9.0
-setuptools==68.0.0
+pypdf
+pillow
+pandas
+openpyxl
+groq
+setuptools
