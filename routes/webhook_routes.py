@@ -72,11 +72,11 @@ def processar_webhook_background(data):
         if event_name not in ["messages.upsert", "messages_upsert"]:
             return
 
-        data_payload = data.get('data', {})
+        data_payload = data.get('data', {}) if isinstance(data.get('data'), dict) else data
         if not data_payload:
             return
 
-        key = data_payload.get('key', {})
+        key = data_payload.get('key', {}) if isinstance(data_payload, dict) else {}
         is_from_me = key.get('fromMe', False)
 
         # Ignora mensagens enviadas pelo próprio bot para evitar loops infinitos
@@ -91,21 +91,34 @@ def processar_webhook_background(data):
                     return
                 PROCESSADOS[msg_id] = datetime.now(timezone.utc).timestamp()
 
-        # Extração das variáveis necessárias exigidas pelos fluxos
+        # Extração precisa das variáveis necessárias
         message_text = extrair_texto_mensagem(data_payload)
         msg_clean = message_text.strip().lower()
         agora = datetime.now(timezone.utc)
 
-        instance_name = data.get('instance', Config.EVOLUTION_INSTANCE_NAME)
+        instance_name = data.get('instance') or data.get('instanceId') or Config.EVOLUTION_INSTANCE_NAME
+        phone_number = key.get('remoteJid') or key.get('participant') or key.get('id') or ''
 
-        # Encaminha com os 5 argumentos exigidos pelo central_flow
+        # Extração de anexos/documentos
+        message_obj = data_payload.get('message', {}) if isinstance(data_payload, dict) else {}
+        document_message = (
+            message_obj.get('documentMessage') or 
+            message_obj.get('documentWithCaptionMessage', {}).get('message', {}).get('documentMessage')
+        )
+
+        # Encaminhamento seguro com argumentos nomeados
         if instance_name == Config.EVOLUTION_INSTANCE_NAME:
             process_central_flow(data, message_text, msg_clean, is_from_me, agora)
         else:
-            try:
-                process_client_flow(data, message_text, msg_clean, is_from_me, agora)
-            except TypeError:
-                process_client_flow(data)
+            process_client_flow(
+                nome_instancia_atual=instance_name,
+                phone_number=phone_number,
+                message_text=message_text,
+                msg_clean=msg_clean,
+                document_message=document_message,
+                is_from_me=is_from_me,
+                agora=agora
+            )
 
     except Exception as e:
         logger.error(f"Erro ao processar webhook em background: {str(e)}", exc_info=True)
