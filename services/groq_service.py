@@ -7,8 +7,8 @@ logger = logging.getLogger(__name__)
 
 def chamar_groq_rest(historico_mensagens, system_prompt=None):
     """
-    Envia as mensagens para a API da Groq garantindo que a instrução do sistema (system_prompt)
-    fique estritamente no topo do payload (role: system) e reduz a temperatura para evitar desvios.
+    Envia as mensagens para a API da Groq.
+    Possui tratamento para o limite de requisições (Erro 429) e fallback de modelo.
     """
     api_key = getattr(Config, 'GROQ_API_KEY', None) or os.getenv('GROQ_API_KEY')
     if not api_key:
@@ -23,14 +23,14 @@ def chamar_groq_rest(historico_mensagens, system_prompt=None):
 
     payload_messages = []
 
-    # 1. INJEÇÃO OBRIGATÓRIA DA INSTRUÇÃO DE SISTEMA NO TOPO
+    # 1. Injeção da instrução de sistema
     if system_prompt:
         payload_messages.append({
             "role": "system",
             "content": str(system_prompt).strip()
         })
 
-    # 2. ADIÇÃO DO HISTÓRICO DE MENSAGENS FORMATADO
+    # 2. Histórico de mensagens
     if isinstance(historico_mensagens, list):
         for msg in historico_mensagens:
             if isinstance(msg, dict) and "role" in msg and "content" in msg:
@@ -40,21 +40,30 @@ def chamar_groq_rest(historico_mensagens, system_prompt=None):
                     "content": str(msg["content"])
                 })
 
+    # Modelo principal e payload
     payload = {
         "model": "llama-3.3-70b-versatile",
         "messages": payload_messages,
-        "temperature": 0.2,  # Temperatura baixa força o modelo a seguir rigorosamente as regras comerciais
+        "temperature": 0.2,
         "max_tokens": 400
     }
 
     try:
-        response = requests.post(url, headers=headers, json=payload, timeout=30)
+        response = requests.post(url, headers=headers, json=payload, timeout=25)
+        
+        # Tratamento do limite de requisições (Erro 429) -> Redireciona para modelo rápido 8B
+        if response.status_code == 429:
+            logger.warning("Limite do modelo 70B atingido. A alternar para modelo rápido (8B)...")
+            payload["model"] = "llama-3.1-8b-instant"
+            response = requests.post(url, headers=headers, json=payload, timeout=25)
+
         response.raise_for_status()
         data = response.json()
         return data["choices"][0]["message"]["content"].strip()
+
     except Exception as e:
-        logger.error(f"Erro ao chamar a API da Groq: {e}", exc_info=True)
-        return "Olá! Sou o assistente da Negobot Moz. A nossa plataforma ajuda o seu negócio a atender clientes no WhatsApp 24/7. Digite *TESTE* para criar o seu robô grátis!"
+        logger.error(f"Erro ao chamar a API da Groq: {e}")
+        return "Olá! O nosso sistema está a processar muitas mensagens no momento. Por favor, envie a sua dúvida novamente em instantes!"
 
 def transcrever_audio_groq(audio_file):
     """Transcreve áudio enviado pelos utilizadores via Whisper na Groq."""
