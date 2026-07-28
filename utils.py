@@ -1,121 +1,188 @@
-# utils.py
-"""
-Utilitários comuns para o projeto NEGOBOT-MOZ.
-"""
-import logging
-import re
-import time
-from datetime import datetime, timezone
-from functools import wraps
-from typing import Any, Callable, Iterable, List, Optional, Tuple, Dict
+import os
+import io
+import base64
+import requests
+import urllib.parse
+import tempfile
+from pypdf import PdfReader
+import pandas as pd
+from config import GROQ_API_KEY, GROQ_MODEL, GROQ_VISION_MODEL
 
-def setup_logger(level: int = logging.INFO, name: str = "negobot"):
-    logger = logging.getLogger(name)
-    if not logger.handlers:
-        handler = logging.StreamHandler()
-        formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
-        handler.setFormatter(formatter)
-        logger.addHandler(handler)
-    logger.setLevel(level)
-    return logger
-
-logger = setup_logger()
-
-def clean_number(raw: str) -> str:
-    if not raw:
+def chamar_groq_rest(contents_payload, system_instruction="", temperature=0.1):
+    if not GROQ_API_KEY:
+        print("❌ GROQ_API_KEY não encontrada nas variáveis de ambiente.")
         return ""
-    return re.sub(r'\D', '', str(raw))
 
-def format_phone_mz(raw: str) -> str:
-    n = clean_number(raw)
-    if not n:
-        return ""
-    if n.startswith("258"):
-        return n
-    if len(n) == 9:
-        return "258" + n
-    return n
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json"
+    }
 
-def is_group_jid(jid: str) -> bool:
-    if not jid:
-        return False
-    return "@g.us" in jid or jid.endswith("@g.us")
+    messages = []
+    if system_instruction:
+        messages.append({"role": "system", "content": system_instruction})
 
-def validate_phone_mz(raw: str) -> bool:
-    n = clean_number(raw)
-    return bool(re.match(r'^(258)(84|85)\d{7}$', n))
+    for item in contents_payload:
+        role = item.get("role", "user")
+        if role in ["model", "assistant", "atendente"]:
+            role = "assistant"
+        
+        parts = item.get("parts", [])
+        texto_msg = "".join([p.get("text", "") for p in parts if isinstance(p, dict) and "text" in p])
+        
+        if texto_msg:
+            messages.append({"role": role, "content": texto_msg})
 
-def safe_extract_numbers(text: str) -> List[str]:
-    if not text:
-        return []
-    return re.findall(r'\d{2,}', text)
+    payload = {
+        "model": GROQ_MODEL,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": 600
+    }
 
-def chunk_text(text: str, max_len: int = 1000) -> List[str]:
-    if not text:
-        return []
-    words = text.split()
-    chunks = []
-    cur = []
-    cur_len = 0
-    for w in words:
-        if cur_len + len(w) + 1 > max_len and cur:
-            chunks.append(" ".join(cur))
-            cur = [w]
-            cur_len = len(w) + 1
-        else:
-            cur.append(w)
-            cur_len += len(w) + 1
-    if cur:
-        chunks.append(" ".join(cur))
-    return chunks
-
-def safe_get(d: Dict, key: str, default: Any = None) -> Any:
     try:
-        return d.get(key, default)
-    except Exception:
-        return default
+        response = requests.post(url, headers=headers, json=payload, timeout=20)
+        data = response.json()
+        
+        if response.status_code == 200 and "choices" in data and len(data["choices"]) > 0:
+            return data["choices"][0]["message"]["content"].strip()
+        else:
+            print(f"❌ Erro na API do Groq (Status {response.status_code}): {data}")
+    except Exception as e:
+        print(f"❌ Exceção ao chamar Groq API: {e}")
 
-def now_utc() -> datetime:
-    return datetime.now(timezone.utc)
+    return "Desculpe, estamos a receber muitas mensagens ao mesmo tempo. Por favor, tente novamente dentro de alguns segundos!"
 
-def iso_utc(dt: Optional[datetime] = None) -> str:
-    dt = dt or now_utc()
-    return dt.astimezone(timezone.utc).isoformat()
+def transcrever_audio_groq(url_audio_whatsapp):
+    if not GROQ_API_KEY:
+        return ""
+    try:
+        headers_evo = {"apikey": os.getenv('EVOLUTION_API_KEY')}
+        res = requests.get(url_audio_whatsapp, headers=headers_evo, timeout=25)
+        if res.status_code != 200:
+            res = requests.get(url_audio_whatsapp, timeout=25)
+            
+        if res.status_code == 200:
+            with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as temp_audio:
+                temp_audio.write(res.content)
+                temp_path = temp_audio.name
 
-def retry(times: int = 3, delay: float = 1.0, backoff: float = 2.0, exceptions: Tuple = (Exception,)):
-    def deco(func: Callable):
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            _times = times
-            _delay = delay
-            last_exc = None
-            for attempt in range(_times):
-                try:
-                    return func(*args, **kwargs)
-                except exceptions as e:
-                    last_exc = e
-                    logger.warning("Retry %s/%s para %s devido a: %s", attempt + 1, _times, func.__name__, e)
-                    time.sleep(_delay)
-                    _delay *= backoff
-            logger.error("Falha após %s tentativas em %s: %s", _times, func.__name__, last_exc)
-            raise last_exc
-        return wrapper
-    return deco
+            headers_groq = {"Authorization": f"Bearer {GROQ_API_KEY}"}
+            url_whisper = "https://api.groq.com/openai/v1/audio/transcriptions"
+            
+            with open(temp_path, "rb") as audio_file:
+                files = {
+                    "file": (temp_path, audio_file, "audio/ogg"),
+                    "model": (None, "whisper-large-v3")
+                }
+                response = requests.post(url_whisper, headers=headers_groq, files=files, timeout=30)
+                
+            os.remove(temp_path)
+            if response.status_code == 200:
+                texto = response.json().get("text", "")
+                print(f"🎙️ Áudio Transcrito: {texto}")
+                return texto
+    except Exception as e:
+        print(f"❌ Erro ao transcrever áudio: {e}")
+    return ""
 
-def looks_like_mpesa(text: str) -> Optional[str]:
-    if not text:
-        return None
-    m = re.search(r'(84|85)\d{7}', text)
-    return m.group(0) if m else None
+def analisar_imagem_groq(url_imagem, instrucao="Analise e extraia todas as informações relevantes desta imagem ou comprovativo:"):
+    if not GROQ_API_KEY:
+        return ""
+    try:
+        headers_evo = {"apikey": os.getenv('EVOLUTION_API_KEY')}
+        res = requests.get(url_imagem, headers=headers_evo, timeout=25)
+        if res.status_code != 200:
+            res = requests.get(url_imagem, timeout=25)
+            
+        if res.status_code == 200:
+            image_base64 = base64.b64encode(res.content).decode('utf-8')
+            
+            url = "https://api.groq.com/openai/v1/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {GROQ_API_KEY}",
+                "Content-Type": "application/json"
+            }
+            
+            payload = {
+                "model": GROQ_VISION_MODEL,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": instrucao},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/jpeg;base64,{image_base64}"
+                                }
+                            }
+                        ]
+                    }
+                ],
+                "max_tokens": 500
+            }
+            
+            resp = requests.post(url, headers=headers, json=payload, timeout=25)
+            data = resp.json()
+            if resp.status_code == 200 and "choices" in data and len(data["choices"]) > 0:
+                resultado = data["choices"][0]["message"]["content"].strip()
+                print("👁️ Imagem Analisada com sucesso!")
+                return resultado
+            else:
+                print(f"❌ Erro resposta Groq Vision: {data}")
+    except Exception as e:
+        print(f"❌ Erro ao analisar imagem no Groq Vision: {e}")
+    return ""
 
-def join_lines(lines: Iterable[str]) -> str:
-    return "\n".join([l for l in (lines or []) if l and l.strip()])
+def extrair_texto_pdf_url(pdf_url):
+    try:
+        response = requests.get(pdf_url, timeout=25)
+        if response.status_code == 200:
+            pdf_file = io.BytesIO(response.content)
+            reader = PdfReader(pdf_file)
+            texto_completo = ""
+            for idx, page in enumerate(reader.pages, start=1):
+                conteudo_pagina = page.extract_text()
+                if conteudo_pagina:
+                    texto_completo += f"\n--- PÁGINA {idx} ---\n" + conteudo_pagina
+            return texto_completo
+    except Exception as e:
+        print(f"❌ Erro ao ler PDF da URL {pdf_url}: {e}")
+    return ""
 
-__all__ = [
-    "setup_logger", "logger",
-    "clean_number", "format_phone_mz", "validate_phone_mz", "is_group_jid",
-    "safe_extract_numbers", "chunk_text", "safe_get",
-    "now_utc", "iso_utc",
-    "retry",
-    "looks_like_mpesa", "join_lines"
-]
+def extrair_texto_excel_url(excel_url):
+    try:
+        response = requests.get(excel_url, timeout=25)
+        if response.status_code == 200:
+            excel_file = io.BytesIO(response.content)
+            todas_abas = pd.read_excel(excel_file, sheet_name=None)
+            texto_completo = ""
+            for nome_aba, df in todas_abas.items():
+                texto_completo += f"\n--- ABA EXCEL: {nome_aba} ---\n"
+                texto_completo += df.to_string(index=False) + "\n"
+            return texto_completo
+    except Exception as e:
+        print(f"❌ Erro ao ler Excel da URL {excel_url}: {e}")
+    return ""
+
+def criar_prompt_profissional_groq(pedido_utilizador):
+    try:
+        sys_instruction = (
+            "Você é um especialista em Engenharia de Prompts para geração de imagens publicitárias. "
+            "Converta o pedido do utilizador num prompt altamente detalhado em INGLÊS. "
+            "Adicione detalhes de qualidade visual e contexto corporativo moçambicano como: "
+            "'professional marketing banner, microfinance Mozambique context, bright clean lighting, photorealistic, 8k'. "
+            "Responda APENAS com o prompt em inglês, sem saudações."
+        )
+        contents = [{"parts": [{"text": pedido_utilizador}]}]
+        resultado = chamar_groq_rest(contents, system_instruction=sys_instruction, temperature=0.7)
+        return resultado if resultado else pedido_utilizador
+    except Exception as e:
+        print(f"❌ Erro ao otimizar prompt no Groq: {e}")
+        return pedido_utilizador
+
+def gerar_url_imagem_pollinations(prompt_otimizado):
+    prompt_encoded = urllib.parse.quote(prompt_otimizado)
+    return f"https://pollinations.ai/p/{prompt_encoded}?width=1024&height=1024&model=flux&seed=42"
