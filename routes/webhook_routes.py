@@ -18,13 +18,39 @@ processados_lock = threading.Lock()
 
 def limpar_historico_processados():
     """Limpa IDs antigos do cache em memória para evitar acúmulo."""
-    agora = datetime.now(timezone.utc).timestamp()
+    agora_ts = datetime.now(timezone.utc).timestamp()
     with processados_lock:
         chaves_para_remover = [
-            msg_id for msg_id, ts in PROCESSADOS.items() if agora - ts > 600
+            msg_id for msg_id, ts in PROCESSADOS.items() if agora_ts - ts > 600
         ]
         for msg_id in chaves_para_remover:
             del PROCESSADOS[msg_id]
+
+def extrair_texto_mensagem(data_payload):
+    """Extrai o texto da mensagem a partir do payload da Evolution API."""
+    if not isinstance(data_payload, dict):
+        return ""
+    
+    message = data_payload.get('message', {})
+    if not isinstance(message, dict):
+        return ""
+
+    if 'conversation' in message and message['conversation']:
+        return message['conversation']
+    
+    if 'extendedTextMessage' in message and isinstance(message['extendedTextMessage'], dict):
+        return message['extendedTextMessage'].get('text', '')
+        
+    if 'imageMessage' in message and isinstance(message['imageMessage'], dict):
+        return message['imageMessage'].get('caption', '')
+        
+    if 'videoMessage' in message and isinstance(message['videoMessage'], dict):
+        return message['videoMessage'].get('caption', '')
+        
+    if 'documentMessage' in message and isinstance(message['documentMessage'], dict):
+        return message['documentMessage'].get('caption', '')
+
+    return data_payload.get('body', '') or ""
 
 @webhook_bp.route('/webhook-global', methods=['POST'])
 @webhook_bp.route('/webhook-cliente', methods=['POST'])
@@ -34,8 +60,6 @@ def universal_webhook():
     if not data:
         return 'OK', 200
 
-    # Responde 200 OK imediatamente para a Evolution API para não dar timeout
-    # e processa toda a lógica da IA/fluxo em uma thread separada
     threading.Thread(target=processar_webhook_background, args=(data,)).start()
     return 'OK', 200
 
@@ -45,7 +69,6 @@ def processar_webhook_background(data):
 
         event_name = data.get('event', '').lower()
 
-        # Filtra apenas eventos válidos de mensagens
         if event_name not in ["messages.upsert", "messages_upsert"]:
             return
 
@@ -54,9 +77,10 @@ def processar_webhook_background(data):
             return
 
         key = data_payload.get('key', {})
-        
+        is_from_me = key.get('fromMe', False)
+
         # Ignora mensagens enviadas pelo próprio bot para evitar loops infinitos
-        if key.get('fromMe', False):
+        if is_from_me:
             return
 
         msg_id = key.get('id')
@@ -67,15 +91,21 @@ def processar_webhook_background(data):
                     return
                 PROCESSADOS[msg_id] = datetime.now(timezone.utc).timestamp()
 
-        # Identifica qual instância recebeu a mensagem
+        # Extração das variáveis necessárias exigidas pelos fluxos
+        message_text = extrair_texto_mensagem(data_payload)
+        msg_clean = message_text.strip().lower()
+        agora = datetime.now(timezone.utc)
+
         instance_name = data.get('instance', Config.EVOLUTION_INSTANCE_NAME)
 
-        # Se for a instância do Negobot central, roda o fluxo comercial SaaS.
-        # Caso contrário, roda o fluxo do cliente subscritor.
+        # Encaminha com os 5 argumentos exigidos pelo central_flow
         if instance_name == Config.EVOLUTION_INSTANCE_NAME:
-            process_central_flow(data)
+            process_central_flow(data, message_text, msg_clean, is_from_me, agora)
         else:
-            process_client_flow(data)
+            try:
+                process_client_flow(data, message_text, msg_clean, is_from_me, agora)
+            except TypeError:
+                process_client_flow(data)
 
     except Exception as e:
         logger.error(f"Erro ao processar webhook em background: {str(e)}", exc_info=True)
