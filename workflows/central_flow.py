@@ -1,171 +1,155 @@
 import re
 import time
+import requests
 import logging
-from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
 from config import Config
-import extensions
-from database.chat_repo import (
-    get_chat_history, 
-    save_chat_history
-)
-from services.groq_service import chamar_groq_rest
-from services.evolution_service import (
-    send_whatsapp, 
-    criar_e_configurar_instancia_automatica, 
-    gerar_e_enviar_qrcode_central
-)
 
 logger = logging.getLogger(__name__)
 
-def checar_timeout_atendimento_humano(conversa_ref, conversa_dados, agora):
-    """Verifica se o tempo limite de espera por atendimento humano expirou."""
-    if conversa_dados and conversa_dados.get("status_atendimento") == "humano":
-        ultima_interacao = conversa_dados.get("ultima_interacao")
-        ultima_msg_por = conversa_dados.get("ultima_mensagem_por")
-        
-        if ultima_msg_por == "cliente_final" and ultima_interacao:
-            if ultima_interacao.tzinfo is None:
-                ultima_interacao = ultima_interacao.replace(tzinfo=timezone.utc)
-            
-            minutos_decorridos = (agora - ultima_interacao).total_seconds() / 60.0
-            if minutos_decorridos >= Config.TIMEOUT_HUMANO_MINUTOS:
-                conversa_ref.set({
-                    "status_atendimento": "bot",
-                    "ultima_interacao": agora
-                }, merge=True)
-                return True
-    return False
+def _get_clean_instance(instance_name=None):
+    """Sanitiza e codifica o nome da instância para evitar erros de URL (ex: espaços)."""
+    target = instance_name or getattr(Config, 'EVOLUTION_INSTANCE_NAME', '')
+    return quote(str(target).strip())
 
-def process_central_flow(phone_number_or_data, message_text="", msg_clean="", is_from_me=False, agora=None):
-    """Workflow central do Negobot Moz blindado contra erros de tipo e incompatibilidades de IA."""
+def notificar_erro_admin(erro_msg):
+    """Envia um alerta ao número do administrador em caso de falha grave."""
+    admin_num = getattr(Config, 'ADMIN_NUMBER', None)
+    if admin_num:
+        try:
+            central_instance = _get_clean_instance()
+            headers = {"apikey": Config.EVOLUTION_API_KEY, "Content-Type": "application/json"}
+            url = f"{Config.EVOLUTION_API_URL}/message/sendText/{central_instance}"
+            
+            to_number = admin_num if "@" in str(admin_num) else f"{admin_num}@s.whatsapp.net"
+            payload = {
+                "number": to_number,
+                "text": f"⚠️ *[ALERTA CRÍTICO - NEGOBOT]*\n\nOcorreu uma falha no servidor:\n❌ `{erro_msg}`\n\n*Verifique os logs.*"
+            }
+            requests.post(url, headers=headers, json=payload, timeout=45)
+        except Exception as e:
+            logger.error(f"Falha ao enviar notificação de erro ao admin: {e}")
+
+def send_whatsapp(to, text, instance_name=None):
+    """Envia uma mensagem de texto via Evolution API com timeouts expandidos contra Cold Starts."""
+    if not text or not str(text).strip():
+        return False
+
+    clean_instance = _get_clean_instance(instance_name)
+    headers = {"apikey": Config.EVOLUTION_API_KEY, "Content-Type": "application/json"}
+    
+    # 1. Envio de presença (composing) com tratamento isolado
     try:
-        if agora is None:
-            agora = datetime.now(timezone.utc)
+        url_presence = f"{Config.EVOLUTION_API_URL}/chat/sendPresence/{clean_instance}"
+        requests.post(url_presence, headers=headers, json={"number": str(to), "presence": "composing"}, timeout=15)
+        time.sleep(1)
+    except Exception as p_err:
+        logger.warning(f"Não foi possível enviar indicação de presença: {p_err}")
 
-        # 1. EXTRAÇÃO E SANITIZAÇÃO SEGURA DO NÚMERO DE TELEFONE/JID
-        if isinstance(phone_number_or_data, dict):
-            data_payload = phone_number_or_data.get('data', {}) if isinstance(phone_number_or_data.get('data'), dict) else phone_number_or_data
-            key = data_payload.get('key', {}) if isinstance(data_payload, dict) else {}
-            if isinstance(key, dict):
-                phone_number = key.get('remoteJid') or key.get('participant') or key.get('id') or 'usuario_desconhecido'
-            else:
-                phone_number = str(key)
-        else:
-            phone_number = str(phone_number_or_data)
-
-        phone_number = str(phone_number)
-        central_instance = Config.EVOLUTION_INSTANCE_NAME
-
-        # 2. CONSULTA AO FIRESTORE COM NÚMERO SANITIZADO
-        chat_ref = extensions.db.collection('chats').document(phone_number)
-        chat_doc = chat_ref.get()
-        chat_dados = chat_doc.to_dict() if chat_doc.exists else {}
-
-        # Ignora mensagens enviadas pelo atendente humano
-        if is_from_me:
-            chat_ref.set({"ultima_mensagem_por": "atendente", "ultima_interacao": agora}, merge=True)
-            return
-
-        # Registo de novo contacto (Prospect)
-        cliente_doc_ref = extensions.db.collection('clientes').document(phone_number)
-        if not cliente_doc_ref.get().exists:
-            cliente_doc_ref.set({
-                "phone_number": phone_number,
-                "data_registro": agora,
-                "status": "prospect"
-            }, merge=True)
-
-        # 3. COMANDO DE RE-GERAÇÃO DE QR CODE (#qrcode)
-        if msg_clean == "#qrcode":
-            send_whatsapp(phone_number, "🔄 A gerar QR Code...", instance_name=central_instance)
-            criar_e_configurar_instancia_automatica(phone_number)
-            time.sleep(2)
-            gerar_e_enviar_qrcode_central(phone_number)
-            return
-
-        # 4. GATILHOS DE CRIAÇÃO E TESTE GRATUITO
-        gatilhos_teste = ["teste", "testar", "quero o bot", "começar", "criar bot"]
-        if any(g in msg_clean for g in gatilhos_teste):
-            cliente_data_cur = cliente_doc_ref.get().to_dict() or {}
-            status_atual = cliente_data_cur.get('status', 'prospect')
-            
-            if status_atual == 'prospect':
-                send_whatsapp(phone_number, "⏳ *A preparar o seu teste de 2 dias...* 🚀", instance_name=central_instance)
-                if criar_e_configurar_instancia_automatica(phone_number):
-                    cliente_doc_ref.set({
-                        "phone_number": phone_number,
-                        "data_registro": agora,
-                        "trial_start": agora,
-                        "status": "trial"
-                    }, merge=True)
-                    tenant_id = re.sub(r'\D', '', phone_number)
-                    extensions.db.collection('clientes_bot').document(tenant_id).set({
-                        "status_plano": "demonstracao", 
-                        "data_ativacao": agora, 
-                        "data_expiracao": agora + timedelta(days=2)
-                    })
-                    time.sleep(3)
-                    gerar_e_enviar_qrcode_central(phone_number)
-                return
-
-        # 5. CONTROLO DE ATENDIMENTO HUMANO & RESET DE MODO
-        status_atendimento = chat_dados.get("status_atendimento", "bot")
-        if status_atendimento == "humano":
-            if checar_timeout_atendimento_humano(chat_ref, chat_dados, agora):
-                status_atendimento = "bot"
-            else:
-                if msg_clean in ["/bot", "/reset", "continuar", "bot", "bom dia", "boa tarde", "boa noite", "ola", "olá", "oy", "oi"]:
-                    chat_ref.set({"status_atendimento": "bot", "ultima_interacao": agora}, merge=True)
-                    status_atendimento = "bot"
-                else:
-                    chat_ref.set({"ultima_interacao": agora, "ultima_mensagem_por": "cliente_final"}, merge=True)
-                    save_chat_history(phone_number, "user", message_text)
-                    return
-
-        # 6. TRANSFERÊNCIA MANUAL PARA ATENDIMENTO HUMANO
-        gatilhos_humano = ["falar com atendente", "suporte humano", "atendente", "humano", "#suporte"]
-        if any(g in msg_clean for g in gatilhos_humano):
-            chat_ref.set({
-                "status_atendimento": "humano",
-                "ultima_mensagem_por": "cliente_final",
-                "ultima_interacao": agora
-            }, merge=True)
-            send_whatsapp(
-                phone_number,
-                f"🔔 *Atendimento Transferido:* Encaminhamos para a nossa equipa. Se não houver resposta em {Config.TIMEOUT_HUMANO_MINUTOS} minutos, o assistente responderá automaticamente.",
-                instance_name=central_instance
-            )
-            return
-
-        # 7. RESPOSTA AUTOMÁTICA VIA GROQ (LLaMA 3.3 70B)
-        chat_ref.set({"status_atendimento": "bot", "ultima_mensagem_por": "cliente_final", "ultima_interacao": agora}, merge=True)
-        
-        # Guarda a nova mensagem enviada pelo utilizador
-        save_chat_history(phone_number, "user", message_text)
-
-        # Monta o histórico formatado para a Groq
-        raw_history = get_chat_history(phone_number)[-10:]
-        contents = []
-        for msg in raw_history:
-            if isinstance(msg, dict):
-                role = "assistant" if msg.get('role') in ["assistant", "model", "atendente"] else "user"
-                txt = msg.get('content') or msg.get('text') or ""
-                if not txt and 'parts' in msg and isinstance(msg['parts'], list):
-                    txt = " ".join([p.get('text', '') for p in msg['parts'] if isinstance(p, dict)])
-                if txt:
-                    contents.append({"role": role, "content": str(txt)})
-
-        sys_instruction_central = """Você é o assistente comercial e de suporte oficial do Negobot Moz.
-Responda sempre com cortesia, clareza e dinamismo em Português de Moçambique.
-ATENÇÃO: Nunca ignore novas saudações (como 'Bom dia', 'Boa noite', 'Oy'). Retome a conversa de forma natural, prestativa e ativa, independentemente de despedidas anteriores."""
-
-        # Chamada à API da Groq
-        response_text = chamar_groq_rest(contents, system_prompt=sys_instruction_central)
-        
-        if response_text:
-            save_chat_history(phone_number, "assistant", response_text)
-            send_whatsapp(phone_number, response_text, instance_name=central_instance)
-            chat_ref.set({"status_atendimento": "bot", "ultima_mensagem_por": "bot", "ultima_interacao": agora}, merge=True)
-
+    # 2. Envio da mensagem principal
+    try:
+        url = f"{Config.EVOLUTION_API_URL}/message/sendText/{clean_instance}"
+        payload = {
+            "number": str(to),
+            "text": str(text),
+            "options": {
+                "delay": 1200,
+                "presence": "composing",
+                "linkPreview": True
+            }
+        }
+        res = requests.post(url, headers=headers, json=payload, timeout=60)
+        res.raise_for_status()
+        return True
     except Exception as e:
-        logger.error(f"Erro no process_central_flow para {phone_number_or_data}: {e}", exc_info=True)
+        logger.error(f"ERRO ao enviar mensagem via Evolution API ({url}): {e}")
+        return False
+
+def criar_e_configurar_instancia_automatica(phone_number):
+    """Cria e configura o webhook para uma nova instância de utilizador."""
+    try:
+        client_instance_raw = re.sub(r'\D', '', str(phone_number))
+        client_instance = quote(client_instance_raw)
+        headers = {"apikey": Config.EVOLUTION_API_KEY, "Content-Type": "application/json"}
+        
+        # Limpeza preventiva de instâncias anteriores
+        try:
+            requests.delete(f"{Config.EVOLUTION_API_URL}/instance/logout/{client_instance}", headers=headers, timeout=30)
+            requests.delete(f"{Config.EVOLUTION_API_URL}/instance/delete/{client_instance}", headers=headers, timeout=30)
+        except Exception:
+            pass
+        
+        time.sleep(2)
+        
+        url_create = f"{Config.EVOLUTION_API_URL}/instance/create"
+        payload_create = {
+            "instanceName": client_instance_raw, 
+            "qrcode": True, 
+            "integration": "WHATSAPP-BAILEYS"
+        }
+        res_create = requests.post(url_create, headers=headers, json=payload_create, timeout=45)
+        res_create.raise_for_status()
+        
+        webhook_target_url = getattr(Config, 'WEBHOOK_URL', None)
+        if webhook_target_url:
+            url_webhook = f"{Config.EVOLUTION_API_URL}/webhook/set/{client_instance}"
+            payload_webhook = {
+                "url": webhook_target_url,
+                "enabled": True,
+                "events": ["MESSAGES_UPSERT"]
+            }
+            requests.post(url_webhook, headers=headers, json=payload_webhook, timeout=45)
+
+        return True
+    except Exception as e:
+        erro_msg = f"Erro ao automatizar criação/webhook para {phone_number}: {e}"
+        logger.error(erro_msg)
+        notificar_erro_admin(erro_msg)
+        return False
+
+def gerar_e_enviar_qrcode_central(phone_number):
+    """Solicita a ligação da instância e envia a imagem do QR Code ao utilizador."""
+    try:
+        client_instance_raw = re.sub(r'\D', '', str(phone_number))
+        client_instance = quote(client_instance_raw)
+        headers = {"apikey": Config.EVOLUTION_API_KEY, "Content-Type": "application/json"}
+        
+        url_connect = f"{Config.EVOLUTION_API_URL}/instance/connect/{client_instance}"
+        response_connect = requests.get(url_connect, headers=headers, timeout=45)
+        response_connect.raise_for_status()
+        
+        dados_resposta = response_connect.json()
+        if dados_resposta.get("instance", {}).get("state") == "open":
+            send_whatsapp(phone_number, "✅ O seu assistente virtual já se encontra ativo e operacional!")
+            return True
+            
+        base64_qrcode = dados_resposta.get("base64")
+        if not base64_qrcode:
+            return False
+
+        if "," in base64_qrcode:
+            base64_qrcode = base64_qrcode.split(",")[1]
+
+        central_instance = _get_clean_instance()
+        url_send_media = f"{Config.EVOLUTION_API_URL}/message/sendMedia/{central_instance}"
+        
+        caption_text = (
+            "🤖 *Aqui está o seu QR Code do Negobot Moz!* 🚀\n\n"
+            "1️⃣ Abra o WhatsApp que vai atender os seus clientes.\n"
+            "2️⃣ Vá a *Aparelhos Conectados* -> *Conectar um aparelho*.\n"
+            "3️⃣ Aponte a câmara e escaneie *imediatamente* este QR Code.\n\n"
+            "Se expirar, digite *#qrcode* aqui para gerar um novo!"
+        )
+        
+        payload_media = {
+            "number": str(phone_number),
+            "caption": caption_text,
+            "media": base64_qrcode,
+            "mediatype": "image",
+            "fileName": "qrcode.png"
+        }
+        requests.post(url_send_media, headers=headers, json=payload_media, timeout=60)
+        return True
+    except Exception as e:
+        logger.error(f"Erro ao gerar QR Code para {phone_number}: {e}")
+        return False
