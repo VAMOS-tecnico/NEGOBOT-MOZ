@@ -1,101 +1,57 @@
 import os
-import base64
+import requests
 import logging
-from groq import Groq
 from config import Config
 
 logger = logging.getLogger(__name__)
 
-# Inicializa o cliente Groq
-client = Groq(api_key=Config.GROQ_API_KEY)
+def chamar_groq_rest(historico_mensagens, system_prompt=None):
+    """
+    Envia as mensagens para a API da Groq garantindo que a instrução do sistema (system_prompt)
+    fique estritamente no topo do payload (role: system) e reduz a temperatura para evitar desvios.
+    """
+    api_key = getattr(Config, 'GROQ_API_KEY', None) or os.getenv('GROQ_API_KEY')
+    if not api_key:
+        logger.error("GROQ_API_KEY não configurada no ambiente.")
+        return "Olá! Sou o assistente oficial do Negobot Moz. Como posso ajudar a automatizar o seu WhatsApp hoje? Digite *TESTE* para experimentar 2 dias grátis!"
 
-def transcrever_audio_groq(audio_bytes, filename="audio.mp3"):
-    """Transcreve áudio do WhatsApp usando Whisper no Groq."""
-    try:
-        transcription = client.audio.transcriptions.create(
-            file=(filename, audio_bytes),
-            model="whisper-large-v3-turbo",
-            response_format="text"
-        )
-        return transcription
-    except Exception as e:
-        logger.error(f"Erro na transcrição de áudio Groq: {e}")
-        return ""
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
 
-def analisar_imagem(image_bytes_or_base64, prompt="Analise esta imagem em detalhes"):
-    """Analisa comprovativos/fotos usando visão computacional (Qwen Vision)."""
-    try:
-        if isinstance(image_bytes_or_base64, bytes):
-            base64_image = base64.b64encode(image_bytes_or_base64).decode('utf-8')
-        else:
-            base64_image = image_bytes_or_base64
+    payload_messages = []
 
-        model_vision = getattr(Config, 'GROQ_VISION_MODEL', 'qwen-2.5-32b')
-
-        response = client.chat.completions.create(
-            model=model_vision,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": str(prompt)},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{base64_image}"
-                            }
-                        }
-                    ]
-                }
-            ]
-        )
-        return response.choices[0].message.content
-    except Exception as e:
-        logger.error(f"Erro na análise de imagem Groq: {e}")
-        return "Não foi possível analisar a imagem enviada."
-
-def normalizar_mensagens(prompt_ou_mensagens, system_prompt=""):
-    """Converte qualquer tipo de entrada (string, dict ou lista) no formato exigido pela Groq."""
-    formatted = []
+    # 1. INJEÇÃO OBRIGATÓRIA DA INSTRUÇÃO DE SISTEMA NO TOPO
     if system_prompt:
-        formatted.append({"role": "system", "content": str(system_prompt)})
+        payload_messages.append({
+            "role": "system",
+            "content": str(system_prompt).strip()
+        })
 
-    if isinstance(prompt_ou_mensagens, str):
-        formatted.append({"role": "user", "content": prompt_ou_mensagens})
-    elif isinstance(prompt_ou_mensagens, dict):
-        role = prompt_ou_mensagens.get("role", "user")
-        content = prompt_ou_mensagens.get("content", str(prompt_ou_mensagens))
-        formatted.append({"role": role, "content": str(content)})
-    elif isinstance(prompt_ou_mensagens, list):
-        for item in prompt_ou_mensagens:
-            if isinstance(item, dict):
-                role = item.get("role", "user")
-                content = item.get("content", item.get("texto", ""))
-                if isinstance(content, (dict, list)):
-                    content = str(content)
-                formatted.append({"role": role, "content": str(content)})
-            else:
-                formatted.append({"role": "user", "content": str(item)})
-    else:
-        formatted.append({"role": "user", "content": str(prompt_ou_mensagens)})
+    # 2. ADIÇÃO DO HISTÓRICO DE MENSAGENS FORMATADO
+    if isinstance(historico_mensagens, list):
+        for msg in historico_mensagens:
+            if isinstance(msg, dict) and "role" in msg and "content" in msg:
+                role = "assistant" if msg["role"] in ["assistant", "model", "atendente"] else "user"
+                payload_messages.append({
+                    "role": role,
+                    "content": str(msg["content"])
+                })
 
-    return formatted
+    payload = {
+        "model": "llama-3.3-70b-versatile",
+        "messages": payload_messages,
+        "temperature": 0.2,  # Temperatura baixa força o modelo a seguir rigorosamente as regras comerciais
+        "max_tokens": 400
+    }
 
-def gerar_resposta_groq(messages, system_prompt=""):
-    """Gera respostas de texto usando Llama 3.3 70B com tratamento seguro de tipos."""
     try:
-        formatted_messages = normalizar_mensagens(messages, system_prompt)
-        model_text = getattr(Config, 'GROQ_MODEL', 'llama-3.3-70b-versatile')
-
-        response = client.chat.completions.create(
-            model=model_text,
-            messages=formatted_messages
-        )
-        return response.choices[0].message.content
+        response = requests.post(url, headers=headers, json=payload, timeout=30)
+        response.raise_for_status()
+        data = response.json()
+        return data["choices"][0]["message"]["content"].strip()
     except Exception as e:
-        logger.error(f"Erro ao gerar resposta Groq: {e}")
-        return "Desculpe, ocorreu um erro temporário no meu sistema de IA."
-
-def chamar_groq_rest(prompt_ou_mensagens, system_prompt=""):
-    """Função universal de compatibilidade para os workflows."""
-    return gerar_resposta_groq(prompt_ou_mensagens, system_prompt)
+        logger.error(f"Erro ao chamar a API da Groq: {e}", exc_info=True)
+        return "Olá! Sou o assistente da Negobot Moz. A nossa plataforma ajuda o seu negócio a atender clientes no WhatsApp 24/7. Digite *TESTE* para criar o seu robô grátis!"
