@@ -7,7 +7,6 @@ logger = logging.getLogger(__name__)
 def _sanitizar_doc_id(doc_id):
     """Garante que o ID enviado ao Firestore seja sempre uma string válida."""
     if isinstance(doc_id, dict):
-        # Se um dicionário (ex: payload/key) for passado por engano, extrai o JID/ID
         return str(
             doc_id.get('remoteJid') or 
             doc_id.get('id') or 
@@ -16,7 +15,7 @@ def _sanitizar_doc_id(doc_id):
         )
     return str(doc_id) if doc_id else 'usuario_desconhecido'
 
-def salvar_mensagem(user_id, role, content):
+def salvar_mensagem(user_id, role, content=""):
     """Salva uma mensagem no histórico da conversa no Firestore."""
     try:
         user_id_clean = _sanitizar_doc_id(user_id)
@@ -81,3 +80,9 @@ def atualizar_estado_usuario(user_id, novos_dados):
             doc_ref.set(novos_dados, merge=True)
     except Exception as e:
         logger.error(f"Erro ao atualizar estado do utilizador: {e}", exc_info=True)
+
+# Alias de compatibilidade para workflows antigos ou em inglês
+get_chat_history = obter_historico
+save_chat_history = salvar_mensagem
+get_user_state = obter_estado_usuario
+update_user_state = atualizar_estado_usuario
