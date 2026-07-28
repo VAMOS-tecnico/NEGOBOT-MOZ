@@ -55,3 +55,28 @@ def chamar_groq_rest(historico_mensagens, system_prompt=None):
     except Exception as e:
         logger.error(f"Erro ao chamar a API da Groq: {e}", exc_info=True)
         return "Olá! Sou o assistente da Negobot Moz. A nossa plataforma ajuda o seu negócio a atender clientes no WhatsApp 24/7. Digite *TESTE* para criar o seu robô grátis!"
+
+def transcrever_audio_groq(audio_file):
+    """Transcreve áudio enviado pelos utilizadores via Whisper na Groq."""
+    api_key = getattr(Config, 'GROQ_API_KEY', None) or os.getenv('GROQ_API_KEY')
+    if not api_key:
+        logger.error("GROQ_API_KEY não configurada para transcrição.")
+        return ""
+
+    url = "https://api.groq.com/openai/v1/audio/transcriptions"
+    headers = {"Authorization": f"Bearer {api_key}"}
+
+    try:
+        files = {'file': audio_file}
+        data = {'model': 'whisper-large-v3'}
+        response = requests.post(url, headers=headers, files=files, data=data, timeout=30)
+        response.raise_for_status()
+        return response.json().get("text", "").strip()
+    except Exception as e:
+        logger.error(f"Erro ao transcrever áudio via Groq: {e}")
+        return ""
+
+def analisar_imagem(image_file, prompt="O que há nesta imagem?"):
+    """Processa a análise de imagens enviadas no chat."""
+    logger.info("Solicitação de análise de imagem recebida.")
+    return "Recebi a sua imagem. Como posso ajudar com a Negobot Moz?"
