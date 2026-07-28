@@ -1,133 +1,74 @@
 import os
-import requests
-import tempfile
 import base64
+import logging
+from groq import Groq
 from config import Config
 
-def chamar_groq_rest(contents_payload, system_instruction="", temperature=0.1):
-    if not Config.GROQ_API_KEY:
-        print("❌ GROQ_API_KEY não encontrada nas variáveis de ambiente.")
+logger = logging.getLogger(__name__)
+
+# Inicializa o cliente Groq
+client = Groq(api_key=Config.GROQ_API_KEY)
+
+def transcrever_audio_groq(audio_bytes, filename="audio.mp3"):
+    """Transcreve áudio do WhatsApp usando Whisper no Groq."""
+    try:
+        transcription = client.audio.transcriptions.create(
+            file=(filename, audio_bytes),
+            model="whisper-large-v3-turbo",
+            response_format="text"
+        )
+        return transcription
+    except Exception as e:
+        logger.error(f"Erro na transcrição de áudio Groq: {e}")
         return ""
 
-    url = "https://api.groq.com/openai/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {Config.GROQ_API_KEY}",
-        "Content-Type": "application/json"
-    }
-
-    messages = []
-    if system_instruction:
-        messages.append({"role": "system", "content": system_instruction})
-
-    for item in contents_payload:
-        role = item.get("role", "user")
-        if role in ["model", "assistant", "atendente"]:
-            role = "assistant"
-        
-        parts = item.get("parts", [])
-        texto_msg = "".join([p.get("text", "") for p in parts if isinstance(p, dict) and "text" in p])
-        
-        if texto_msg:
-            messages.append({"role": role, "content": texto_msg})
-
-    payload = {
-        "model": Config.GROQ_MODEL,
-        "messages": messages,
-        "temperature": temperature,
-        "max_tokens": 600
-    }
-
+def analisar_imagem(image_bytes_or_base64, prompt="Analise esta imagem em detalhes"):
+    """Analisa comprovativos/fotos usando visão computacional (Qwen Vision)."""
     try:
-        response = requests.post(url, headers=headers, json=payload, timeout=20)
-        data = response.json()
-        
-        if response.status_code == 200 and "choices" in data and len(data["choices"]) > 0:
-            return data["choices"][0]["message"]["content"].strip()
+        if isinstance(image_bytes_or_base64, bytes):
+            base64_image = base64.b64encode(image_bytes_or_base64).decode('utf-8')
         else:
-            print(f"❌ Erro na API do Groq (Status {response.status_code}): {data}")
-    except Exception as e:
-        print(f"❌ Exceção ao chamar Groq API: {e}")
+            base64_image = image_bytes_or_base64
 
-    return "Desculpe, estamos a receber muitas mensagens ao mesmo tempo. Por favor, tente novamente dentro de alguns segundos!"
+        model_vision = getattr(Config, 'GROQ_VISION_MODEL', 'qwen-2.5-32b')
 
-def transcrever_audio_groq(url_audio_whatsapp):
-    if not Config.GROQ_API_KEY:
-        return ""
-    try:
-        headers_evo = {"apikey": Config.EVOLUTION_API_KEY}
-        res = requests.get(url_audio_whatsapp, headers=headers_evo, timeout=25)
-        if res.status_code != 200:
-            res = requests.get(url_audio_whatsapp, timeout=25)
-            
-        if res.status_code == 200:
-            with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as temp_audio:
-                temp_audio.write(res.content)
-                temp_path = temp_audio.name
-
-            headers_groq = {"Authorization": f"Bearer {Config.GROQ_API_KEY}"}
-            url_whisper = "https://api.groq.com/openai/v1/audio/transcriptions"
-            
-            with open(temp_path, "rb") as audio_file:
-                files = {
-                    "file": (temp_path, audio_file, "audio/ogg"),
-                    "model": (None, "whisper-large-v3")
-                }
-                response = requests.post(url_whisper, headers=headers_groq, files=files, timeout=30)
-                
-            os.remove(temp_path)
-            if response.status_code == 200:
-                texto = response.json().get("text", "")
-                print(f"🎙️ Áudio Transcrito: {texto}")
-                return texto
-    except Exception as e:
-        print(f"❌ Erro ao transcrever áudio: {e}")
-    return ""
-
-def analisar_imagem_groq(url_imagem, instrucao="Analise e extraia todas as informações relevantes desta imagem ou comprovativo:"):
-    if not Config.GROQ_API_KEY:
-        return ""
-    try:
-        headers_evo = {"apikey": Config.EVOLUTION_API_KEY}
-        res = requests.get(url_imagem, headers=headers_evo, timeout=25)
-        if res.status_code != 200:
-            res = requests.get(url_imagem, timeout=25)
-            
-        if res.status_code == 200:
-            image_base64 = base64.b64encode(res.content).decode('utf-8')
-            
-            url = "https://api.groq.com/openai/v1/chat/completions"
-            headers = {
-                "Authorization": f"Bearer {Config.GROQ_API_KEY}",
-                "Content-Type": "application/json"
-            }
-            
-            payload = {
-                "model": Config.GROQ_VISION_MODEL,
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": instrucao},
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:image/jpeg;base64,{image_base64}"
-                                }
+        response = client.chat.completions.create(
+            model=model_vision,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{base64_image}"
                             }
-                        ]
-                    }
-                ],
-                "max_tokens": 500
-            }
-            
-            resp = requests.post(url, headers=headers, json=payload, timeout=25)
-            data = resp.json()
-            if resp.status_code == 200 and "choices" in data and len(data["choices"]) > 0:
-                resultado = data["choices"][0]["message"]["content"].strip()
-                print("👁️ Imagem Analisada com sucesso!")
-                return resultado
-            else:
-                print(f"❌ Erro resposta Groq Vision: {data}")
+                        }
+                    ]
+                }
+            ]
+        )
+        return response.choices[0].message.content
     except Exception as e:
-        print(f"❌ Erro ao analisar imagem no Groq Vision: {e}")
-    return ""
+        logger.error(f"Erro na análise de imagem Groq: {e}")
+        return "Não foi possível analisar a imagem enviada."
+
+def gerar_resposta_groq(messages, system_prompt=""):
+    """Gera respostas de texto usando Llama 3.3 70B."""
+    try:
+        formatted_messages = []
+        if system_prompt:
+            formatted_messages.append({"role": "system", "content": system_prompt})
+        formatted_messages.extend(messages)
+
+        model_text = getattr(Config, 'GROQ_MODEL', 'llama-3.3-70b-versatile')
+
+        response = client.chat.completions.create(
+            model=model_text,
+            messages=formatted_messages
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        logger.error(f"Erro ao gerar resposta Groq: {e}")
+        return "Desculpe, ocorreu um erro temporário no meu sistema de IA."
