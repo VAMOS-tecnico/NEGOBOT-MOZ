@@ -292,7 +292,7 @@ def analisar_imagem_groq(image_url: str, instrucao: str = "Analise e descreva es
     return ""
 
 # ---------------------------
-# Safety helpers & Timeout
+# Safety helpers, Timeout & History
 # ---------------------------
 TIMEOUT_HUMANO_MINUTOS = int(os.getenv('TIMEOUT_HUMANO_MINUTOS', 2))
 BLACKLIST_LINK_TOKENS = ["http://", "https://", "www.", "painel", "dashboard", ".com", ".net"]
@@ -375,6 +375,32 @@ def checar_timeout_atendimento_humano(empresa_id: str, phone_number: str) -> boo
     except Exception as e:
         logger.error(f"Erro ao checar timeout de atendimento humano: {e}")
         return False
+
+def get_chat_history(empresa_id: str, phone_number: str, limit: int = 50):
+    """Busca o histórico de mensagens de uma conversa no Firestore."""
+    try:
+        db = get_db()
+        historico_ref = (
+            db.collection('empresas')
+            .document(empresa_id)
+            .collection('conversas')
+            .document(phone_number)
+            .collection('historico')
+        )
+        docs = historico_ref.order_by('timestamp', direction=firestore.Query.ASCENDING).limit(limit).stream()
+        
+        mensagens = []
+        for doc in docs:
+            d = doc.to_dict()
+            mensagens.append({
+                "role": d.get("role"),
+                "text": d.get("text"),
+                "timestamp": d.get("timestamp")
+            })
+        return mensagens
+    except Exception as e:
+        logger.error(f"Erro ao buscar histórico para {phone_number} na empresa {empresa_id}: {e}")
+        return []
 
 # ---------------------------
 # Onboarding and updates
