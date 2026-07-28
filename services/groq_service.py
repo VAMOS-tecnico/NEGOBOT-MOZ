@@ -38,7 +38,7 @@ def analisar_imagem(image_bytes_or_base64, prompt="Analise esta imagem em detalh
                 {
                     "role": "user",
                     "content": [
-                        {"type": "text", "text": prompt},
+                        {"type": "text", "text": str(prompt)},
                         {
                             "type": "image_url",
                             "image_url": {
@@ -54,14 +54,37 @@ def analisar_imagem(image_bytes_or_base64, prompt="Analise esta imagem em detalh
         logger.error(f"Erro na análise de imagem Groq: {e}")
         return "Não foi possível analisar a imagem enviada."
 
-def gerar_resposta_groq(messages, system_prompt=""):
-    """Gera respostas de texto usando Llama 3.3 70B."""
-    try:
-        formatted_messages = []
-        if system_prompt:
-            formatted_messages.append({"role": "system", "content": system_prompt})
-        formatted_messages.extend(messages)
+def normalizar_mensagens(prompt_ou_mensagens, system_prompt=""):
+    """Converte qualquer tipo de entrada (string, dict ou lista) no formato exigido pela Groq."""
+    formatted = []
+    if system_prompt:
+        formatted.append({"role": "system", "content": str(system_prompt)})
 
+    if isinstance(prompt_ou_mensagens, str):
+        formatted.append({"role": "user", "content": prompt_ou_mensagens})
+    elif isinstance(prompt_ou_mensagens, dict):
+        role = prompt_ou_mensagens.get("role", "user")
+        content = prompt_ou_mensagens.get("content", str(prompt_ou_mensagens))
+        formatted.append({"role": role, "content": str(content)})
+    elif isinstance(prompt_ou_mensagens, list):
+        for item in prompt_ou_mensagens:
+            if isinstance(item, dict):
+                role = item.get("role", "user")
+                content = item.get("content", item.get("texto", ""))
+                if isinstance(content, (dict, list)):
+                    content = str(content)
+                formatted.append({"role": role, "content": str(content)})
+            else:
+                formatted.append({"role": "user", "content": str(item)})
+    else:
+        formatted.append({"role": "user", "content": str(prompt_ou_mensagens)})
+
+    return formatted
+
+def gerar_resposta_groq(messages, system_prompt=""):
+    """Gera respostas de texto usando Llama 3.3 70B com tratamento seguro de tipos."""
+    try:
+        formatted_messages = normalizar_mensagens(messages, system_prompt)
         model_text = getattr(Config, 'GROQ_MODEL', 'llama-3.3-70b-versatile')
 
         response = client.chat.completions.create(
@@ -74,9 +97,5 @@ def gerar_resposta_groq(messages, system_prompt=""):
         return "Desculpe, ocorreu um erro temporário no meu sistema de IA."
 
 def chamar_groq_rest(prompt_ou_mensagens, system_prompt=""):
-    """Função de compatibilidade para chamadas do central_flow e client_flow."""
-    if isinstance(prompt_ou_mensagens, list):
-        return gerar_resposta_groq(prompt_ou_mensagens, system_prompt)
-    else:
-        messages = [{"role": "user", "content": str(prompt_ou_mensagens)}]
-        return gerar_resposta_groq(messages, system_prompt)
+    """Função universal de compatibilidade para os workflows."""
+    return gerar_resposta_groq(prompt_ou_mensagens, system_prompt)
