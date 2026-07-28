@@ -9,6 +9,7 @@ def _sanitizar_doc_id(doc_id):
     if isinstance(doc_id, dict):
         return str(
             doc_id.get('remoteJid') or 
+            doc_id.get('participant') or 
             doc_id.get('id') or 
             doc_id.get('user_id') or 
             'usuario_desconhecido'
@@ -81,7 +82,7 @@ def atualizar_estado_usuario(user_id, novos_dados):
     except Exception as e:
         logger.error(f"Erro ao atualizar estado do utilizador: {e}", exc_info=True)
 
-# Alias de compatibilidade para workflows antigos ou em inglês
+# Aliases de compatibilidade para workflows em inglês ou sistemas legados
 get_chat_history = obter_historico
 save_chat_history = salvar_mensagem
 get_user_state = obter_estado_usuario
