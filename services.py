@@ -8,11 +8,19 @@ import re
 import io
 import base64
 import tempfile
+import logging
+import uuid
 from datetime import datetime, timedelta, timezone
 from pypdf import PdfReader
 import pandas as pd
 import firebase_admin
 from firebase_admin import credentials, firestore
+
+# ---------------------------
+# Configuração de Logging
+# ---------------------------
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 # ---------------------------
 # Inicialização e helpers
@@ -34,12 +42,12 @@ def init_services():
             firebase_admin.initialize_app()
         _db = firestore.client()
     except Exception as e:
-        print("Erro inicializar Firebase:", e)
+        logger.error(f"Erro ao inicializar Firebase com credenciais: {e}")
         try:
             firebase_admin.initialize_app()
             _db = firestore.client()
         except Exception as ex:
-            print("Falha crítica Firebase:", ex)
+            logger.critical(f"Falha crítica ao inicializar Firebase: {ex}")
             raise
 
 def get_db():
@@ -51,7 +59,6 @@ def get_db():
 # ---------------------------
 # Multitenancy Firestore helpers
 # ---------------------------
-import uuid
 def make_empresa_id_from_phone(phone_number: str) -> str:
     if not phone_number:
         return str(uuid.uuid4())
@@ -72,8 +79,8 @@ def get_empresa_by_phone(phone_number: str):
         docs = db.collection('empresas').where('phone_number', '==', phone_number).limit(1).stream()
         for d in docs:
             return (d.id, d)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Erro ao buscar empresa por telefone: {e}")
     empresa_id = make_empresa_id_from_phone(phone_number)
     doc = db.collection('empresas').document(empresa_id).get()
     if doc.exists:
@@ -86,9 +93,12 @@ def get_empresa_by_id(empresa_id: str):
     return (empresa_id, doc) if doc.exists else (None, None)
 
 def append_empresa_history(empresa_id: str, entry: dict):
-    db = get_db()
-    events = db.collection('empresas').document(empresa_id).collection('events')
-    events.add(entry)
+    try:
+        db = get_db()
+        events = db.collection('empresas').document(empresa_id).collection('events')
+        events.add(entry)
+    except Exception as e:
+        logger.error(f"Erro ao adicionar histórico da empresa {empresa_id}: {e}")
 
 # ---------------------------
 # File extraction
@@ -105,8 +115,8 @@ def extrair_texto_pdf_url(pdf_url):
                 if text.strip():
                     pages.append(f"\n--- PÁGINA {idx} ---\n{text}")
             return "".join(pages)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.error(f"Erro ao extrair texto do PDF: {e}")
     return ""
 
 def extrair_texto_excel_url(excel_url):
@@ -115,8 +125,8 @@ def extrair_texto_excel_url(excel_url):
         if r.status_code == 200:
             todas_abas = pd.read_excel(io.BytesIO(r.content), sheet_name=None)
             return "".join([f"\n--- ABA: {aba} ---\n{df.to_string(index=False)}\n" for aba, df in todas_abas.items()])
-    except Exception:
-        pass
+    except Exception as e:
+        logger.error(f"Erro ao extrair texto do Excel: {e}")
     return ""
 
 # ---------------------------
@@ -136,7 +146,8 @@ def send_whatsapp(to, text, instance_name=None):
         time.sleep(1)
         requests.post(f"{EVOLUTION_API_URL}/message/sendText/{instance_name}", headers=headers, json={"number": to, "text": text}, timeout=10)
         return True
-    except Exception:
+    except Exception as e:
+        logger.error(f"Erro ao enviar mensagem WhatsApp para {to}: {e}")
         return False
 
 def criar_e_configurar_instancia_automatica(phone_number):
@@ -151,7 +162,8 @@ def criar_e_configurar_instancia_automatica(phone_number):
         if webhook_target_url:
             requests.post(f"{EVOLUTION_API_URL}/webhook/set/{client_instance}", headers=headers, json={"url": webhook_target_url, "enabled": True, "events": ["MESSAGES_UPSERT"]}, timeout=10)
         return True
-    except Exception:
+    except Exception as e:
+        logger.error(f"Erro ao criar instância automática para {phone_number}: {e}")
         return False
 
 def gerar_e_enviar_qrcode_central(phone_number):
@@ -170,18 +182,21 @@ def gerar_e_enviar_qrcode_central(phone_number):
         payload = {"number": phone_number, "caption": "🤖 *QR Code do Negobot Moz!*\\nEscaneie com o WhatsApp da empresa para ativar.", "media": base64_qr, "mediatype": "image", "fileName": "qr.png"}
         requests.post(f"{EVOLUTION_API_URL}/message/sendMedia/{EVOLUTION_INSTANCE_NAME}", headers=headers, json=payload, timeout=15)
         return True
-    except Exception:
+    except Exception as e:
+        logger.error(f"Erro ao gerar/enviar QR code para {phone_number}: {e}")
         return False
 
 # ---------------------------
-# Groq integration (deterministic defaults)
+# Groq integration & Handlers
 # ---------------------------
 GROQ_API_KEY = os.getenv('GROQ_API_KEY')
 GROQ_MODEL = os.getenv('GROQ_MODEL', 'llama-3.3-70b-versatile')
-GROQ_VISION_MODEL = os.getenv('GROQ_VISION_MODEL', 'qwen-2.5-32b')
+GROQ_VISION_MODEL = os.getenv('GROQ_VISION_MODEL', 'llama-3.2-90b-vision-preview')
+GROQ_WHISPER_MODEL = os.getenv('GROQ_WHISPER_MODEL', 'whisper-large-v3')
 
 def chamar_groq_rest(contents_payload, system_instruction="", temperature=0.0, max_tokens=600, top_p=1.0, frequency_penalty=0.0, presence_penalty=0.0, model=None):
     if not GROQ_API_KEY:
+        logger.warning("GROQ_API_KEY não configurada.")
         return ""
     model = model or GROQ_MODEL
     url = "https://api.groq.com/openai/v1/chat/completions"
@@ -203,8 +218,77 @@ def chamar_groq_rest(contents_payload, system_instruction="", temperature=0.0, m
         data = response.json()
         if response.status_code == 200 and "choices" in data and len(data["choices"]) > 0:
             return data["choices"][0]["message"]["content"].strip()
-    except Exception:
-        pass
+        else:
+            logger.error(f"Erro na API Groq: {response.status_code} - {data}")
+    except Exception as e:
+        logger.error(f"Exceção ao chamar Groq REST: {e}")
+    return ""
+
+def transcrever_audio_groq(audio_url: str) -> str:
+    if not GROQ_API_KEY or not audio_url:
+        return ""
+    try:
+        r = requests.get(audio_url, timeout=25)
+        if r.status_code != 200:
+            return ""
+        
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".ogg") as tmp:
+            tmp.write(r.content)
+            tmp_path = tmp.name
+
+        url = "https://api.groq.com/openai/v1/audio/transcriptions"
+        headers = {"Authorization": f"Bearer {GROQ_API_KEY}"}
+        
+        with open(tmp_path, "rb") as f:
+            files = {"file": ("audio.ogg", f, "audio/ogg")}
+            data = {"model": GROQ_WHISPER_MODEL, "language": "pt"}
+            response = requests.post(url, headers=headers, files=files, data=data, timeout=30)
+        
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+        if response.status_code == 200:
+            return response.json().get("text", "").strip()
+        else:
+            logger.error(f"Erro na transcrição de áudio: {response.status_code} - {response.text}")
+    except Exception as e:
+        logger.error(f"Exceção ao transcrever áudio: {e}")
+    return ""
+
+def analisar_imagem_groq(image_url: str, instrucao: str = "Analise e descreva esta imagem em detalhe.") -> str:
+    if not GROQ_API_KEY or not image_url:
+        return ""
+    try:
+        r = requests.get(image_url, timeout=20)
+        if r.status_code != 200:
+            return ""
+        
+        encoded_image = base64.b64encode(r.content).decode('utf-8')
+        url = "https://api.groq.com/openai/v1/chat/completions"
+        headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
+        
+        payload = {
+            "model": GROQ_VISION_MODEL,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": instrucao},
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encoded_image}"}}
+                    ]
+                }
+            ],
+            "max_tokens": 500
+        }
+        
+        response = requests.post(url, headers=headers, json=payload, timeout=25)
+        data = response.json()
+        if response.status_code == 200 and "choices" in data and len(data["choices"]) > 0:
+            return data["choices"][0]["message"]["content"].strip()
+        else:
+            logger.error(f"Erro na análise de imagem: {response.status_code} - {data}")
+    except Exception as e:
+        logger.error(f"Exceção ao analisar imagem: {e}")
     return ""
 
 # ---------------------------
@@ -315,7 +399,6 @@ def handle_empresa_update_from_text(empresa_id: str, phone_number: str, message_
 # ---------------------------
 PROCESSADOS = {}
 processados_lock = threading.Lock()
-TIMEOUT_HUMANO_MINUTOS = int(os.getenv('TIMEOUT_HUMANO_MINUTOS', 2))
 CENTRAL_INSTANCE = os.getenv('EVOLUTION_INSTANCE_NAME')
 NUMERO_ASSISTANTE = os.getenv('ASSISTANT_NUMBER')
 ADMIN_NUMBER = os.getenv('ADMIN_NUMBER')
@@ -367,7 +450,6 @@ def _process(data):
         if not message_text and not document_message:
             return
 
-        msg_clean = (message_text or "").lower().strip()
         agora = datetime.now(timezone.utc)
         is_from_me = key.get('fromMe') is True or str(key.get('fromMe')).lower() == 'true'
         db = get_db()
@@ -406,7 +488,7 @@ def _process(data):
             historico_ref.add({"role": "atendente", "text": message_text, "timestamp": agora})
             return
 
-        # montar histórico para contexto
+        # Montar histórico para contexto
         docs_h = historico_ref.order_by('timestamp', direction=firestore.Query.DESCENDING).limit(10).stream()
         contents = [{"role": "assistant" if m.to_dict().get('role') in ["assistant", "atendente"] else "user", "parts": [{"text": m.to_dict().get('text', '')}]} for m in list(docs_h)[::-1]]
         contents.append({"role": "user", "parts": [{"text": message_text}]})
@@ -437,7 +519,7 @@ def _process(data):
                 pass
 
     except Exception as e:
-        print("Erro Webhook:", e)
+        logger.error(f"Erro Crítico no Webhook: {e}", exc_info=True)
 
 def processar_webhook_background(data):
     threading.Thread(target=_process, args=(data,), daemon=True).start()
