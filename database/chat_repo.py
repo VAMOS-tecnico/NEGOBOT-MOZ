@@ -1,8 +1,12 @@
 import logging
 from datetime import datetime, timezone
-from extensions import db
+import extensions
 
 logger = logging.getLogger(__name__)
+
+def _get_db():
+    """Obtém dinamicamente a conexão ativa do Firestore."""
+    return extensions.db
 
 def _sanitizar_doc_id(doc_id):
     """Garante que o ID enviado ao Firestore seja sempre uma string válida."""
@@ -19,6 +23,11 @@ def _sanitizar_doc_id(doc_id):
 def salvar_mensagem(user_id, role, content=""):
     """Salva uma mensagem no histórico da conversa no Firestore."""
     try:
+        db = _get_db()
+        if not db:
+            logger.error("Firestore (db) ainda não foi inicializado em extensions.")
+            return
+
         user_id_clean = _sanitizar_doc_id(user_id)
         doc_ref = db.collection('chats').document(user_id_clean)
         
@@ -47,6 +56,10 @@ def salvar_mensagem(user_id, role, content=""):
 def obter_historico(user_id):
     """Recupera o histórico recente de mensagens de um utilizador."""
     try:
+        db = _get_db()
+        if not db:
+            return []
+
         user_id_clean = _sanitizar_doc_id(user_id)
         doc_ref = db.collection('chats').document(user_id_clean)
         doc = doc_ref.get()
@@ -60,6 +73,10 @@ def obter_historico(user_id):
 def obter_estado_usuario(user_id):
     """Recupera metadados e estado do utilizador (ex: modo humano, instância)."""
     try:
+        db = _get_db()
+        if not db:
+            return {}
+
         user_id_clean = _sanitizar_doc_id(user_id)
         doc_ref = db.collection('chats').document(user_id_clean)
         doc = doc_ref.get()
@@ -73,6 +90,10 @@ def obter_estado_usuario(user_id):
 def atualizar_estado_usuario(user_id, novos_dados):
     """Atualiza metadados ou preferências do utilizador no Firestore."""
     try:
+        db = _get_db()
+        if not db:
+            return
+
         user_id_clean = _sanitizar_doc_id(user_id)
         doc_ref = db.collection('chats').document(user_id_clean)
         
@@ -82,7 +103,7 @@ def atualizar_estado_usuario(user_id, novos_dados):
     except Exception as e:
         logger.error(f"Erro ao atualizar estado do utilizador: {e}", exc_info=True)
 
-# Aliases de compatibilidade para workflows em inglês ou sistemas legados
+# Aliases de compatibilidade
 get_chat_history = obter_historico
 save_chat_history = salvar_mensagem
 get_user_state = obter_estado_usuario
