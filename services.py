@@ -135,6 +135,7 @@ def extrair_texto_excel_url(excel_url):
 EVOLUTION_API_URL = os.getenv('EVOLUTION_API_URL')
 EVOLUTION_API_KEY = os.getenv('EVOLUTION_API_KEY')
 EVOLUTION_INSTANCE_NAME = os.getenv('EVOLUTION_INSTANCE_NAME')
+ADMIN_NUMBER = os.getenv('ADMIN_NUMBER')
 
 def send_whatsapp(to, text, instance_name=None):
     if not text or not to:
@@ -149,6 +150,15 @@ def send_whatsapp(to, text, instance_name=None):
     except Exception as e:
         logger.error(f"Erro ao enviar mensagem WhatsApp para {to}: {e}")
         return False
+
+def notificar_erro_admin(mensagem: str):
+    """Notifica o administrador do sistema via WhatsApp sobre erros críticos."""
+    if not ADMIN_NUMBER:
+        return
+    try:
+        send_whatsapp(ADMIN_NUMBER, f"🚨 *ERRO CRÍTICO NO SISTEMA* 🚨\n\n{mensagem}")
+    except Exception as e:
+        logger.error(f"Erro ao notificar administrador: {e}")
 
 def criar_e_configurar_instancia_automatica(phone_number):
     try:
@@ -474,7 +484,6 @@ PROCESSADOS = {}
 processados_lock = threading.Lock()
 CENTRAL_INSTANCE = os.getenv('EVOLUTION_INSTANCE_NAME')
 NUMERO_ASSISTANTE = os.getenv('ASSISTANT_NUMBER')
-ADMIN_NUMBER = os.getenv('ADMIN_NUMBER')
 
 def _process(data):
     try:
@@ -565,7 +574,7 @@ def _process(data):
             return
 
         if is_from_me:
-            conversa_ref.set({"status_atendimento": "bot", "ultima_mensagem_por": "atendente", "ultima_interacao": agoras}, merge=True)
+            conversa_ref.set({"status_atendimento": "bot", "ultima_mensagem_por": "atendente", "ultima_interacao": agora}, merge=True)
             historico_ref.add({"role": "atendente", "text": message_text, "timestamp": agora})
             return
 
