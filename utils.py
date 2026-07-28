@@ -1,10 +1,7 @@
-cp utils.py utils.py.bak
-cat > utils.py <<'PY'
 # utils.py
 """
 Utilitários comuns para o projeto NEGOBOT-MOZ.
 """
-
 import logging
 import re
 import time
