@@ -402,6 +402,27 @@ def get_chat_history(empresa_id: str, phone_number: str, limit: int = 50):
         logger.error(f"Erro ao buscar histórico para {phone_number} na empresa {empresa_id}: {e}")
         return []
 
+def save_chat_history(empresa_id: str, phone_number: str, role: str, text: str):
+    """Guarda uma mensagem no histórico de chat no Firestore."""
+    try:
+        db = get_db()
+        historico_ref = (
+            db.collection('empresas')
+            .document(empresa_id)
+            .collection('conversas')
+            .document(phone_number)
+            .collection('historico')
+        )
+        historico_ref.add({
+            "role": role,
+            "text": text,
+            "timestamp": datetime.now(timezone.utc)
+        })
+        return True
+    except Exception as e:
+        logger.error(f"Erro ao salvar histórico para {phone_number} na empresa {empresa_id}: {e}")
+        return False
+
 # ---------------------------
 # Onboarding and updates
 # ---------------------------
@@ -544,7 +565,7 @@ def _process(data):
             return
 
         if is_from_me:
-            conversa_ref.set({"status_atendimento": "bot", "ultima_mensagem_por": "atendente", "ultima_interacao": agora}, merge=True)
+            conversa_ref.set({"status_atendimento": "bot", "ultima_mensagem_por": "atendente", "ultima_interacao": agoras}, merge=True)
             historico_ref.add({"role": "atendente", "text": message_text, "timestamp": agora})
             return
 
