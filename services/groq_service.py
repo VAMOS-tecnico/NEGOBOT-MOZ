@@ -72,3 +72,11 @@ def gerar_resposta_groq(messages, system_prompt=""):
     except Exception as e:
         logger.error(f"Erro ao gerar resposta Groq: {e}")
         return "Desculpe, ocorreu um erro temporário no meu sistema de IA."
+
+def chamar_groq_rest(prompt_ou_mensagens, system_prompt=""):
+    """Função de compatibilidade para chamadas do central_flow e client_flow."""
+    if isinstance(prompt_ou_mensagens, list):
+        return gerar_resposta_groq(prompt_ou_mensagens, system_prompt)
+    else:
+        messages = [{"role": "user", "content": str(prompt_ou_mensagens)}]
+        return gerar_resposta_groq(messages, system_prompt)
