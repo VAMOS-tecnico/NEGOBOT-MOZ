@@ -292,8 +292,9 @@ def analisar_imagem_groq(image_url: str, instrucao: str = "Analise e descreva es
     return ""
 
 # ---------------------------
-# Safety helpers
+# Safety helpers & Timeout
 # ---------------------------
+TIMEOUT_HUMANO_MINUTOS = int(os.getenv('TIMEOUT_HUMANO_MINUTOS', 2))
 BLACKLIST_LINK_TOKENS = ["http://", "https://", "www.", "painel", "dashboard", ".com", ".net"]
 SUSPICIOUS_VERBS = ["acesse", "clique", "visite", "faça login", "entre em", "registe-se"]
 
@@ -349,6 +350,31 @@ REGRAS:
 4) Se a pergunta for geral e não estiver coberta pelos dados, use o fallback acima.
 """
     return instruction
+
+def checar_timeout_atendimento_humano(empresa_id: str, phone_number: str) -> bool:
+    """Verifica se o atendimento humano excedeu o tempo limite e reverte para o bot."""
+    try:
+        db = get_db()
+        conversa_ref = db.collection('empresas').document(empresa_id).collection('conversas').document(phone_number)
+        doc = conversa_ref.get()
+        if not doc.exists:
+            return False
+        
+        dados = doc.to_dict()
+        if dados.get("status_atendimento") == "humano":
+            ultima_interacao = dados.get("ultima_interacao")
+            if ultima_interacao:
+                agora = datetime.now(timezone.utc)
+                if hasattr(ultima_interacao, 'timestamp'):
+                    ultima_interacao = datetime.fromtimestamp(ultima_interacao.timestamp(), tz=timezone.utc)
+                
+                if agora - ultima_interacao > timedelta(minutes=TIMEOUT_HUMANO_MINUTOS):
+                    conversa_ref.set({"status_atendimento": "bot"}, merge=True)
+                    return True
+        return False
+    except Exception as e:
+        logger.error(f"Erro ao checar timeout de atendimento humano: {e}")
+        return False
 
 # ---------------------------
 # Onboarding and updates
@@ -479,9 +505,17 @@ def _process(data):
                 if updated:
                     return
 
-        # Atendimento multilocatário: responder apenas com dados da empresa
+        # Atendimento multilocatário: verificar timeout e status
         conversa_ref = db.collection('empresas').document(empresa_id).collection('conversas').document(phone_number)
         historico_ref = conversa_ref.collection('historico')
+
+        # Checar se expirou o tempo de atendimento humano
+        checar_timeout_atendimento_humano(empresa_id, phone_number)
+
+        # Verificar se a conversa está com atendente humano ativo
+        conversa_doc = conversa_ref.get()
+        if conversa_doc.exists and conversa_doc.to_dict().get("status_atendimento") == "humano" and not is_from_me:
+            return
 
         if is_from_me:
             conversa_ref.set({"status_atendimento": "bot", "ultima_mensagem_por": "atendente", "ultima_interacao": agora}, merge=True)
