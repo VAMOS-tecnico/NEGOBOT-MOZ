@@ -1,3 +1,4 @@
+import re
 import requests
 import logging
 from datetime import datetime, timedelta, timezone
@@ -36,7 +37,7 @@ def checar_timeout_atendimento_humano(conversa_ref, conversa_dados, agora):
 
 def process_client_flow(
     nome_instancia_atual, 
-    phone_number, 
+    phone_number="", 
     message_text="", 
     msg_clean="", 
     document_message=None, 
@@ -46,26 +47,50 @@ def process_client_flow(
 ):
     """
     Workflow dos bots dos clientes (tenants) da Negobot Moz.
-    Gerencia o atendimento aos clientes finais, consulta diretrizes e absorve PDFs/Excels.
+    Garante a extração segura do ID da instância para evitar erros de rotas no Firestore.
     """
     try:
         if agora is None:
             agora = datetime.now(timezone.utc)
 
+        # 1. TRATAMENTO INTELIGENTE DE PAYLOAD (Caso o webhook passe a estrutura 'data' inteira)
+        if isinstance(nome_instancia_atual, dict):
+            payload_data = nome_instancia_atual
+            
+            # Extrai o nome/número da instância limpo (ex: "258878244010")
+            nome_instancia_atual = payload_data.get('instance') or payload_data.get('instanceId') or 'instancia_desconhecida'
+            
+            # Se phone_number não veio preenchido, extrai do dicionário
+            if not phone_number:
+                data_inner = payload_data.get('data', {}) if isinstance(payload_data.get('data'), dict) else payload_data
+                key = data_inner.get('key', {}) if isinstance(data_inner, dict) else {}
+                if isinstance(key, dict):
+                    phone_number = key.get('remoteJid') or key.get('participant') or key.get('id') or ''
+                
+                if not message_text:
+                    msg_obj = data_inner.get('message', {}) if isinstance(data_inner, dict) else {}
+                    message_text = msg_obj.get('conversation') or msg_obj.get('extendedTextMessage', {}).get('text') or ""
+                    msg_clean = str(message_text).lower().strip()
+
+        nome_instancia_atual = str(nome_instancia_atual).strip()
+        
         if not phone_number:
             return
 
-        client_doc_ref = extensions.db.collection('clientes_bot').document(str(nome_instancia_atual))
-        conversa_ref = client_doc_ref.collection('conversas').document(str(phone_number))
+        phone_number = str(phone_number).strip()
+
+        # Referências seguras no Firestore
+        client_doc_ref = extensions.db.collection('clientes_bot').document(nome_instancia_atual)
+        conversa_ref = client_doc_ref.collection('conversas').document(phone_number)
         historico_ref = conversa_ref.collection('historico')
 
-        # 1. Registo de mensagem enviada pelo próprio atendente humano da empresa
+        # 2. Registo de mensagem enviada pelo próprio atendente humano da empresa
         if is_from_me:
             conversa_ref.set({"status_atendimento": "bot", "ultima_mensagem_por": "atendente", "ultima_interacao": agora}, merge=True)
             historico_ref.add({"role": "atendente", "text": message_text, "timestamp": agora})
             return
 
-        # 2. Regra Comercial Padrão (Sem catálogo cadastrado ainda)
+        # 3. Regra Comercial Padrão (Para clientes sem catálogo configurado)
         default_rules = (
             "- Atenda os clientes finais com cortesia, agilidade e profissionalismo.\n"
             "- NUNCA diga que a loja não tem stock de forma genérica e NUNCA invente preços ou produtos.\n"
@@ -85,7 +110,7 @@ def process_client_flow(
         else:
             dados_cliente = client_doc.to_dict() or {}
 
-        # 3. Verificação de expiração do plano de demonstração
+        # 4. Verificação de expiração do plano de demonstração
         status_plano = dados_cliente.get("status_plano", "demonstracao")
         data_expiracao = dados_cliente.get("data_expiracao")
         if data_expiracao and data_expiracao.tzinfo is None:
@@ -95,7 +120,7 @@ def process_client_flow(
             send_whatsapp(phone_number, "⚠️ O período de teste deste assistente virtual expirou.", instance_name=nome_instancia_atual)
             return
 
-        # 4. Comando Especial: /criar-arte
+        # 5. Comando Especial: /criar-arte
         if msg_clean.startswith("/criar-arte"):
             pedido = message_text.replace("/criar-arte", "").strip()
             if not pedido:
@@ -106,7 +131,7 @@ def process_client_flow(
             link_imagem = gerar_url_imagem_pollinations(prompt_ingles)
             
             payload = {
-                "number": str(phone_number), 
+                "number": phone_number, 
                 "caption": f"✨ *Arte Gerada!*\n🎯 _{pedido}_", 
                 "media": link_imagem, 
                 "mediatype": "image", 
@@ -120,8 +145,8 @@ def process_client_flow(
             )
             return
 
-        # 5. Leitura Automática de Excel e PDF enviados para a instância
-        if document_message and str(phone_number).split('@')[0] in str(nome_instancia_atual):
+        # 6. Leitura Automática de Excel e PDF
+        if document_message and phone_number.split('@')[0] in nome_instancia_atual:
             url_doc = document_message.get('url')
             file_name = document_message.get('fileName', '').lower()
 
@@ -143,7 +168,7 @@ def process_client_flow(
                     send_whatsapp(phone_number, "✅ *PDF Carregado!* Conteúdo incorporado às diretrizes do bot.", instance_name=nome_instancia_atual)
                 return
 
-        # 6. Verificação do modo de Atendimento Humano
+        # 7. Verificação do modo de Atendimento Humano
         conversa_doc = conversa_ref.get()
         conversa_dados = conversa_doc.to_dict() if conversa_doc.exists else {}
         status_atendimento = conversa_dados.get("status_atendimento", "bot")
@@ -160,7 +185,7 @@ def process_client_flow(
                     historico_ref.add({"role": "user", "text": message_text, "timestamp": agora})
                     return
 
-        # 7. Gatilhos de transferência para Atendente Humano
+        # 8. Gatilhos de transferência para Atendente Humano
         gatilhos_humano = ["falar com atendente", "suporte humano", "atendente", "humano", "#suporte"]
         if any(g in msg_clean for g in gatilhos_humano):
             conversa_ref.set({
@@ -176,7 +201,7 @@ def process_client_flow(
             )
             return
 
-        # 8. Recuperação e Formatação do Histórico para a Groq (OpenAI Schema)
+        # 9. Formatação do Histórico para a Groq (LLaMA 3.3)
         docs_h = historico_ref.order_by('timestamp', direction=firestore.Query.DESCENDING).limit(10).stream()
         lista_m = [d.to_dict() for d in docs_h]
         lista_m.reverse()
@@ -203,7 +228,7 @@ REGRA DE REATIVAÇÃO E FLUXO:
 - NUNCA use a tag [TRANSICAO_HUMANO] em saudações simples.
 - Apenas inclua a tag [TRANSICAO_HUMANO] se o cliente exigir expressamente um atendente humano e você não tiver a resposta."""
 
-        # 9. Geração da Resposta na Groq
+        # 10. Resposta Inteligente via Groq
         response_text = chamar_groq_rest(contents, system_prompt=sys_instruction)
         historico_ref.add({"role": "user", "text": message_text, "timestamp": agora})
 
