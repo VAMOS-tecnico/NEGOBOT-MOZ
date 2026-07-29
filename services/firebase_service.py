@@ -3,38 +3,40 @@ import json
 import logging
 import firebase_admin
 from firebase_admin import credentials, firestore
-from config import Config
 
 logger = logging.getLogger(__name__)
 
-if not firebase_admin._apps:
-    # 1. Procura a string JSON nas variáveis de ambiente
-    raw_config = getattr(Config, 'FIREBASE_CONFIG', None) or os.getenv('FIREBASE_CONFIG')
-    
-    cred = None
-    if raw_config:
-        try:
-            if isinstance(raw_config, str):
+def inicializar_firebase():
+    if not firebase_admin._apps:
+        # 1. Tenta carregar as credenciais da variável FIREBASE_CONFIG (no Render)
+        raw_config = os.getenv('FIREBASE_CONFIG')
+        
+        if raw_config:
+            try:
                 cred_dict = json.loads(raw_config.strip())
                 cred = credentials.Certificate(cred_dict)
-            elif isinstance(raw_config, dict):
-                cred = credentials.Certificate(raw_config)
-        except Exception as e:
-            logger.error(f"Erro ao processar JSON da variavel FIREBASE_CONFIG: {e}")
+                firebase_admin.initialize_app(cred)
+                logger.info("🟢 Firebase inicializado com sucesso via Variável de Ambiente!")
+                return
+            except Exception as e:
+                logger.error(f"❌ Erro ao converter a variável FIREBASE_CONFIG para JSON: {e}")
+                raise e
+        
+        # 2. Se não estiver no Render, tenta carregar o ficheiro local (no seu PC)
+        if os.path.exists("serviceAccountKey.json"):
+            cred = credentials.Certificate("serviceAccountKey.json")
+            firebase_admin.initialize_app(cred)
+            logger.info("🟢 Firebase inicializado via ficheiro local serviceAccountKey.json!")
+            return
 
-    # 2. Fallback para ficheiro local (caso estejas a testar no computador)
-    if not cred and os.path.exists("serviceAccountKey.json"):
-        cred = credentials.Certificate("serviceAccountKey.json")
-
-    # 3. Inicializa APENAS se a credencial for válida
-    if cred:
-        firebase_admin.initialize_app(cred)
-        logger.info("🟢 Firebase inicializado com sucesso!")
-    else:
-        # Levanta um erro claro em vez de deixar a Google falhar em silêncio
+        # 3. Se não encontrar nenhum dos dois, interrompe com aviso claro
         raise RuntimeError(
-            "❌ FALTAM CREDENCIAIS: A variável 'FIREBASE_CONFIG' não está definida no Render "
-            "ou o JSON colado no painel é inválido."
+            "❌ FALTAM CREDENCIAIS: A variável 'FIREBASE_CONFIG' não está preenchida no Render "
+            "e o ficheiro 'serviceAccountKey.json' não existe no computador."
         )
 
+# Executa a inicialização
+inicializar_firebase()
+
+# Exporta a ligação à base de dados para o resto do projeto
 db = firestore.client()
