@@ -86,7 +86,7 @@ def send_whatsapp(to, text, instance_name=None):
         return False
 
 def criar_e_configurar_instancia_automatica(phone_number):
-    """Cria e configura o webhook para uma nova instância de utilizador."""
+    """Cria e configura o webhook + definições de instância sem spam de requisições."""
     try:
         client_instance_raw = _limpar_numero(phone_number)
         client_instance = quote(client_instance_raw)
@@ -110,13 +110,36 @@ def criar_e_configurar_instancia_automatica(phone_number):
         res_create = requests.post(url_create, headers=headers, json=payload_create, timeout=45)
         res_create.raise_for_status()
         
+        # 🟢 1. Configurar as Definições da Instância (Ignorar Grupos, Rejeitar Chamadas e Tiques Azuis)
+        try:
+            url_settings = f"{Config.EVOLUTION_API_URL}/instance/setSettings/{client_instance}"
+            payload_settings = {
+                "reject_call": True,
+                "msg_call": "",
+                "groups_ignore": True,     # 🚫 Ignora grupos direto na fonte
+                "always_online": False,
+                "read_messages": True,     # 🔵 Marca a mensagem como lida (2 tiques azuis)
+                "read_status": False,
+                "sync_full_history": False
+            }
+            requests.post(url_settings, headers=headers, json=payload_settings, timeout=30)
+        except Exception as set_err:
+            logger.warning(f"Não foi possível aplicar definições de segurança na instância: {set_err}")
+
+        # 🟢 2. Configurar o Webhook com bloqueio rigoroso de eventos
         webhook_target_url = getattr(Config, 'WEBHOOK_URL', None)
         if webhook_target_url:
             url_webhook = f"{Config.EVOLUTION_API_URL}/webhook/set/{client_instance}"
             payload_webhook = {
                 "url": webhook_target_url,
                 "enabled": True,
-                "events": ["MESSAGES_UPSERT"]
+                "byEvents": False,
+                "base64": False,
+                "webhookByEvents": False,
+                "events": [
+                    "MESSAGES_UPSERT"  # 🟢 APENAS este evento (filtra digitação e status)
+                ],
+                "groupsIgnore": True   # 🚫 Impede disparos de grupos para o Render
             }
             requests.post(url_webhook, headers=headers, json=payload_webhook, timeout=45)
 
