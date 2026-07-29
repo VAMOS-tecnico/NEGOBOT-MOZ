@@ -131,7 +131,7 @@ def criar_e_configurar_instancia_automatica(phone_number):
         except Exception as set_err:
             logger.warning(f"Não foi possível aplicar definições de segurança na instância: {set_err}")
 
-        # 🟢 2. Configurar o Webhook
+        # 🟢 2. Configurar o Webhook Automaticamente
         webhook_target_url = getattr(Config, 'WEBHOOK_URL', None)
         if webhook_target_url:
             url_webhook = f"{Config.EVOLUTION_API_URL}/webhook/set/{client_instance}"
@@ -142,11 +142,14 @@ def criar_e_configurar_instancia_automatica(phone_number):
                 "base64": False,
                 "webhookByEvents": False,
                 "events": [
-                    "MESSAGES_UPSERT"
+                    "MESSAGES_UPSERT",
+                    "CHATS_UPSERT",
+                    "CONNECTION_UPDATE"
                 ],
                 "groupsIgnore": True
             }
-            requests.post(url_webhook, headers=headers, json=payload_webhook, timeout=45)
+            res_wh = requests.post(url_webhook, headers=headers, json=payload_webhook, timeout=45)
+            logger.info(f"Webhook configurado automaticamente para {client_instance}: {res_wh.status_code}")
 
         return True
     except Exception as e:
@@ -232,7 +235,11 @@ def aplicar_travas_instancia_central():
                 "byEvents": False,
                 "base64": False,
                 "webhookByEvents": False,
-                "events": ["MESSAGES_UPSERT"],
+                "events": [
+                    "MESSAGES_UPSERT",
+                    "CHATS_UPSERT",
+                    "CONNECTION_UPDATE"
+                ],
                 "groupsIgnore": True
             }
             requests.post(url_webhook, headers=headers, json=payload_webhook, timeout=45)
