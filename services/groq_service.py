@@ -1,9 +1,18 @@
 import os
+import re
 import requests
 import logging
 from config import Config
 
 logger = logging.getLogger(__name__)
+
+def _limpar_texto_saida(texto):
+    """Remove caracteres de controlo invisíveis que podem quebrar o JSON do Baileys/WhatsApp."""
+    if not texto:
+        return ""
+    # Remove caracteres nulos e de controlo não imprimíveis
+    texto_limpo = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', str(texto))
+    return texto_limpo.strip()
 
 def chamar_groq_rest(historico_mensagens, system_prompt=None):
     """
@@ -61,7 +70,9 @@ def chamar_groq_rest(historico_mensagens, system_prompt=None):
 
         response.raise_for_status()
         data = response.json()
-        return data["choices"][0]["message"]["content"].strip()
+        
+        resposta_raw = data["choices"][0]["message"]["content"]
+        return _limpar_texto_saida(resposta_raw)
 
     except Exception as e:
         logger.error(f"Erro ao chamar a API da Groq: {e}")
