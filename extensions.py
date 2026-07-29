@@ -1,46 +1,41 @@
 import os
 import json
+import logging
 import firebase_admin
 from firebase_admin import credentials, firestore
+
+logger = logging.getLogger(__name__)
 
 db = None
 
 def init_extensions(app=None):
     global db
 
-    # Evita re-inicializar caso a app já esteja ativa
-    if firebase_admin._apps:
-        db = firestore.client()
-        return
+    if not firebase_admin._apps:
+        raw_config = os.getenv('FIREBASE_CONFIG')
 
-    firebase_config_env = os.getenv('FIREBASE_CONFIG')
+        if raw_config:
+            try:
+                # Lê a variável de ambiente configurada no Render
+                cred_dict = json.loads(raw_config.strip())
+                cred = credentials.Certificate(cred_dict)
+                firebase_admin.initialize_app(cred)
+                logger.info("📦 [SISTEMA] Firebase inicializado com sucesso via FIREBASE_CONFIG.")
+            except Exception as e:
+                logger.error(f"❌ [SISTEMA] O conteúdo da variável FIREBASE_CONFIG não é um JSON válido: {e}")
+                raise e
 
-    if firebase_config_env:
-        try:
-            # Tenta converter a string da variável do Render em dicionário JSON
-            firebase_config = json.loads(firebase_config_env.strip())
-            cred = credentials.Certificate(firebase_config)
-            firebase_admin.initialize_app(cred)
-            print("📦 [SISTEMA] Firebase inicializado com sucesso via Variável de Ambiente (FIREBASE_CONFIG).")
-        except Exception as e:
-            print(f"❌ [SISTEMA] Erro ao ler o JSON da variável FIREBASE_CONFIG no Render: {e}")
-            raise e
-            
-    elif os.path.exists("serviceAccountKey.json"):
-        # Fallback apenas para quando estiveres a rodar o projeto no teu computador
-        try:
+        elif os.path.exists("serviceAccountKey.json"):
+            # Fallback para o teu computador local
             cred = credentials.Certificate("serviceAccountKey.json")
             firebase_admin.initialize_app(cred)
-            print("📦 [SISTEMA] Firebase inicializado via ficheiro local serviceAccountKey.json.")
-        except Exception as e:
-            print(f"❌ [SISTEMA] Erro ao carregar ficheiro local do Firebase: {e}")
-            raise e
-    else:
-        # Se não encontrar credenciais nem na ENV nem em ficheiro local, interrompe com mensagem clara
-        raise RuntimeError(
-            "❌ [SISTEMA CRÍTICO] A variável 'FIREBASE_CONFIG' não foi encontrada no Render "
-            "e o ficheiro 'serviceAccountKey.json' não existe na raiz do projeto!"
-        )
+            logger.info("📦 [SISTEMA] Firebase inicializado via ficheiro local serviceAccountKey.json.")
 
-    # Liga ao Firestore apenas se a inicialização correu bem
+        else:
+            raise RuntimeError(
+                "❌ [SISTEMA CRÍTICO] A variável FIREBASE_CONFIG não está configurada no Render "
+                "e o ficheiro 'serviceAccountKey.json' não existe localmente!"
+            )
+
+    # Liga a variável global db ao Firestore
     db = firestore.client()
