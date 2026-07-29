@@ -1,5 +1,5 @@
 import re
-import requests
+import os
 import logging
 from datetime import datetime, timedelta, timezone
 from firebase_admin import firestore
@@ -82,6 +82,14 @@ def process_client_flow(
                 msg_obj = data_inner.get('message', {}) if isinstance(data_inner, dict) else {}
                 message_text = msg_obj.get('conversation') or msg_obj.get('extendedTextMessage', {}).get('text') or ""
 
+            # Captura de documentos se vierem estruturados no payload interno
+            if not document_message and isinstance(data_inner, dict):
+                msg_inner = data_inner.get('message', {})
+                document_message = (
+                    msg_inner.get('documentMessage') or 
+                    msg_inner.get('documentWithCaptionMessage', {}).get('message', {}).get('documentMessage')
+                )
+
         # 🚫 BLOQUEIO RÍGIDO DE GRUPOS E TRANSMISSÕES
         str_phone_raw = str(phone_number or "").strip()
         str_remote_jid = str(remote_jid or "").strip()
@@ -121,11 +129,53 @@ def process_client_flow(
             historico_ref.add({"role": "atendente", "text": message_text, "timestamp": agora})
             return
 
-        # 4. REGISTA A MENSAGEM DO CLIENTE IMEDIATAMENTE NO FIRESTORE
+        # 4. PROCESSAMENTO DE DOCUMENTOS (PDF / EXCEL) PARA TREINAMENTO DO CLIENTE
+        if document_message and isinstance(document_message, dict):
+            media_url = document_message.get('mediaUrl') or document_message.get('url') or document_message.get('fileUrl')
+            file_name = document_message.get('fileName', 'documento')
+            file_extension = os.path.splitext(file_name)[1].lower()
+            
+            # Se não vier extensão no nome, tenta adivinhar pelo mimetype
+            mimetype = document_message.get('mimetype', '')
+            if not file_extension:
+                if 'pdf' in mimetype: file_extension = '.pdf'
+                elif 'sheet' in mimetype or 'excel' in mimetype: file_extension = '.xlsx'
+                elif 'csv' in mimetype: file_extension = '.csv'
+
+            if media_url and file_extension in ['.pdf', '.xlsx', '.xls', '.csv']:
+                logger.info(f"📄 A processar documento ({file_name}) para a instância {nome_instancia_atual}...")
+                send_whatsapp(clean_user_phone, "📄 A processar o documento da empresa para atualizar a base de conhecimento do assistente...", instance_name=nome_instancia_atual)
+                
+                texto_extraido = ""
+                evolution_apikey = getattr(Config, 'EVOLUTION_GLOBAL_APIKEY', os.getenv("EVOLUTION_GLOBAL_APIKEY", ""))
+
+                if file_extension == '.pdf':
+                    texto_extraido = extrair_texto_pdf_url(media_url, apikey=evolution_apikey)
+                elif file_extension in ['.xlsx', '.xls', '.csv']:
+                    texto_extraido = extrair_texto_excel_url(media_url, apikey=evolution_apikey)
+
+                if texto_extraido:
+                    # Guarda os dados na base de conhecimento do cliente no Firestore
+                    client_doc_ref.set({
+                        "base_conhecimento_documentos": texto_extraido,
+                        "ultimo_documento": file_name,
+                        "atualizado_em": agora
+                    }, merge=True)
+
+                    sucesso_msg = f"✅ Documento '{file_name}' processado e integrado com sucesso! O assistente já está treinado com as novas informações da empresa."
+                    send_whatsapp(clean_user_phone, sucesso_msg, instance_name=nome_instancia_atual)
+                    logger.info(f"✅ Base de conhecimento atualizada via documento para {nome_instancia_atual}")
+                    return
+                else:
+                    erro_msg = "❌ Não foi possível extrair o texto deste documento. Certifique-se de que o ficheiro é válido e legível."
+                    send_whatsapp(clean_user_phone, erro_msg, instance_name=nome_instancia_atual)
+                    return
+
+        # 5. REGISTA A MENSAGEM DO CLIENTE IMEDIATAMENTE NO FIRESTORE
         conversa_ref.set({"ultima_interacao": agora, "ultima_mensagem_por": "cliente_final"}, merge=True)
         historico_ref.add({"role": "user", "text": message_text, "timestamp": agora})
 
-        # 5. REGRAS DO CLIENTE
+        # 6. REGRAS DO CLIENTE
         default_rules = (
             "- Atenda os clientes finais com cortesia, agilidade e profissionalismo.\n"
             "- NUNCA diga que a loja não tem stock de forma genérica e NUNCA invente preços ou produtos.\n"
@@ -142,10 +192,12 @@ def process_client_flow(
                 "diretrizes_corporativas": default_rules
             }
             client_doc_ref.set(dados_cliente)
+            base_conhecimento_docs = ""
         else:
             dados_cliente = client_doc.to_dict() or {}
+            base_conhecimento_docs = dados_cliente.get("base_conhecimento_documentos", "")
 
-        # 6. VERIFICAÇÃO DE MODO HUMANO E TIMEOUT (2 MINUTOS)
+        # 7. VERIFICAÇÃO DE MODO HUMANO E TIMEOUT (2 MINUTOS)
         conversa_doc = conversa_ref.get()
         conversa_dados = conversa_doc.to_dict() if conversa_doc.exists else {}
         status_atendimento = conversa_dados.get("status_atendimento", "bot")
@@ -164,7 +216,7 @@ def process_client_flow(
             else:
                 return
 
-        # 7. PEDIDO EXPLICITO DE ATENDIMENTO HUMANO
+        # 8. PEDIDO EXPLICITO DE ATENDIMENTO HUMANO
         gatilhos_humano = [
             "falar com atendente", "atendente humano", "falar com humano", 
             "suporte humano", "falar com operador", "quero atendente", 
@@ -184,7 +236,7 @@ def process_client_flow(
             )
             return
 
-        # 8. PREPARAÇÃO DO HISTÓRICO PARA A GROQ
+        # 9. PREPARAÇÃO DO HISTÓRICO PARA A GROQ
         docs_h = historico_ref.order_by('timestamp', direction=firestore.Query.DESCENDING).limit(10).stream()
         lista_m = [d.to_dict() for d in docs_h]
         lista_m.reverse()
@@ -197,17 +249,23 @@ def process_client_flow(
                 contents.append({"role": role_g, "content": str(txt)})
 
         diretrizes = dados_cliente.get("diretrizes_corporativas") or default_rules
+        
+        # Incorpora a base de conhecimento extraída do PDF/Excel se existir
+        bloco_conhecimento_extra = ""
+        if base_conhecimento_docs:
+            bloco_conhecimento_extra = f"\n\nDOCUMENTAÇÃO E DADOS DA EMPRESA (EXTRAÍDOS DE PDF/EXCEL):\n{base_conhecimento_docs}\n"
+
         sys_instruction = f"""Você é o assistente virtual oficial de atendimento desta empresa.
 Português de Moçambique, tom profissional, atencioso e conciso.
 
 DIRETRIZES DA EMPRESA:
 {diretrizes}
-
+{bloco_conhecimento_extra}
 REGRA DE ATENDIMENTO:
-- Responda às dúvidas do cliente com clareza.
-- NUNCA tente transferir o atendimento e NUNCA invente informações."""
+- Responda às dúvidas do cliente com clareza utilizando os dados oficiais fornecidos acima.
+- NUNCA tente transferir o atendimento e NUNCA invente informações que não estejam presentes nos dados da empresa."""
 
-        # 9. RESPOSTA DA GROQ COM FALLBACK DE SEGURANÇA
+        # 10. RESPOSTA DA GROQ COM FALLBACK DE SEGURANÇA
         response_text = None
         try:
             response_text = chamar_groq_rest(contents, system_prompt=sys_instruction)
