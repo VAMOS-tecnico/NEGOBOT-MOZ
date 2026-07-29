@@ -31,7 +31,8 @@ def notificar_erro_admin(erro_msg):
             
             payload = {
                 "number": clean_admin_num,
-                "text": f"⚠️ *[ALERTA CRÍTICO - NEGOBOT]*\n\nOcorreu uma falha no servidor:\n❌ `{erro_msg}`\n\n*Verifique os logs.*"
+                "text": f"⚠️ *[ALERTA CRÍTICO - NEGOBOT]*\n\nOcorreu uma falha no servidor:\n❌ `{erro_msg}`\n\n*Verifique os logs.*",
+                "delay": 1200
             }
             requests.post(url, headers=headers, json=payload, timeout=45)
         except Exception as e:
@@ -58,11 +59,12 @@ def send_whatsapp(to, text, instance_name=None):
     except Exception as p_err:
         logger.warning(f"Não foi possível enviar indicação de presença: {p_err}")
 
-    # 2. Envio da mensagem principal (Payload Padrão v2)
+    # 2. Envio da mensagem principal (Payload Padrão v2 com delay obrigatório)
     url = f"{Config.EVOLUTION_API_URL}/message/sendText/{clean_instance}"
     payload_v2 = {
         "number": clean_number,
-        "text": str(text).strip()
+        "text": str(text).strip(),
+        "delay": 1200
     }
 
     try:
@@ -73,6 +75,9 @@ def send_whatsapp(to, text, instance_name=None):
             logger.warning(f"Tentativa v2 retornou 400. Tentando payload v1 para {clean_number}...")
             payload_v1 = {
                 "number": clean_number,
+                "options": {
+                    "delay": 1200
+                },
                 "textMessage": {
                     "text": str(text).strip()
                 }
@@ -189,7 +194,8 @@ def gerar_e_enviar_qrcode_central(phone_number):
             "caption": caption_text,
             "media": base64_qrcode,
             "mediatype": "image",
-            "fileName": "qrcode.png"
+            "fileName": "qrcode.png",
+            "delay": 1200
         }
         requests.post(url_send_media, headers=headers, json=payload_media, timeout=60)
         return True
