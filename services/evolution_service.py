@@ -110,15 +110,15 @@ def criar_e_configurar_instancia_automatica(phone_number):
         res_create = requests.post(url_create, headers=headers, json=payload_create, timeout=45)
         res_create.raise_for_status()
         
-        # 🟢 1. Configurar as Definições da Instância (Ignorar Grupos, Rejeitar Chamadas e Tiques Azuis)
+        # 🟢 1. Definições da Instância (Ignorar Grupos, Rejeitar Chamadas e Tiques Azuis)
         try:
             url_settings = f"{Config.EVOLUTION_API_URL}/instance/setSettings/{client_instance}"
             payload_settings = {
                 "reject_call": True,
                 "msg_call": "",
-                "groups_ignore": True,     # 🚫 Ignora grupos direto na fonte
+                "groups_ignore": True,
                 "always_online": False,
-                "read_messages": True,     # 🔵 Marca a mensagem como lida (2 tiques azuis)
+                "read_messages": True,
                 "read_status": False,
                 "sync_full_history": False
             }
@@ -126,7 +126,7 @@ def criar_e_configurar_instancia_automatica(phone_number):
         except Exception as set_err:
             logger.warning(f"Não foi possível aplicar definições de segurança na instância: {set_err}")
 
-        # 🟢 2. Configurar o Webhook com bloqueio rigoroso de eventos
+        # 🟢 2. Configurar o Webhook
         webhook_target_url = getattr(Config, 'WEBHOOK_URL', None)
         if webhook_target_url:
             url_webhook = f"{Config.EVOLUTION_API_URL}/webhook/set/{client_instance}"
@@ -137,9 +137,9 @@ def criar_e_configurar_instancia_automatica(phone_number):
                 "base64": False,
                 "webhookByEvents": False,
                 "events": [
-                    "MESSAGES_UPSERT"  # 🟢 APENAS este evento (filtra digitação e status)
+                    "MESSAGES_UPSERT"
                 ],
-                "groupsIgnore": True   # 🚫 Impede disparos de grupos para o Render
+                "groupsIgnore": True
             }
             requests.post(url_webhook, headers=headers, json=payload_webhook, timeout=45)
 
@@ -196,3 +196,39 @@ def gerar_e_enviar_qrcode_central(phone_number):
     except Exception as e:
         logger.error(f"Erro ao gerar QR Code para {phone_number}: {e}")
         return False
+
+def aplicar_travas_instancia_central():
+    """🟢 Aplica as definições silenciosas à instância CENTRAL para parar os disparos pós-resposta."""
+    try:
+        central_instance = _get_clean_instance()
+        headers = {"apikey": Config.EVOLUTION_API_KEY, "Content-Type": "application/json"}
+        
+        # Settings da Central
+        url_settings = f"{Config.EVOLUTION_API_URL}/instance/setSettings/{central_instance}"
+        payload_settings = {
+            "reject_call": True,
+            "msg_call": "",
+            "groups_ignore": True,
+            "always_online": False,
+            "read_messages": True,
+            "read_status": False,
+            "sync_full_history": False
+        }
+        requests.post(url_settings, headers=headers, json=payload_settings, timeout=30)
+
+        # Webhook da Central
+        webhook_target_url = getattr(Config, 'WEBHOOK_URL', None)
+        if webhook_target_url:
+            url_webhook = f"{Config.EVOLUTION_API_URL}/webhook/set/{central_instance}"
+            payload_webhook = {
+                "url": webhook_target_url,
+                "enabled": True,
+                "byEvents": False,
+                "base64": False,
+                "webhookByEvents": False,
+                "events": ["MESSAGES_UPSERT"],
+                "groupsIgnore": True
+            }
+            requests.post(url_webhook, headers=headers, json=payload_webhook, timeout=45)
+    except Exception as e:
+        logger.warning(f"Não foi possível reconfigurar a instância central: {e}")
