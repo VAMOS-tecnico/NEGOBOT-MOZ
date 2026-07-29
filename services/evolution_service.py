@@ -39,7 +39,7 @@ def notificar_erro_admin(erro_msg):
             logger.error(f"Falha ao enviar notificação de erro ao admin: {e}")
 
 def send_whatsapp(to, text, instance_name=None):
-    """Envia uma mensagem de texto via Evolution API com tratamento estrito de números e fallback."""
+    """Envia uma mensagem de texto via Evolution API sem conflitos de presença/socket."""
     if not text or not str(text).strip():
         return False
 
@@ -51,16 +51,9 @@ def send_whatsapp(to, text, instance_name=None):
     clean_instance = _get_clean_instance(instance_name)
     headers = {"apikey": Config.EVOLUTION_API_KEY, "Content-Type": "application/json"}
     
-    # 1. Envio de presença (composing)
-    try:
-        url_presence = f"{Config.EVOLUTION_API_URL}/chat/sendPresence/{clean_instance}"
-        requests.post(url_presence, headers=headers, json={"number": clean_number, "presence": "composing"}, timeout=10)
-        time.sleep(0.5)
-    except Exception as p_err:
-        logger.warning(f"Não foi possível enviar indicação de presença: {p_err}")
-
-    # 2. Envio da mensagem principal (Payload Padrão v2 com delay obrigatório)
     url = f"{Config.EVOLUTION_API_URL}/message/sendText/{clean_instance}"
+    
+    # 🟢 O parâmetro "delay" trata a simulação de digitação ("a escrever...") nativamente.
     payload_v2 = {
         "number": clean_number,
         "text": str(text).strip(),
