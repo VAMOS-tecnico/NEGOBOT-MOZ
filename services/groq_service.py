@@ -7,7 +7,7 @@ logger = logging.getLogger(__name__)
 
 def chamar_groq_rest(historico_mensagens, system_prompt=None):
     """
-    Envia as mensagens para a API da Groq.
+    Envia as mensagens para a API da Groq mantendo um HISTÓRICO ENXUTO (máx 6 mensagens).
     Possui tratamento para o limite de requisições (Erro 429) e fallback de modelo.
     """
     api_key = getattr(Config, 'GROQ_API_KEY', None) or os.getenv('GROQ_API_KEY')
@@ -30,9 +30,11 @@ def chamar_groq_rest(historico_mensagens, system_prompt=None):
             "content": str(system_prompt).strip()
         })
 
-    # 2. Histórico de mensagens
-    if isinstance(historico_mensagens, list):
-        for msg in historico_mensagens:
+    # 2. ✂️ HISTÓRICO ENXUTO: Filtra estritamente as últimas 6 mensagens da conversa
+    if isinstance(historico_mensagens, list) and historico_mensagens:
+        historico_recente = historico_mensagens[-6:]  # Pega apenas os últimos 6 itens
+
+        for msg in historico_recente:
             if isinstance(msg, dict) and "role" in msg and "content" in msg:
                 role = "assistant" if msg["role"] in ["assistant", "model", "atendente"] else "user"
                 payload_messages.append({
