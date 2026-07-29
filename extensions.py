@@ -13,29 +13,39 @@ def init_extensions(app=None):
 
     if not firebase_admin._apps:
         raw_config = os.getenv('FIREBASE_CONFIG')
+        
+        # Caminhos possíveis para o ficheiro de credenciais (Local ou Render Secret File)
+        render_secret_path = "/etc/secrets/serviceAccountKey.json"
+        local_secret_path = "serviceAccountKey.json"
 
         if raw_config:
             try:
-                # Lê a variável de ambiente configurada no Render
+                # 1. Tenta carregar pela variável de ambiente FIREBASE_CONFIG
                 cred_dict = json.loads(raw_config.strip())
                 cred = credentials.Certificate(cred_dict)
                 firebase_admin.initialize_app(cred)
-                logger.info("📦 [SISTEMA] Firebase inicializado com sucesso via FIREBASE_CONFIG.")
+                logger.info("📦 [SISTEMA] Firebase inicializado via variável FIREBASE_CONFIG.")
             except Exception as e:
-                logger.error(f"❌ [SISTEMA] O conteúdo da variável FIREBASE_CONFIG não é um JSON válido: {e}")
+                logger.error(f"❌ [SISTEMA] Erro ao ler JSON da ENV: {e}")
                 raise e
 
-        elif os.path.exists("serviceAccountKey.json"):
-            # Fallback para o teu computador local
-            cred = credentials.Certificate("serviceAccountKey.json")
+        elif os.path.exists(render_secret_path):
+            # 2. Tenta carregar pelo Secret File do Render
+            cred = credentials.Certificate(render_secret_path)
+            firebase_admin.initialize_app(cred)
+            logger.info("📦 [SISTEMA] Firebase inicializado via Secret File do Render (/etc/secrets/).")
+
+        elif os.path.exists(local_secret_path):
+            # 3. Tenta carregar pelo ficheiro local no teu computador
+            cred = credentials.Certificate(local_secret_path)
             firebase_admin.initialize_app(cred)
             logger.info("📦 [SISTEMA] Firebase inicializado via ficheiro local serviceAccountKey.json.")
 
         else:
             raise RuntimeError(
-                "❌ [SISTEMA CRÍTICO] A variável FIREBASE_CONFIG não está configurada no Render "
-                "e o ficheiro 'serviceAccountKey.json' não existe localmente!"
+                "❌ [SISTEMA CRÍTICO] Credenciais do Firebase não encontradas na ENV, "
+                "em /etc/secrets/ ou localmente!"
             )
 
-    # Liga a variável global db ao Firestore
+    # Conecta o cliente ao Firestore
     db = firestore.client()
