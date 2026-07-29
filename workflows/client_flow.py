@@ -48,30 +48,46 @@ def process_client_flow(
 ):
     """
     Workflow dos bots dos clientes (tenants) da Negobot Moz.
-    Garante sanitização estrita de tipos e envio isolado por instância.
+    Garante sanitização estrita de tipos, bloqueio absoluto de grupos e envio isolado.
     """
     try:
         if agora is None:
             agora = datetime.now(timezone.utc)
 
-        # 1. TRATAMENTO INTELIGENTE DE PAYLOAD (Caso venha um dicionário do webhook)
+        # 1. TRATAMENTO INTELIGENTE DE PAYLOAD E DETEÇÃO RIGOROSA DE GRUPOS
+        remote_jid = ""
+        has_participant = False
+
         if isinstance(nome_instancia_atual, dict):
             payload_data = nome_instancia_atual
             nome_instancia_atual = payload_data.get('instance') or payload_data.get('instanceId') or ''
             
-            if not phone_number:
-                data_inner = payload_data.get('data', {}) if isinstance(payload_data.get('data'), dict) else payload_data
-                key = data_inner.get('key', {}) if isinstance(data_inner, dict) else {}
-                if isinstance(key, dict):
-                    phone_number = key.get('remoteJid') or key.get('participant') or key.get('id') or ''
-                
-                if not message_text:
-                    msg_obj = data_inner.get('message', {}) if isinstance(data_inner, dict) else {}
-                    message_text = msg_obj.get('conversation') or msg_obj.get('extendedTextMessage', {}).get('text') or ""
+            data_inner = payload_data.get('data', {}) if isinstance(payload_data.get('data'), dict) else payload_data
+            key = data_inner.get('key', {}) if isinstance(data_inner, dict) else {}
+            
+            if isinstance(key, dict):
+                remote_jid = str(key.get('remoteJid') or '')
+                has_participant = bool(key.get('participant'))
+                if not phone_number:
+                    phone_number = remote_jid or key.get('participant') or key.get('id') or ''
+            
+            if not message_text:
+                msg_obj = data_inner.get('message', {}) if isinstance(data_inner, dict) else {}
+                message_text = msg_obj.get('conversation') or msg_obj.get('extendedTextMessage', {}).get('text') or ""
 
-        # Ignorar mensagens de grupos de WhatsApp ou transmissões
+        # 🚫 TRAVA DE SEGURANÇA MÁXIMA PARA GRUPOS E TRANSMISSÕES
         str_phone_raw = str(phone_number or "").strip()
-        if "@g.us" in str_phone_raw or "status@broadcast" in str_phone_raw:
+        str_remote_jid = str(remote_jid or "").strip()
+
+        if (
+            "@g.us" in str_phone_raw 
+            or "@g.us" in str_remote_jid 
+            or "status@broadcast" in str_phone_raw 
+            or "status@broadcast" in str_remote_jid 
+            or has_participant
+            or kwargs.get('isGroup')
+        ):
+            logger.info(f"🚫 Mensagem de grupo/transmissão ignorada no process_client_flow: phone='{str_phone_raw}', rjid='{str_remote_jid}'")
             return
 
         # 2. SANITIZAÇÃO RÍGIDA DE TIPOS
