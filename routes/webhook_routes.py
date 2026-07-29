@@ -46,6 +46,9 @@ def extrair_texto_mensagem(data_payload):
     if 'documentMessage' in message and isinstance(message['documentMessage'], dict):
         return message['documentMessage'].get('caption', '')
 
+    if 'audioMessage' in message:
+        return "[Áudio gravado]"
+
     return data_payload.get('body', '') or ""
 
 @webhook_bp.route('/webhook-global', methods=['POST'])
@@ -101,8 +104,18 @@ def processar_webhook_background(data):
         msg_clean = message_text.strip().lower()
         agora = datetime.now(timezone.utc)
 
-        # Captura da instância e do número do remetente
-        instance_name = data.get('instance') or data.get('instanceId') or Config.EVOLUTION_INSTANCE_NAME
+        # 🎯 CAPTURA ROBUSTA DA INSTÂNCIA (Evolution API v1 e v2)
+        instance_name = (
+            data.get('instance') or 
+            data_payload.get('instance') or 
+            data.get('instanceId') or 
+            Config.EVOLUTION_INSTANCE_NAME
+        )
+        
+        # Se vier o JID completo da instância (ex: 258878244010@s.whatsapp.net), limpa para ficar apenas os dígitos
+        if '@' in str(instance_name):
+            instance_name = str(instance_name).split('@')[0]
+
         phone_number = remote_jid or key.get('participant') or key.get('id') or ''
 
         # Anexos se existirem
@@ -112,8 +125,12 @@ def processar_webhook_background(data):
             message_obj.get('documentWithCaptionMessage', {}).get('message', {}).get('documentMessage')
         )
 
-        # Roteamento seguro com parâmetros nomeados
-        if instance_name == Config.EVOLUTION_INSTANCE_NAME:
+        # 🚦 ROTEAMENTO DE FLUXO (Central vs Cliente)
+        central_name = str(Config.EVOLUTION_INSTANCE_NAME).strip()
+        current_name = str(instance_name).strip()
+
+        if current_name == central_name:
+            logger.info(f"Roteando para o Fluxo Central [Instância: {current_name}]")
             process_central_flow(
                 data=data,
                 message_text=message_text,
@@ -122,8 +139,9 @@ def processar_webhook_background(data):
                 agora=agora
             )
         else:
+            logger.info(f"Roteando para o Fluxo do Cliente [Instância: {current_name}]")
             process_client_flow(
-                nome_instancia_atual=instance_name,
+                nome_instancia_atual=current_name,
                 phone_number=phone_number,
                 message_text=message_text,
                 msg_clean=msg_clean,
