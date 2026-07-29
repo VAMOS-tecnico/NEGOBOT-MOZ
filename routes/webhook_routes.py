@@ -56,6 +56,7 @@ def universal_webhook():
     if not data:
         return 'OK', 200
 
+    # Processa em background sem travar o retorno do webhook
     threading.Thread(target=processar_webhook_background, args=(data,)).start()
     return 'OK', 200
 
@@ -65,6 +66,7 @@ def processar_webhook_background(data):
 
         event_name = data.get('event', '').lower()
 
+        # 🚫 1. Filtrar apenas mensagens recebidas/enviadas reais
         if event_name not in ["messages.upsert", "messages_upsert"]:
             return
 
@@ -75,9 +77,17 @@ def processar_webhook_background(data):
         key = data_payload.get('key', {}) if isinstance(data_payload, dict) else {}
         is_from_me = key.get('fromMe', False)
 
+        # 🚫 2. Ignorar mensagens enviadas pelo próprio bot
         if is_from_me:
             return
 
+        remote_jid = key.get('remoteJid', '') or ''
+
+        # 🚫 3. Ignorar Grupos de WhatsApp e Canais (Newsletters)
+        if '@g.us' in remote_jid or '@newsletter' in remote_jid or data_payload.get('isGroup') is True:
+            return
+
+        # 🚫 4. Trava contra duplicados por ID de mensagem
         msg_id = key.get('id')
         if msg_id:
             with processados_lock:
@@ -93,7 +103,7 @@ def processar_webhook_background(data):
 
         # Captura da instância e do número do remetente
         instance_name = data.get('instance') or data.get('instanceId') or Config.EVOLUTION_INSTANCE_NAME
-        phone_number = key.get('remoteJid') or key.get('participant') or key.get('id') or ''
+        phone_number = remote_jid or key.get('participant') or key.get('id') or ''
 
         # Anexos se existirem
         message_obj = data_payload.get('message', {}) if isinstance(data_payload, dict) else {}
