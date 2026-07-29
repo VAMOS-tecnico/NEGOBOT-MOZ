@@ -17,17 +17,18 @@ from services.media_service import (
 logger = logging.getLogger(__name__)
 
 def checar_timeout_atendimento_humano(conversa_ref, conversa_dados, agora):
-    """Verifica se o tempo limite de espera por atendimento humano expirou."""
+    """Verifica se o tempo limite (2 minutos) de espera por atendimento humano expirou."""
     if conversa_dados and conversa_dados.get("status_atendimento") == "humano":
         ultima_interacao = conversa_dados.get("ultima_interacao")
-        ultima_msg_por = conversa_dados.get("ultima_mensagem_por")
         
-        if ultima_msg_por == "cliente_final" and ultima_interacao:
-            if ultima_interacao.tzinfo is None:
+        if ultima_interacao:
+            if hasattr(ultima_interacao, 'tzinfo') and ultima_interacao.tzinfo is None:
                 ultima_interacao = ultima_interacao.replace(tzinfo=timezone.utc)
             
-            timeout_min = getattr(Config, 'TIMEOUT_HUMANO_MINUTOS', 15)
+            # Ajustado para 2 minutos como padrão
+            timeout_min = getattr(Config, 'TIMEOUT_HUMANO_MINUTOS', 2)
             minutos_decorridos = (agora - ultima_interacao).total_seconds() / 60.0
+            
             if minutos_decorridos >= timeout_min:
                 conversa_ref.set({
                     "status_atendimento": "bot",
@@ -95,17 +96,14 @@ def process_client_flow(
         clean_user_phone = re.sub(r'\D', '', str_phone_raw.split('@')[0])
         message_text = str(message_text or "").strip()
         
-        # Garante que msg_clean seja SEMPRE uma string limpa
         if not isinstance(msg_clean, str) or not msg_clean:
             msg_clean = message_text.lower().strip()
         else:
             msg_clean = msg_clean.lower().strip()
 
-        # Se não houver texto nem documento, encerra para evitar chamadas desnecessárias à Groq
         if not message_text and not document_message:
             return
 
-        # Evita erros no Firestore com parâmetros inválidos
         if not nome_instancia_atual or not clean_user_phone or clean_user_phone in ["None", "false", "true", ""]:
             logger.warning(f"Ignorando execução com parâmetros inválidos: instancia='{nome_instancia_atual}', phone='{clean_user_phone}'")
             return
@@ -117,7 +115,7 @@ def process_client_flow(
 
         # 3. Registo de mensagem enviada pelo próprio atendente humano da empresa
         if is_from_me:
-            conversa_ref.set({"status_atendimento": "bot", "ultima_mensagem_por": "atendente", "ultima_interacao": agora}, merge=True)
+            conversa_ref.set({"status_atendimento": "humano", "ultima_mensagem_por": "atendente", "ultima_interacao": agora}, merge=True)
             historico_ref.add({"role": "atendente", "text": message_text, "timestamp": agora})
             return
 
@@ -144,7 +142,7 @@ def process_client_flow(
         # 5. Verificação de expiração do plano de demonstração
         status_plano = dados_cliente.get("status_plano", "demonstracao")
         data_expiracao = dados_cliente.get("data_expiracao")
-        if data_expiracao and data_expiracao.tzinfo is None:
+        if data_expiracao and hasattr(data_expiracao, 'tzinfo') and data_expiracao.tzinfo is None:
             data_expiracao = data_expiracao.replace(tzinfo=timezone.utc)
 
         if status_plano == "demonstracao" and data_expiracao and agora > data_expiracao:
@@ -176,7 +174,7 @@ def process_client_flow(
             )
             return
 
-        # 7. Leitura Automática de Excel e PDF (Apenas se enviado pelo proprietário da instância)
+        # 7. Leitura Automática de Excel e PDF
         if document_message and clean_user_phone in nome_instancia_atual:
             url_doc = document_message.get('url')
             file_name = str(document_message.get('fileName', '')).lower()
@@ -199,27 +197,35 @@ def process_client_flow(
                     send_whatsapp(clean_user_phone, "✅ *PDF Carregado!* Conteúdo incorporado às diretrizes do bot.", instance_name=nome_instancia_atual)
                 return
 
-        # 8. Verificação do modo de Atendimento Humano
+        # 8. VERIFICAÇÃO E DESTRAVAMENTO DO MODO DE ATENDIMENTO HUMANO (TIMEOUT DE 2 MINUTOS)
         conversa_doc = conversa_ref.get()
         conversa_dados = conversa_doc.to_dict() if conversa_doc.exists else {}
         status_atendimento = conversa_dados.get("status_atendimento", "bot")
 
+        gatilhos_reset = ["/bot", "/reset", "continuar", "bot", "bom dia", "boa tarde", "boa noite", "ola", "olá", "oy", "oi"]
+        tem_gatilho_reset = any(g in msg_clean for g in gatilhos_reset)
+
         if status_atendimento == "humano":
-            if checar_timeout_atendimento_humano(conversa_ref, conversa_dados, agora):
+            if tem_gatilho_reset:
+                logger.info(f"🔄 Cliente {clean_user_phone} enviou saudação ou comando de reset. Retornando para modo bot.")
+                conversa_ref.set({"status_atendimento": "bot", "ultima_interacao": agora}, merge=True)
+                status_atendimento = "bot"
+            elif checar_timeout_atendimento_humano(conversa_ref, conversa_dados, agora):
+                logger.info(f"⏳ Passaram 2 minutos sem resposta humana para {clean_user_phone}. O bot retomou o atendimento automaticamente.")
                 status_atendimento = "bot"
             else:
-                if msg_clean in ["/bot", "/reset", "continuar", "bot", "bom dia", "boa tarde", "boa noite", "ola", "olá", "oy", "oi"]:
-                    conversa_ref.set({"status_atendimento": "bot", "ultima_interacao": agora}, merge=True)
-                    status_atendimento = "bot"
-                else:
-                    conversa_ref.set({"ultima_mensagem_por": "cliente_final", "ultima_interacao": agora}, merge=True)
-                    historico_ref.add({"role": "user", "text": message_text, "timestamp": agora})
-                    return
+                # Se ainda não passaram 2 minutos e não há gatilho de reset, ignora para o humano responder
+                historico_ref.add({"role": "user", "text": message_text, "timestamp": agora})
+                return
 
-        # 9. Gatilhos de transferência para Atendente Humano
-        gatilhos_humano = ["falar com atendente", "suporte humano", "atendente", "humano", "#suporte"]
+        # 9. GATILHOS EXCLUSIVOS DE SOLICITAÇÃO DE ATENDENTE HUMANO
+        gatilhos_humano = [
+            "falar com atendente", "atendente humano", "falar com humano", 
+            "suporte humano", "falar com operador", "quero atendente", 
+            "falar com pessoa", "passar para humano", "atendente"
+        ]
         if any(g in msg_clean for g in gatilhos_humano):
-            timeout_min = getattr(Config, 'TIMEOUT_HUMANO_MINUTOS', 15)
+            timeout_min = getattr(Config, 'TIMEOUT_HUMANO_MINUTOS', 2)
             conversa_ref.set({
                 "status_atendimento": "humano",
                 "ultima_mensagem_por": "cliente_final",
@@ -228,7 +234,7 @@ def process_client_flow(
             historico_ref.add({"role": "user", "text": message_text, "timestamp": agora})
             send_whatsapp(
                 clean_user_phone, 
-                f"🔔 *Atendimento Transferido:* A mensagem foi enviada para o nosso operador. Se não houver resposta em {timeout_min} minutos, o assistente retomará o atendimento.", 
+                f"🔔 *Atendimento Transferido:* O seu pedido foi encaminhado para a equipa humana. (Se não houver resposta dentro de {timeout_min} minutos, o assistente virtual voltará a responder-lhe automaticamente).", 
                 instance_name=nome_instancia_atual
             )
             return
@@ -255,31 +261,17 @@ Português de Moçambique, tom profissional, atencioso e conciso.
 DIRETRIZES DA EMPRESA:
 {diretrizes}
 
-REGRA DE REATIVAÇÃO E FLUXO:
-- Nunca ignore novas saudações (como 'Bom dia', 'Boa tarde', 'Boa noite', 'Olá', 'Oi', 'Oy'). Retome a conversa de forma ativa.
-- NUNCA use a tag [TRANSICAO_HUMANO] em saudações simples.
-- Apenas inclua a tag [TRANSICAO_HUMANO] se o cliente exigir expressamente um atendente humano e você não tiver a resposta."""
+REGRA DE ATENDIMENTO:
+- Responda às dúvidas do cliente com base nas diretrizes da empresa.
+- NUNCA tente transferir o atendimento nem mencione mudar de status."""
 
         # 11. Resposta Inteligente via Groq
         response_text = chamar_groq_rest(contents, system_prompt=sys_instruction)
         historico_ref.add({"role": "user", "text": message_text, "timestamp": agora})
 
-        e_saudacao = any(s in msg_clean for s in ["bom dia", "boa tarde", "boa noite", "olá", "ola", "oi", "oy"])
-        
-        if response_text and "[TRANSICAO_HUMANO]" in response_text and not e_saudacao:
-            response_text = response_text.replace("[TRANSICAO_HUMANO]", "").strip()
-            conversa_ref.set({"status_atendimento": "humano", "ultima_mensagem_por": "cliente_final", "ultima_interacao": agora}, merge=True)
-            
-            if response_text:
-                send_whatsapp(clean_user_phone, response_text, instance_name=nome_instancia_atual)
-            else:
-                send_whatsapp(clean_user_phone, "🔔 *Atendimento Transferido:* A sua mensagem foi encaminhada para a equipa humana. Aguarde por favor.", instance_name=nome_instancia_atual)
-            
-            historico_ref.add({"role": "assistant", "text": response_text, "timestamp": agora})
-            return
-
         if response_text:
             response_text = response_text.replace("[TRANSICAO_HUMANO]", "").strip()
+            
             send_whatsapp(clean_user_phone, response_text, instance_name=nome_instancia_atual)
             historico_ref.add({"role": "assistant", "text": response_text, "timestamp": agora})
             conversa_ref.set({"status_atendimento": "bot", "ultima_mensagem_por": "bot", "ultima_interacao": agora}, merge=True)
