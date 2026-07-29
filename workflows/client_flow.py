@@ -26,8 +26,9 @@ def checar_timeout_atendimento_humano(conversa_ref, conversa_dados, agora):
             if ultima_interacao.tzinfo is None:
                 ultima_interacao = ultima_interacao.replace(tzinfo=timezone.utc)
             
+            timeout_min = getattr(Config, 'TIMEOUT_HUMANO_MINUTOS', 15)
             minutos_decorridos = (agora - ultima_interacao).total_seconds() / 60.0
-            if minutos_decorridos >= Config.TIMEOUT_HUMANO_MINUTOS:
+            if minutos_decorridos >= timeout_min:
                 conversa_ref.set({
                     "status_atendimento": "bot",
                     "ultima_interacao": agora
@@ -47,7 +48,7 @@ def process_client_flow(
 ):
     """
     Workflow dos bots dos clientes (tenants) da Negobot Moz.
-    Garante sanitização estrita de tipos para evitar erros de Firestore e String attributes.
+    Garante sanitização estrita de tipos e envio isolado por instância.
     """
     try:
         if agora is None:
@@ -68,25 +69,34 @@ def process_client_flow(
                     msg_obj = data_inner.get('message', {}) if isinstance(data_inner, dict) else {}
                     message_text = msg_obj.get('conversation') or msg_obj.get('extendedTextMessage', {}).get('text') or ""
 
-        # 2. SANITIZAÇÃO RÍGIDA DE TIPOS (Garante conversão para String)
+        # Ignorar mensagens de grupos de WhatsApp ou transmissões
+        str_phone_raw = str(phone_number or "").strip()
+        if "@g.us" in str_phone_raw or "status@broadcast" in str_phone_raw:
+            return
+
+        # 2. SANITIZAÇÃO RÍGIDA DE TIPOS
         nome_instancia_atual = str(nome_instancia_atual or "").strip()
-        phone_number = str(phone_number or "").strip()
+        clean_user_phone = re.sub(r'\D', '', str_phone_raw.split('@')[0])
         message_text = str(message_text or "").strip()
         
-        # Garante que msg_clean seja SEMPRE uma string limpa (evita AttributeError 'bool')
+        # Garante que msg_clean seja SEMPRE uma string limpa
         if not isinstance(msg_clean, str) or not msg_clean:
             msg_clean = message_text.lower().strip()
         else:
             msg_clean = msg_clean.lower().strip()
 
-        # Evita erros de rotas no Firestore se os IDs estiverem vazios ou inválidos
-        if not nome_instancia_atual or not phone_number or phone_number in ["None", "false", "true"]:
-            logger.warning(f"Ignorando execução com parâmetros inválidos: instancia='{nome_instancia_atual}', phone='{phone_number}'")
+        # Se não houver texto nem documento, encerra para evitar chamadas desnecessárias à Groq
+        if not message_text and not document_message:
             return
 
-        # Referências seguras no Firestore
+        # Evita erros no Firestore com parâmetros inválidos
+        if not nome_instancia_atual or not clean_user_phone or clean_user_phone in ["None", "false", "true", ""]:
+            logger.warning(f"Ignorando execução com parâmetros inválidos: instancia='{nome_instancia_atual}', phone='{clean_user_phone}'")
+            return
+
+        # Referências no Firestore usando o número limpo
         client_doc_ref = extensions.db.collection('clientes_bot').document(nome_instancia_atual)
-        conversa_ref = client_doc_ref.collection('conversas').document(phone_number)
+        conversa_ref = client_doc_ref.collection('conversas').document(clean_user_phone)
         historico_ref = conversa_ref.collection('historico')
 
         # 3. Registo de mensagem enviada pelo próprio atendente humano da empresa
@@ -122,21 +132,21 @@ def process_client_flow(
             data_expiracao = data_expiracao.replace(tzinfo=timezone.utc)
 
         if status_plano == "demonstracao" and data_expiracao and agora > data_expiracao:
-            send_whatsapp(phone_number, "⚠️ O período de teste deste assistente virtual expirou.", instance_name=nome_instancia_atual)
+            send_whatsapp(clean_user_phone, "⚠️ O período de teste deste assistente virtual expirou.", instance_name=nome_instancia_atual)
             return
 
         # 6. Comando Especial: /criar-arte
         if msg_clean.startswith("/criar-arte"):
             pedido = message_text.replace("/criar-arte", "").strip()
             if not pedido:
-                send_whatsapp(phone_number, "✍️ Exemplo: `/criar-arte Banner de oferta de promoção`", instance_name=nome_instancia_atual)
+                send_whatsapp(clean_user_phone, "✍️ Exemplo: `/criar-arte Banner de oferta de promoção`", instance_name=nome_instancia_atual)
                 return
-            send_whatsapp(phone_number, "🎨 A criar a sua imagem...", instance_name=nome_instancia_atual)
+            send_whatsapp(clean_user_phone, "🎨 A criar a sua imagem...", instance_name=nome_instancia_atual)
             prompt_ingles = criar_prompt_profissional_groq(pedido)
             link_imagem = gerar_url_imagem_pollinations(prompt_ingles)
             
             payload = {
-                "number": phone_number, 
+                "number": clean_user_phone, 
                 "caption": f"✨ *Arte Gerada!*\n🎯 _{pedido}_", 
                 "media": link_imagem, 
                 "mediatype": "image", 
@@ -150,27 +160,27 @@ def process_client_flow(
             )
             return
 
-        # 7. Leitura Automática de Excel e PDF
-        if document_message and phone_number.split('@')[0] in nome_instancia_atual:
+        # 7. Leitura Automática de Excel e PDF (Apenas se enviado pelo proprietário da instância)
+        if document_message and clean_user_phone in nome_instancia_atual:
             url_doc = document_message.get('url')
             file_name = str(document_message.get('fileName', '')).lower()
 
             if file_name.endswith(('.xlsx', '.xls')):
-                send_whatsapp(phone_number, "📊 A processar documento Excel...", instance_name=nome_instancia_atual)
+                send_whatsapp(clean_user_phone, "📊 A processar documento Excel...", instance_name=nome_instancia_atual)
                 texto_excel = extrair_texto_excel_url(url_doc)
                 if texto_excel:
                     novas_diretrizes = f"{dados_cliente.get('diretrizes_corporativas', '')}\n\n=== EXCEL ===\n{texto_excel}"
                     client_doc_ref.set({"diretrizes_corporativas": novas_diretrizes}, merge=True)
-                    send_whatsapp(phone_number, "✅ *Excel Carregado!* Tabela assimilada com sucesso.", instance_name=nome_instancia_atual)
+                    send_whatsapp(clean_user_phone, "✅ *Excel Carregado!* Tabela assimilada com sucesso.", instance_name=nome_instancia_atual)
                 return
 
             elif file_name.endswith('.pdf') or not file_name:
-                send_whatsapp(phone_number, "📄 A ler arquivo PDF...", instance_name=nome_instancia_atual)
+                send_whatsapp(clean_user_phone, "📄 A ler arquivo PDF...", instance_name=nome_instancia_atual)
                 texto_pdf = extrair_texto_pdf_url(url_doc)
                 if texto_pdf:
                     novas_diretrizes = f"{dados_cliente.get('diretrizes_corporativas', '')}\n\n=== PDF ===\n{texto_pdf}"
                     client_doc_ref.set({"diretrizes_corporativas": novas_diretrizes}, merge=True)
-                    send_whatsapp(phone_number, "✅ *PDF Carregado!* Conteúdo incorporado às diretrizes do bot.", instance_name=nome_instancia_atual)
+                    send_whatsapp(clean_user_phone, "✅ *PDF Carregado!* Conteúdo incorporado às diretrizes do bot.", instance_name=nome_instancia_atual)
                 return
 
         # 8. Verificação do modo de Atendimento Humano
@@ -193,6 +203,7 @@ def process_client_flow(
         # 9. Gatilhos de transferência para Atendente Humano
         gatilhos_humano = ["falar com atendente", "suporte humano", "atendente", "humano", "#suporte"]
         if any(g in msg_clean for g in gatilhos_humano):
+            timeout_min = getattr(Config, 'TIMEOUT_HUMANO_MINUTOS', 15)
             conversa_ref.set({
                 "status_atendimento": "humano",
                 "ultima_mensagem_por": "cliente_final",
@@ -200,8 +211,8 @@ def process_client_flow(
             }, merge=True)
             historico_ref.add({"role": "user", "text": message_text, "timestamp": agora})
             send_whatsapp(
-                phone_number, 
-                f"🔔 *Atendimento Transferido:* A mensagem foi enviada para o nosso operador. Se não houver resposta em {Config.TIMEOUT_HUMANO_MINUTOS} minutos, o assistente retomará o atendimento.", 
+                clean_user_phone, 
+                f"🔔 *Atendimento Transferido:* A mensagem foi enviada para o nosso operador. Se não houver resposta em {timeout_min} minutos, o assistente retomará o atendimento.", 
                 instance_name=nome_instancia_atual
             )
             return
@@ -244,16 +255,16 @@ REGRA DE REATIVAÇÃO E FLUXO:
             conversa_ref.set({"status_atendimento": "humano", "ultima_mensagem_por": "cliente_final", "ultima_interacao": agora}, merge=True)
             
             if response_text:
-                send_whatsapp(phone_number, response_text, instance_name=nome_instancia_atual)
+                send_whatsapp(clean_user_phone, response_text, instance_name=nome_instancia_atual)
             else:
-                send_whatsapp(phone_number, "🔔 *Atendimento Transferido:* A sua mensagem foi encaminhada para a equipa humana. Aguarde por favor.", instance_name=nome_instancia_atual)
+                send_whatsapp(clean_user_phone, "🔔 *Atendimento Transferido:* A sua mensagem foi encaminhada para a equipa humana. Aguarde por favor.", instance_name=nome_instancia_atual)
             
             historico_ref.add({"role": "assistant", "text": response_text, "timestamp": agora})
             return
 
         if response_text:
             response_text = response_text.replace("[TRANSICAO_HUMANO]", "").strip()
-            send_whatsapp(phone_number, response_text, instance_name=nome_instancia_atual)
+            send_whatsapp(clean_user_phone, response_text, instance_name=nome_instancia_atual)
             historico_ref.add({"role": "assistant", "text": response_text, "timestamp": agora})
             conversa_ref.set({"status_atendimento": "bot", "ultima_mensagem_por": "bot", "ultima_interacao": agora}, merge=True)
 
