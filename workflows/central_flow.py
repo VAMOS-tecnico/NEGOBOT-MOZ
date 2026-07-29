@@ -14,6 +14,7 @@ from services.evolution_service import (
     criar_e_configurar_instancia_automatica, 
     gerar_e_enviar_qrcode_central
 )
+from services.admin_service import processar_mensagem_admin  # 👈 Importação do serviço de Admin/Disparos
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +89,13 @@ def process_central_flow(phone_number_or_data=None, message_text="", msg_clean="
         if is_from_me:
             chat_ref = extensions.db.collection('chats').document(clean_phone)
             chat_ref.set({"ultima_mensagem_por": "atendente", "ultima_interacao": agora}, merge=True)
+            return
+
+        # 📢 INTERCEÇÃO DO COMANDO DE DISPARO (ADMINISTRADOR)
+        api_key_evolution = getattr(Config, 'EVOLUTION_API_KEY', '') or getattr(Config, 'AUTHENTICATION_API_KEY', '')
+        resposta_admin = processar_mensagem_admin(clean_phone, message_text, central_instance, api_key_evolution)
+        if resposta_admin:
+            send_whatsapp(clean_phone, resposta_admin, instance_name=central_instance)
             return
 
         # FILTRO DE SEGURANÇA: Se a mensagem for APENAS um link de YouTube / redes sociais sem texto relevante
@@ -207,6 +215,31 @@ ATENÇÃO - REGRAS ESTRITAS (CLIENTE EM TESTE GRÁTIS):
 
 🎯 SUA MISSÃO PRINCIPAL:
 Apresentar a Negobot Moz de forma breve (automação de WhatsApp para empresas em Moçambique) e convidar o cliente a testar grátis por 2 dias.
+
+📌 REGRA DE PREÇOS E PLANOS:
+Quando o cliente perguntar sobre valores, preços, custos ou como funciona o pagamento, explica que o pagamento é feito apenas após os 2 dias de teste gratuito e apresenta IMEDIATAMENTE os 3 planos de forma simples e direta:
+
+1. *Plano Básico — 500 MT / mês*
+Perfeito para pequenos negócios que querem parar de responder sempre às mesmas perguntas.
+• Atendimento inicial (respostas para perguntas frequentes, horário de funcionamento, localização e catálogo).
+• Limite: Até 1.000 conversas por mês.
+• Conexão: 1 número de WhatsApp.
+• Suporte técnico básico respondido em até 24h.
+
+2. *Plano Médio — 1.000 MT / mês*
+Ideal para empresas em crescimento que recebem muitos clientes ao mesmo tempo.
+• Tudo do Básico + Conversas ILIMITADAS.
+• Menu Interativo de navegação (ex: "1 para ver serviços, 2 para falar com atendente").
+• Relatórios de uso mensais.
+• Suporte prioritário com resposta em até 12h.
+
+3. *Plano Premium — 1.500 MT / mês*
+Para empresas que querem uma verdadeira central de atendimento inteligente e automatizada.
+• Tudo do Plano Médio + Automação Avançada com Inteligência Artificial.
+• Integrações com base de dados, catálogo e registo de pedidos.
+• Suporte dedicado e acompanhamento inicial de configuração.
+
+Finalize sempre reforçando que ele não paga nada agora e pode testar qualquer um destes planos durante 2 dias sem compromisso, bastando digitar "TESTE".
 
 📌 REGRAS DE COMPORTAMENTO OBRIGATÓRIAS:
 - NUNCA comente sobre conteúdos de vídeos, links de YouTube ou mensagens fora do escopo comercial.
