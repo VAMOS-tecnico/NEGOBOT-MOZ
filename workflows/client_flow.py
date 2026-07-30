@@ -139,7 +139,8 @@ def process_client_flow(
                 "status_plano": "demonstracao", 
                 "data_ativacao": agora, 
                 "data_expiracao": agora + timedelta(days=2), 
-                "diretrizes_corporativas": default_rules
+                "diretrizes_corporativas": default_rules,
+                "disparos_teste_usados": 0
             }
             client_doc_ref.set(dados_cliente)
             base_conhecimento_docs = ""
@@ -167,6 +168,7 @@ def process_client_flow(
 
         # 4. VERIFICAÇÃO E EXECUÇÃO DE COMANDO DE DISPARO (#disparo)
         if message_text.strip().lower().startswith('#disparo'):
+            # Permite apenas Premium, Ativo e Demonstração
             if status_plano not in ["premium", "demonstracao", "ativo"]:
                 send_whatsapp(
                     clean_user_phone,
@@ -175,12 +177,31 @@ def process_client_flow(
                 )
                 return
 
+            # Trava de Segurança para o Teste Grátis: Máximo 2 disparos
+            if status_plano == "demonstracao":
+                disparos_usados = dados_cliente.get("disparos_teste_usados", 0)
+                if disparos_usados >= 2:
+                    send_whatsapp(
+                        clean_user_phone,
+                        "⚠️ *Limite do Teste Atingido:* Durante o período de teste grátis só são permitidos *2 disparos em massa*.\n\nPara continuar a fazer disparos ilimitados para os seus clientes, subscreva o *Plano Premium* (1.500 MT/mês).",
+                        instance_name=nome_instancia_atual
+                    )
+                    return
+
+            # Executa o disparo
             resposta_disparo = processar_disparo_cliente(
                 tenant_id=nome_instancia_atual,
                 client_phone=clean_user_phone,
                 message_text=message_text,
                 instance_name=nome_instancia_atual
             )
+
+            # Contabiliza o disparo efetuado se o cliente estiver em demonstração
+            if status_plano == "demonstracao":
+                client_doc_ref.set({
+                    "disparos_teste_usados": firestore.Increment(1)
+                }, merge=True)
+
             send_whatsapp(clean_user_phone, resposta_disparo, instance_name=nome_instancia_atual)
             return
 
