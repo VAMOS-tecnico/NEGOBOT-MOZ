@@ -11,6 +11,7 @@ from services.media_service import (
     extrair_texto_pdf_url, 
     extrair_texto_excel_url
 )
+from services.client_broadcast_service import processar_disparo_cliente
 
 logger = logging.getLogger(__name__)
 
@@ -124,18 +125,29 @@ def process_client_flow(
         conversa_ref = client_doc_ref.collection('conversas').document(clean_user_phone)
         historico_ref = conversa_ref.collection('historico')
 
-        # 3. MENSAGEM DO PRÓPRIO ATENDENTE HUMANO
+        # 3. VERIFICAÇÃO E EXECUÇÃO DE COMANDO DE DISPARO (#disparo)
+        if message_text.strip().lower().startswith('#disparo'):
+            resposta_disparo = processar_disparo_cliente(
+                tenant_id=nome_instancia_atual,
+                client_phone=clean_user_phone,
+                message_text=message_text,
+                instance_name=nome_instancia_atual
+            )
+            send_whatsapp(clean_user_phone, resposta_disparo, instance_name=nome_instancia_atual)
+            return
+
+        # 4. MENSAGEM DO PRÓPRIO ATENDENTE HUMANO
         if is_from_me:
             conversa_ref.set({"status_atendimento": "humano", "ultima_mensagem_por": "atendente", "ultima_interacao": agora}, merge=True)
             historico_ref.add({"role": "atendente", "text": message_text or "[Documento/Mídia enviada pelo atendente]", "timestamp": agora})
             return
 
-        # 4. REGISTO IMEDIATO DA MENSAGEM DO CLIENTE NO FIRESTORE
+        # 5. REGISTO IMEDIATO DA MENSAGEM DO CLIENTE NO FIRESTORE
         conversa_ref.set({"ultima_interacao": agora, "ultima_mensagem_por": "cliente_final"}, merge=True)
         texto_historico = message_text if message_text else "[Documento Enviado]"
         historico_ref.add({"role": "user", "text": texto_historico, "timestamp": agora})
 
-        # 5. PROCESSAMENTO DE DOCUMENTOS (PDF / EXCEL) PARA BASE DE CONHECIMENTO
+        # 6. PROCESSAMENTO DE DOCUMENTOS (PDF / EXCEL) PARA BASE DE CONHECIMENTO
         if document_message and isinstance(document_message, dict):
             media_url = document_message.get('mediaUrl') or document_message.get('url') or document_message.get('fileUrl')
             file_name = document_message.get('fileName', 'documento')
@@ -178,7 +190,7 @@ def process_client_flow(
                     send_whatsapp(clean_user_phone, erro_msg, instance_name=nome_instancia_atual)
                     return
 
-        # 6. REGRAS DO CLIENTE
+        # 7. REGRAS DO CLIENTE
         default_rules = (
             "- Atenda os clientes finais com cortesia, agilidade e profissionalismo.\n"
             "- NUNCA diga que a loja não tem stock de forma genérica e NUNCA invente preços ou produtos.\n"
@@ -200,7 +212,7 @@ def process_client_flow(
             dados_cliente = client_doc.to_dict() or {}
             base_conhecimento_docs = dados_cliente.get("base_conhecimento_documentos", "")
 
-        # 7. VERIFICAÇÃO DE MODO HUMANO E TIMEOUT (2 MINUTOS)
+        # 8. VERIFICAÇÃO DE MODO HUMANO E TIMEOUT (2 MINUTOS)
         conversa_doc = conversa_ref.get()
         conversa_dados = conversa_doc.to_dict() if conversa_doc.exists else {}
         status_atendimento = conversa_dados.get("status_atendimento", "bot")
@@ -220,7 +232,7 @@ def process_client_flow(
             else:
                 return
 
-        # 8. PEDIDO EXPLÍCITO DE ATENDIMENTO HUMANO
+        # 9. PEDIDO EXPLÍCITO DE ATENDIMENTO HUMANO
         gatilhos_humano = [
             "falar com atendente", "atendente humano", "falar com humano", 
             "suporte humano", "falar com operador", "quero atendente", 
@@ -240,7 +252,7 @@ def process_client_flow(
             )
             return
 
-        # 9. PREPARAÇÃO DO HISTÓRICO PARA A GROQ
+        # 10. PREPARAÇÃO DO HISTÓRICO PARA A GROQ
         docs_h = historico_ref.order_by('timestamp', direction=firestore.Query.DESCENDING).limit(10).stream()
         lista_m = [d.to_dict() for d in docs_h]
         lista_m.reverse()
@@ -270,7 +282,7 @@ REGRA DE ATENDIMENTO:
 - Responda às dúvidas do cliente com clareza utilizando os dados oficiais fornecidos acima.
 - NUNCA tente transferir o atendimento e NUNCA invente informações que não estejam presentes nos dados da empresa."""
 
-        # 10. RESPOSTA DA GROQ COM FALLBACK DE SEGURANÇA
+        # 11. RESPOSTA DA GROQ COM FALLBACK DE SEGURANÇA
         response_text = None
         try:
             response_text = chamar_groq_rest(contents, system_prompt=sys_instruction)
