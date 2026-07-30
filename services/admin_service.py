@@ -1,16 +1,11 @@
+import re
 import threading
 import logging
-import re
+from config import Config  # Importa a sua classe Config
 from services.broadcast_service import disparar_broadcast_seguro
 
 logger = logging.getLogger(__name__)
 
-# Lista de números de WhatsApp autorizados a executar o comando de Admin
-# Coloque aqui os seus números com DDI (258)
-ADMIN_TELEFONES_AUTORIZADOS = [
-    "258841234567", 
-    "258851234567"
-]
 
 def formatar_numero_mocambique(phone_str):
     """Garante que o número tenha apenas dígitos e contenha o DDI 258."""
@@ -18,6 +13,7 @@ def formatar_numero_mocambique(phone_str):
     if len(clean) == 9 and clean.startswith(('84', '85', '86', '87')):
         return f"258{clean}"
     return clean
+
 
 def processar_mensagem_admin(telefone_remetente, texto_mensagem, instance_name, api_key_evolution):
     """
@@ -28,11 +24,15 @@ def processar_mensagem_admin(telefone_remetente, texto_mensagem, instance_name, 
     
     if texto_limpo.upper().startswith("DISPARAR"):
         
-        # 1. Trava de Segurança: Verificar se o remetente é um Administrador
+        # 1. Trava de Segurança: Valida contra o ADMIN_NUMBER do seu config.py
+        admin_autorizado = formatar_numero_mocambique(Config.ADMIN_NUMBER)
         remetente_validado = formatar_numero_mocambique(telefone_remetente)
-        if remetente_validado not in ADMIN_TELEFONES_AUTORIZADOS:
-            logger.warning(f"Tentativa de uso do comando DISPARAR não autorizada pelo número: {telefone_remetente}")
-            return "❌ *Acesso Negado!* Este comando é restrito aos Administradores do sistema."
+        
+        if admin_autorizado and remetente_validado != admin_autorizado:
+            logger.warning(
+                f"Tentativa de disparo não autorizada pelo número: {telefone_remetente} (Admin esperado: {admin_autorizado})"
+            )
+            return "❌ *Acesso Negado!* Este comando é restrito ao Administrador do Negobot Moz."
 
         try:
             partes = texto_limpo.split("|")
@@ -46,7 +46,10 @@ def processar_mensagem_admin(telefone_remetente, texto_mensagem, instance_name, 
             numeros_brutos = partes[1].strip().split(",")
             mensagem_campanha = partes[2].strip()
 
-            # Sanitização dos números recebidos
+            if not mensagem_campanha:
+                return "⚠️ A mensagem do disparo não pode estar vazia."
+
+            # 2. Tratamento e higienização dos números recebidos
             lista_contactos = []
             for num in numeros_brutos:
                 num_formatado = formatar_numero_mocambique(num)
@@ -56,7 +59,7 @@ def processar_mensagem_admin(telefone_remetente, texto_mensagem, instance_name, 
             if not lista_contactos:
                 return "⚠️ Nenhum número válido foi encontrado na lista fornecida."
 
-            # Thread em segundo plano para envio seguro
+            # 3. Thread em segundo plano para envio assíncrono
             hilo = threading.Thread(
                 target=disparar_broadcast_seguro,
                 args=(instance_name, api_key_evolution, lista_contactos, mensagem_campanha),
@@ -67,7 +70,7 @@ def processar_mensagem_admin(telefone_remetente, texto_mensagem, instance_name, 
             return (
                 f"🚀 *Broadcast de Administrador Iniciado!*\n\n"
                 f"• *Destinatários Válidos:* {len(lista_contactos)}\n"
-                f"• *Status:* A enviar em segundo plano com pausas de segurança anti-bloqueio."
+                f"• *Status:* A enviar em segundo plano com pausas de segurança."
             )
 
         except Exception as e:
