@@ -14,26 +14,67 @@ PAUSA_GRUPO_SEG = 5
 
 
 def formatar_numero_mocambique(phone_str):
-    """Garante que o número de telefone tenha o formato completo com DDI 258."""
+    """Garante que o número de telefone tenha apenas dígitos e o DDI 258."""
     clean = re.sub(r'\D', '', str(phone_str or ''))
     if len(clean) == 9 and clean.startswith(('84', '85', '86', '87')):
         return f"258{clean}"
     return clean
 
 
-def _worker_executar_disparos(destinatarios, grupos, mensagem_campanha, instance_name, client_phone, total_alvos):
+# ==========================================
+# 1. DISPARO ADMINISTRADOR (Corrigi o ImportError)
+# ==========================================
+def disparar_broadcast_seguro(instance_name, api_key_evolution, lista_contactos, mensagem_campanha):
     """
-    Função executada em segundo plano (thread) para não travar o servidor.
+    Executa o disparo em massa enviado pelo ADMINISTRADOR (admin_service.py),
+    aplicando pausas de segurança anti-bloqueio.
     """
     sucessos = 0
     falhas = 0
-    
+
+    for item in lista_contactos:
+        try:
+            telefone = item.get("telefone") if isinstance(item, dict) else item
+            nome = item.get("nome", "Cliente") if isinstance(item, dict) else "Cliente"
+
+            clean_dest = formatar_numero_mocambique(telefone)
+            if not clean_dest:
+                falhas += 1
+                continue
+
+            msg_personalizada = mensagem_campanha.replace("{nome}", nome)
+            send_whatsapp(clean_dest, msg_personalizada, instance_name=instance_name)
+            sucessos += 1
+
+            time.sleep(PAUSA_CONTATO_SEG)
+
+        except Exception as e:
+            falhas += 1
+            logger.error(f"Erro ao enviar broadcast admin para {item}: {e}")
+
+    logger.info(f"Broadcast Admin concluído. Sucessos: {sucessos} | Falhas: {falhas}")
+
+
+# ==========================================
+# 2. DISPARO CLIENTES (Sistema SaaS / Premium)
+# ==========================================
+def _worker_executar_disparos(destinatarios, grupos, mensagem_campanha, instance_name, client_phone, total_alvos):
+    """
+    Função executada em segundo plano (thread daemon) para envio dos clientes.
+    """
+    sucessos = 0
+    falhas = 0
+
     # 1. Envio para contactos
     for dest in destinatarios:
         try:
-            clean_dest = formatar_numero_mocambique(dest)
+            phone_bruto = dest.get("telefone") if isinstance(dest, dict) else dest
+            nome_contacto = dest.get("nome", "Cliente") if isinstance(dest, dict) else "Cliente"
+
+            clean_dest = formatar_numero_mocambique(phone_bruto)
             if clean_dest:
-                send_whatsapp(clean_dest, mensagem_campanha, instance_name=instance_name)
+                msg_personalizada = mensagem_campanha.replace("{nome}", nome_contacto)
+                send_whatsapp(clean_dest, msg_personalizada, instance_name=instance_name)
                 sucessos += 1
                 time.sleep(PAUSA_CONTATO_SEG)
             else:
@@ -46,7 +87,8 @@ def _worker_executar_disparos(destinatarios, grupos, mensagem_campanha, instance
     for grupo in grupos:
         try:
             if grupo:
-                send_whatsapp(grupo, mensagem_campanha, instance_name=instance_name)
+                msg_grupo = mensagem_campanha.replace("{nome}", "Clientes")
+                send_whatsapp(grupo, msg_grupo, instance_name=instance_name)
                 sucessos += 1
                 time.sleep(PAUSA_GRUPO_SEG)
             else:
@@ -55,7 +97,7 @@ def _worker_executar_disparos(destinatarios, grupos, mensagem_campanha, instance
             falhas += 1
             logger.error(f"Erro ao enviar disparo para grupo {grupo}: {e}")
 
-    # 3. Notificação final enviada diretamente ao WhatsApp do cliente
+    # 3. Notificação final ao cliente
     relatorio = (
         f"📊 *RELATÓRIO FINAL DA CAMPANHA*\n\n"
         f"• *Total de Alvos:* {total_alvos}\n"
@@ -63,45 +105,54 @@ def _worker_executar_disparos(destinatarios, grupos, mensagem_campanha, instance
         f"• *Falhas de Envio:* ❌ {falhas}\n\n"
         f"Campanha concluída com sucesso pelo **Negobot Moz**! 🚀"
     )
+    
     try:
-        send_whatsapp(client_phone, relatorio, instance_name=instance_name)
+        cliente_clean = formatar_numero_mocambique(client_phone)
+        send_whatsapp(cliente_clean, relatorio, instance_name=instance_name)
     except Exception as e:
         logger.error(f"Erro ao enviar relatório final para {client_phone}: {e}")
 
 
 def processar_disparo_cliente(tenant_id, client_phone, message_text, instance_name):
     """
-    Processa o comando de disparo em massa com validações de segurança e execução assíncrona.
+    Processa o comando de disparo em massa dos clientes com validação no Firestore.
     """
     try:
         agora = datetime.now(timezone.utc)
 
-        # 1. Consultar a conta no Firestore
         tenant_ref = extensions.db.collection('clientes_bot').document(tenant_id)
         tenant_doc = tenant_ref.get()
-        
+
         if not tenant_doc.exists:
             return "❌ Conta não encontrada no sistema Negobot Moz."
-            
+
         tenant_data = tenant_doc.to_dict() or {}
-        
-        # 2. Validação Estrita de Plano e Expiração
+
         disparo_liberado = tenant_data.get('disparo_liberado', False)
         status_plano = str(tenant_data.get('status_plano', '')).lower()
         data_expiracao = tenant_data.get('data_expiracao')
 
-        if data_expiracao and data_expiracao.tzinfo is None:
-            data_expiracao = data_expiracao.replace(tzinfo=timezone.utc)
+        if data_expiracao:
+            if isinstance(data_expiracao, str):
+                try:
+                    data_expiracao = datetime.fromisoformat(data_expiracao)
+                except ValueError:
+                    data_expiracao = None
+            if hasattr(data_expiracao, 'tzinfo') and data_expiracao.tzinfo is None:
+                data_expiracao = data_expiracao.replace(tzinfo=timezone.utc)
 
-        # Bloqueio por expiração de licença
         if data_expiracao and agora > data_expiracao:
             return (
                 "⚠️ *Sua Licença Expirou!*\n\n"
                 "O seu plano atual encontra-se expirado. Para realizar novos disparos em massa, "
-                "por favor efetue o pagamento da renovação via M-Pesa."
+                "por favor efetue a renovação da sua assinatura via M-Pesa."
             )
 
-        pode_disparar = disparo_liberado or status_plano == "demonstracao" or "premium" in str(tenant_data.get('plano', '')).lower()
+        pode_disparar = (
+            disparo_liberado or 
+            status_plano == "demonstracao" or 
+            "premium" in str(tenant_data.get('plano', '')).lower()
+        )
 
         if not pode_disparar:
             return (
@@ -110,22 +161,26 @@ def processar_disparo_cliente(tenant_id, client_phone, message_text, instance_na
                 "Entre em contacto com a central do Negobot Moz para efetuar o upgrade da sua conta."
             )
 
-        # 3. Extração da mensagem
         partes = message_text.split(maxsplit=1)
         if len(partes) < 2:
             return (
                 "⚠️ *Uso incorreto do comando.*\n\n"
                 "Para fazer um disparo, escreva o comando seguido da mensagem que deseja enviar.\n\n"
                 "Exemplo:\n"
-                "`#disparo Olá! Temos novidades e descontos imperdíveis esta semana na nossa loja.`"
+                "`#disparo Olá {nome}! Temos novidades e descontos imperdíveis esta semana na nossa loja.`"
             )
-            
+
         mensagem_campanha = partes[1].strip()
 
-        # 4. Buscar contactos e grupos
         contactos_ref = tenant_ref.collection('base_contactos').stream()
-        destinatarios = [doc.to_dict().get('phone') for doc in contactos_ref if doc.to_dict().get('phone')]
-        
+        destinatarios = []
+        for doc in contactos_ref:
+            c_data = doc.to_dict() or {}
+            phone = c_data.get('phone') or c_data.get('telefone')
+            nome = c_data.get('nome', 'Cliente')
+            if phone:
+                destinatarios.append({"telefone": phone, "nome": nome})
+
         grupos_ref = tenant_ref.collection('grupos_autorizados').stream()
         grupos = [doc.to_dict().get('group_jid') for doc in grupos_ref if doc.to_dict().get('group_jid')]
 
@@ -136,7 +191,6 @@ def processar_disparo_cliente(tenant_id, client_phone, message_text, instance_na
                 "Carregue primeiro a sua lista de contactos no sistema antes de iniciar a campanha."
             )
 
-        # 5. Iniciar envio em Thread de segundo plano
         thread_disparo = threading.Thread(
             target=_worker_executar_disparos,
             args=(destinatarios, grupos, mensagem_campanha, instance_name, client_phone, total_alvos),
@@ -144,13 +198,12 @@ def processar_disparo_cliente(tenant_id, client_phone, message_text, instance_na
         )
         thread_disparo.start()
 
-        # Resposta imediata sem travar o servidor
         return (
             f"🚀 *Campanha iniciada com sucesso!*\n\n"
             f"• *Contactos:* {len(destinatarios)}\n"
             f"• *Grupos:* {len(grupos)}\n"
             f"• *Total de Alvos:* {total_alvos}\n\n"
-            f"A campanha está a ser enviada em segundo plano. Receberá o relatório completo assim que for concluída!"
+            f"A campanha está a ser enviada em segundo plano com pausas anti-bloqueio. Receberá o relatório completo assim que for concluída!"
         )
 
     except Exception as e:
