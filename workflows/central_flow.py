@@ -15,9 +15,29 @@ from services.evolution_service import (
     gerar_e_enviar_qrcode_central
 )
 from services.admin_service import processar_mensagem_admin
-from services.payment_service import validar_e_ativar_pagamento_mpesa  # 👈 NOVO IMPORT
+from services.payment_service import validar_e_ativar_pagamento_mpesa  # 👈 Importação do serviço de Pagamentos M-Pesa
 
 logger = logging.getLogger(__name__)
+
+def checar_timeout_atendimento_humano(conversa_ref, conversa_dados, agora):
+    """Verifica se o tempo limite de espera por atendimento humano expirou."""
+    if conversa_dados and conversa_dados.get("status_atendimento") == "humano":
+        ultima_interacao = conversa_dados.get("ultima_interacao")
+        ultima_msg_por = conversa_dados.get("ultima_mensagem_por")
+        
+        if ultima_msg_por == "cliente_final" and ultima_interacao:
+            if ultima_interacao.tzinfo is None:
+                ultima_interacao = ultima_interacao.replace(tzinfo=timezone.utc)
+            
+            timeout_min = getattr(Config, 'TIMEOUT_HUMANO_MINUTOS', 15)
+            minutos_decorridos = (agora - ultima_interacao).total_seconds() / 60.0
+            if minutos_decorridos >= timeout_min:
+                conversa_ref.set({
+                    "status_atendimento": "bot",
+                    "ultima_interacao": agora
+                }, merge=True)
+                return True
+    return False
 
 def process_central_flow(phone_number_or_data=None, message_text="", msg_clean="", is_from_me=False, agora=None, data=None, **kwargs):
     """Workflow central do Negobot Moz focado na apresentação, conversão e acompanhamento de clientes."""
@@ -25,9 +45,10 @@ def process_central_flow(phone_number_or_data=None, message_text="", msg_clean="
         if agora is None:
             agora = datetime.now(timezone.utc)
 
+        # Compatibilidade de parâmetros
         payload = data if data is not None else phone_number_or_data
 
-        # 1. Identificador da conversa
+        # 1. Extração do identificador da conversa (JID)
         raw_jid = ""
         if isinstance(payload, dict):
             data_payload = payload.get('data', {}) if isinstance(payload.get('data'), dict) else payload
@@ -41,11 +62,12 @@ def process_central_flow(phone_number_or_data=None, message_text="", msg_clean="
 
         raw_jid_str = str(raw_jid).strip().lower()
 
-        # Ignora grupos de WhatsApp (@g.us)
+        # 🚫 TRAVA DE SEGURANÇA MÁXIMA: Ignora grupos de WhatsApp (@g.us) imediatamente
         if "@g.us" in raw_jid_str or (isinstance(payload, dict) and payload.get('data', {}).get('key', {}).get('participant')):
-            logger.info(f"🚫 Mensagem de grupo ignorada: {raw_jid_str}")
+            logger.info(f"🚫 Mensagem de grupo ignorada para economizar APIs: {raw_jid_str}")
             return
 
+        # Sanitização do número individual do cliente (ex: 25884xxxxxxx)
         clean_phone = re.sub(r'\D', '', raw_jid_str.split('@')[0])
         if not clean_phone:
             logger.warning("Número de telefone inválido no process_central_flow.")
@@ -53,6 +75,7 @@ def process_central_flow(phone_number_or_data=None, message_text="", msg_clean="
 
         central_instance = Config.EVOLUTION_INSTANCE_NAME
 
+        # Extração de texto caso venha direto do payload
         if not message_text and isinstance(payload, dict):
             data_payload = payload.get('data', {}) if isinstance(payload.get('data'), dict) else payload
             msg_obj = data_payload.get('message', {}) if isinstance(data_payload, dict) else {}
@@ -63,6 +86,7 @@ def process_central_flow(phone_number_or_data=None, message_text="", msg_clean="
         else:
             msg_clean = msg_clean.lower().strip()
 
+        # Ignora mensagens enviadas pelo próprio atendente humano
         if is_from_me:
             chat_ref = extensions.db.collection('chats').document(clean_phone)
             chat_ref.set({"ultima_mensagem_por": "atendente", "ultima_interacao": agora}, merge=True)
@@ -75,7 +99,7 @@ def process_central_flow(phone_number_or_data=None, message_text="", msg_clean="
             send_whatsapp(clean_phone, resposta_admin, instance_name=central_instance)
             return
 
-        # 💳 VERIFICAÇÃO AUTOMÁTICA DE COMPROVATIVO M-PESA (#pago, #comprovativo, 'transferiste', 'confirmado')
+        # 💳 VERIFICAÇÃO AUTOMÁTICA DE COMPROVATIVO M-PESA
         if (
             msg_clean.startswith('#pago') 
             or msg_clean.startswith('#comprovativo')
@@ -89,11 +113,12 @@ def process_central_flow(phone_number_or_data=None, message_text="", msg_clean="
                 client_phone=clean_phone,
                 message_text=message_text
             )
-            if "PAGAMENTO CONFIRMADO" in resposta_pagamento or "Transação" in resposta_pagamento or "Código" in resposta_pagamento:
+            # Se for uma mensagem de processamento de pagamento válida, responde e encerra o fluxo
+            if any(termo in resposta_pagamento for termo in ["PAGAMENTO CONFIRMADO", "Aguarde", "Insuficiente", "Já Utilizado", "Não Identificado"]):
                 send_whatsapp(clean_phone, resposta_pagamento, instance_name=central_instance)
                 return
 
-        # Filtro de links genéricos
+        # FILTRO DE SEGURANÇA: Se a mensagem for APENAS um link de YouTube / redes sociais sem texto relevante
         if ("youtube.com" in msg_clean or "youtu.be" in msg_clean or "tiktok.com" in msg_clean) and len(msg_clean.split()) <= 2:
             send_whatsapp(
                 clean_phone,
@@ -102,6 +127,7 @@ def process_central_flow(phone_number_or_data=None, message_text="", msg_clean="
             )
             return
 
+        # 2. Consulta de estado no Firestore
         chat_ref = extensions.db.collection('chats').document(clean_phone)
         chat_doc = chat_ref.get()
         chat_dados = chat_doc.to_dict() if chat_doc.exists else {}
@@ -118,6 +144,7 @@ def process_central_flow(phone_number_or_data=None, message_text="", msg_clean="
                 "status": "prospect"
             }, merge=True)
 
+        # 3. Comando explícito de regeração de QR Code (#qrcode)
         if msg_clean == "#qrcode":
             send_whatsapp(clean_phone, "🔄 *A gerar o seu novo QR Code do Negobot Moz...* Por favor, aguarde alguns segundos.", instance_name=central_instance)
             criar_e_configurar_instancia_automatica(clean_phone)
@@ -125,6 +152,7 @@ def process_central_flow(phone_number_or_data=None, message_text="", msg_clean="
             gerar_e_enviar_qrcode_central(clean_phone)
             return
 
+        # 4. Gatilhos de Teste Grátis (Quando o cliente digita TESTE)
         gatilhos_teste = ["teste", "testar", "quero o bot", "começar", "criar bot", "demo"]
         if any(g in msg_clean for g in gatilhos_teste):
             send_whatsapp(clean_phone, "⏳ *A preparar o seu teste grátis de 2 dias do Negobot Moz...* 🚀", instance_name=central_instance)
@@ -148,16 +176,21 @@ def process_central_flow(phone_number_or_data=None, message_text="", msg_clean="
             gerar_e_enviar_qrcode_central(clean_phone)
             return
 
+        # 5. Modo de Atendimento Humano
         status_atendimento = chat_dados.get("status_atendimento", "bot")
         if status_atendimento == "humano":
-            if msg_clean in ["/bot", "/reset", "continuar", "bot", "voltar"]:
-                chat_ref.set({"status_atendimento": "bot", "ultima_interacao": agora}, merge=True)
+            if checar_timeout_atendimento_humano(chat_ref, chat_dados, agora):
                 status_atendimento = "bot"
             else:
-                chat_ref.set({"ultima_interacao": agora, "ultima_mensagem_por": "cliente_final"}, merge=True)
-                save_chat_history(clean_phone, "user", message_text)
-                return
+                if msg_clean in ["/bot", "/reset", "continuar", "bot", "voltar"]:
+                    chat_ref.set({"status_atendimento": "bot", "ultima_interacao": agora}, merge=True)
+                    status_atendimento = "bot"
+                else:
+                    chat_ref.set({"ultima_interacao": agora, "ultima_mensagem_por": "cliente_final"}, merge=True)
+                    save_chat_history(clean_phone, "user", message_text)
+                    return
 
+        # 6. Transferência Manual para Atendimento Humano
         gatilhos_humano = ["falar com atendente", "suporte humano", "atendente", "humano", "#suporte", "falar com pessoa"]
         if any(g in msg_clean for g in gatilhos_humano):
             timeout_min = getattr(Config, 'TIMEOUT_HUMANO_MINUTOS', 15)
@@ -173,7 +206,7 @@ def process_central_flow(phone_number_or_data=None, message_text="", msg_clean="
             )
             return
 
-        # Resposta inteligente Groq
+        # 7. Resposta Inteligente via Groq (Com Filtro de Foco no Negócio)
         chat_ref.set({"status_atendimento": "bot", "ultima_mensagem_por": "cliente_final", "ultima_interacao": agora}, merge=True)
         save_chat_history(clean_phone, "user", message_text)
 
