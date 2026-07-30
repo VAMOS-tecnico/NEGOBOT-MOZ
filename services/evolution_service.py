@@ -43,13 +43,14 @@ def notificar_erro_admin(erro_msg):
 
 
 def send_whatsapp(to, text, instance_name=None):
-    """Envia uma mensagem de texto via Evolution API sem conflitos de presença/socket."""
+    """Envia uma mensagem de texto via Evolution API para números ou grupos (@g.us)."""
     if not text or not str(text).strip():
         return False
 
-    clean_number = _limpar_numero(to)
-    if not clean_number:
-        logger.error(f"Número inválido fornecido para envio: '{to}'")
+    # Preserva JIDs de grupos (@g.us) ou limpa números individuais
+    clean_target = to if str(to).endswith('@g.us') else _limpar_numero(to)
+    if not clean_target:
+        logger.error(f"Destino inválido fornecido para envio: '{to}'")
         return False
 
     clean_instance = _get_clean_instance(instance_name)
@@ -58,7 +59,7 @@ def send_whatsapp(to, text, instance_name=None):
     url = f"{Config.EVOLUTION_API_URL}/message/sendText/{clean_instance}"
     
     payload_v2 = {
-        "number": clean_number,
+        "number": clean_target,
         "text": str(text).strip(),
         "delay": 1200
     }
@@ -68,9 +69,9 @@ def send_whatsapp(to, text, instance_name=None):
         
         # Se retornar 400 Bad Request, tenta o payload legado (v1)
         if res.status_code == 400:
-            logger.warning(f"Tentativa v2 retornou 400. Tentando payload v1 para {clean_number}...")
+            logger.warning(f"Tentativa v2 retornou 400. Tentando payload v1 para {clean_target}...")
             payload_v1 = {
-                "number": clean_number,
+                "number": clean_target,
                 "options": {
                     "delay": 1200
                 },
@@ -245,13 +246,11 @@ def aplicar_travas_instancia_central():
 
 
 # ==========================================================
-# 🟢 NOVA FUNÇÃO: SINCRONIZAÇÃO AUTOMÁTICA DE CONTACTOS
+# 🟢 FUNÇÕES DE MAPEAMENTO E SINCRONIZAÇÃO DE CONTACTOS/GRUPOS
 # ==========================================================
-def extrair_e_salvar_contactos_auto(tenant_id, instance_name):
-    """
-    Varre conversas ativas e participantes dos grupos via Evolution API
-    e armazena na subcoleção 'base_contactos' do Firestore no perfil do cliente.
-    """
+
+def extrair_contactos_conversas(tenant_id, instance_name):
+    """Extrai apenas contactos das conversas privadas existentes."""
     import extensions
 
     clean_instance = _get_clean_instance(instance_name)
@@ -263,7 +262,6 @@ def extrair_e_salvar_contactos_auto(tenant_id, instance_name):
     contactos_col = tenant_ref.collection('base_contactos')
 
     try:
-        # 1. Busca conversas ativas (Chats diretos)
         url_chats = f"{base_url}/chat/findChats/{clean_instance}"
         try:
             res_chats = requests.post(url_chats, headers=headers, json={}, timeout=20)
@@ -284,11 +282,35 @@ def extrair_e_salvar_contactos_auto(tenant_id, instance_name):
                             contactos_col.document(phone).set({
                                 "phone": phone,
                                 "nome": nome,
-                                "origem": "chat_direto"
+                                "origem": "chat_direto",
+                                "atualizado_em": time.time()
                             }, merge=True)
                             novos_contactos += 1
 
-        # 2. Busca participantes de Grupos
+        return (
+            f"✅ *Conversas Privadas Sincronizadas!*\n\n"
+            f"• Total de contactos de conversas guardados: *{novos_contactos}*\n\n"
+            f"Já pode enviar a sua campanha privada enviando:\n`#disparo <sua mensagem>`"
+        )
+
+    except Exception as e:
+        logger.error(f"Erro ao extrair conversas para tenant {tenant_id}: {e}", exc_info=True)
+        return f"❌ Erro ao sincronizar conversas: {str(e)}"
+
+
+def extrair_contactos_grupos(tenant_id, instance_name):
+    """Extrai contactos individuais dos membros dos grupos para disparos privados."""
+    import extensions
+
+    clean_instance = _get_clean_instance(instance_name)
+    headers = {"apikey": Config.EVOLUTION_API_KEY, "Content-Type": "application/json"}
+    base_url = Config.EVOLUTION_API_URL.rstrip('/')
+    
+    novos_contactos = 0
+    tenant_ref = extensions.db.collection('clientes_bot').document(tenant_id)
+    contactos_col = tenant_ref.collection('base_contactos')
+
+    try:
         url_groups = f"{base_url}/group/fetchAllGroups/{clean_instance}?getParticipants=true"
         try:
             res_groups = requests.get(url_groups, headers=headers, timeout=20)
@@ -309,16 +331,174 @@ def extrair_e_salvar_contactos_auto(tenant_id, instance_name):
                                 contactos_col.document(phone).set({
                                     "phone": phone,
                                     "nome": "Membro de Grupo",
-                                    "origem": f"grupo_{grupo_nome}"
+                                    "origem": f"grupo_{grupo_nome}",
+                                    "atualizado_em": time.time()
                                 }, merge=True)
                                 novos_contactos += 1
 
         return (
-            f"✅ *Sincronização Concluída!*\n\n"
-            f"• Contactos guardados/atualizados: *{novos_contactos}*\n\n"
-            f"Agora já pode realizar o seu disparo em massa enviando `#disparo <sua mensagem>` sem precisar digitar números."
+            f"✅ *Membros dos Grupos Sincronizados!*\n\n"
+            f"• Total de membros de grupos guardados: *{novos_contactos}*\n\n"
+            f"Já pode enviar a sua campanha privada enviando:\n`#disparo <sua mensagem>`"
         )
 
     except Exception as e:
-        logger.error(f"Erro ao extrair contactos da Evolution API para tenant {tenant_id}: {e}", exc_info=True)
-        return f"❌ Erro ao sincronizar contactos: {str(e)}"
+        logger.error(f"Erro ao extrair grupos para tenant {tenant_id}: {e}", exc_info=True)
+        return f"❌ Erro ao sincronizar membros de grupos: {str(e)}"
+
+
+def sincronizar_grupos_destino(tenant_id, instance_name):
+    """Mapeia os IDs dos grupos em si (@g.us) para permitir publicações diretas nos chats dos grupos."""
+    import extensions
+
+    clean_instance = _get_clean_instance(instance_name)
+    headers = {"apikey": Config.EVOLUTION_API_KEY, "Content-Type": "application/json"}
+    base_url = Config.EVOLUTION_API_URL.rstrip('/')
+    
+    tenant_ref = extensions.db.collection('clientes_bot').document(tenant_id)
+    grupos_col = tenant_ref.collection('base_grupos')
+
+    try:
+        url_groups = f"{base_url}/group/fetchAllGroups/{clean_instance}?getParticipants=false"
+        res_groups = requests.get(url_groups, headers=headers, timeout=20)
+
+        total_grupos = 0
+        if res_groups.status_code == 200:
+            grupos = res_groups.json()
+            if isinstance(grupos, list):
+                for grupo in grupos:
+                    group_jid = grupo.get("id") or grupo.get("jid", "")
+                    group_nome = grupo.get("subject", "Grupo Sem Nome")
+                    
+                    if group_jid and group_jid.endswith("@g.us"):
+                        doc_id = group_jid.replace('@', '_').replace('.', '_')
+                        grupos_col.document(doc_id).set({
+                            "jid": group_jid,
+                            "nome": group_nome,
+                            "atualizado_em": time.time()
+                        }, merge=True)
+                        total_grupos += 1
+
+        return (
+            f"✅ *Grupos Mapeados com Sucesso!*\n\n"
+            f"• Total de grupos prontos para receber mensagens: *{total_grupos}*\n\n"
+            f"Para enviar uma mensagem direta na conversa destes grupos, use:\n"
+            f"`#disparo_grupos <sua mensagem>`"
+        )
+
+    except Exception as e:
+        logger.error(f"Erro ao mapear grupos para tenant {tenant_id}: {e}", exc_info=True)
+        return f"❌ Erro ao mapear grupos: {str(e)}"
+
+
+def extrair_e_salvar_contactos_auto(tenant_id, instance_name):
+    """Executa a sincronização completa de conversas, membros de grupos e mapeamento de grupos."""
+    extrair_contactos_conversas(tenant_id, instance_name)
+    extrair_contactos_grupos(tenant_id, instance_name)
+    sincronizar_grupos_destino(tenant_id, instance_name)
+
+    return (
+        f"✅ *Sincronização Completa Concluída!*\n\n"
+        f"• As suas conversas privadas, contactos de grupos e a lista de grupos foram atualizadas.\n\n"
+        f"Comandos disponíveis:\n"
+        f"• `#disparo <mensagem>` -> Envia no privado.\n"
+        f"• `#disparo_grupos <mensagem>` -> Publica nos grupos."
+    )
+
+
+# ==========================================================
+# 🟢 FUNÇÕES DE DISPARO DE MENSAGENS EM MASSA
+# ==========================================================
+
+def enviar_disparo_privado(tenant_id, instance_name, mensagem):
+    """Dispara uma mensagem no privado para a base de contactos guardada."""
+    import extensions
+
+    if not mensagem or not mensagem.strip():
+        return "⚠️ Escreva a mensagem que deseja enviar. Exemplo:\n`#disparo Olá! Temos novidades.`"
+
+    clean_instance = _get_clean_instance(instance_name)
+    headers = {"apikey": Config.EVOLUTION_API_KEY, "Content-Type": "application/json"}
+    url_send = f"{Config.EVOLUTION_API_URL}/message/sendText/{clean_instance}"
+
+    tenant_ref = extensions.db.collection('clientes_bot').document(tenant_id)
+    contactos = tenant_ref.collection('base_contactos').stream()
+
+    sucessos = 0
+    falhas = 0
+
+    for doc in contactos:
+        dados = doc.to_dict()
+        phone = dados.get("phone")
+        if not phone:
+            continue
+
+        payload = {
+            "number": _limpar_numero(phone),
+            "text": mensagem.strip(),
+            "delay": 1500
+        }
+
+        try:
+            res = requests.post(url_send, headers=headers, json=payload, timeout=30)
+            if res.status_code in [200, 201]:
+                sucessos += 1
+            else:
+                falhas += 1
+        except Exception:
+            falhas += 1
+
+        time.sleep(1.5)
+
+    return (
+        f"🚀 *Disparo Privado Finalizado!*\n\n"
+        f"✅ Enviado com sucesso para: *{sucessos} contactos*\n"
+        f"❌ Falhas de envio: *{falhas}*"
+    )
+
+
+def enviar_disparo_grupos(tenant_id, instance_name, mensagem):
+    """Publica uma mensagem diretamente dentro dos chats de todos os grupos mapeados."""
+    import extensions
+
+    if not mensagem or not mensagem.strip():
+        return "⚠️ Escreva a mensagem que deseja publicar nos grupos. Exemplo:\n`#disparo_grupos Olá a todos!`"
+
+    clean_instance = _get_clean_instance(instance_name)
+    headers = {"apikey": Config.EVOLUTION_API_KEY, "Content-Type": "application/json"}
+    url_send = f"{Config.EVOLUTION_API_URL}/message/sendText/{clean_instance}"
+
+    tenant_ref = extensions.db.collection('clientes_bot').document(tenant_id)
+    grupos = tenant_ref.collection('base_grupos').stream()
+
+    sucessos = 0
+    falhas = 0
+
+    for doc in grupos:
+        dados = doc.to_dict()
+        group_jid = dados.get("jid")
+        if not group_jid:
+            continue
+
+        payload = {
+            "number": group_jid,
+            "text": mensagem.strip(),
+            "delay": 2000
+        }
+
+        try:
+            res = requests.post(url_send, headers=headers, json=payload, timeout=30)
+            if res.status_code in [200, 201]:
+                sucessos += 1
+            else:
+                falhas += 1
+        except Exception:
+            falhas += 1
+
+        time.sleep(2)
+
+    return (
+        f"🚀 *Disparo em Grupos Finalizado!*\n\n"
+        f"✅ Publicado com sucesso em: *{sucessos} grupos*\n"
+        f"❌ Falhas de envio: *{falhas}*"
+    )
