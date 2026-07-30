@@ -7,10 +7,12 @@ from config import Config
 
 logger = logging.getLogger(__name__)
 
+
 def _get_clean_instance(instance_name=None):
     """Sanitiza e codifica o nome da instância para evitar erros de URL (ex: espaços)."""
     target = instance_name or getattr(Config, 'EVOLUTION_INSTANCE_NAME', '')
     return quote(str(target).strip())
+
 
 def _limpar_numero(phone_number):
     """Remove @s.whatsapp.net, +, espaços e letras, mantendo apenas dígitos."""
@@ -18,6 +20,7 @@ def _limpar_numero(phone_number):
         return ""
     num_str = str(phone_number).split('@')[0]
     return re.sub(r'\D', '', num_str)
+
 
 def notificar_erro_admin(erro_msg):
     """Envia um alerta ao número do administrador em caso de falha grave."""
@@ -38,6 +41,7 @@ def notificar_erro_admin(erro_msg):
         except Exception as e:
             logger.error(f"Falha ao enviar notificação de erro ao admin: {e}")
 
+
 def send_whatsapp(to, text, instance_name=None):
     """Envia uma mensagem de texto via Evolution API sem conflitos de presença/socket."""
     if not text or not str(text).strip():
@@ -53,7 +57,6 @@ def send_whatsapp(to, text, instance_name=None):
     
     url = f"{Config.EVOLUTION_API_URL}/message/sendText/{clean_instance}"
     
-    # 🟢 O parâmetro "delay" trata a simulação de digitação ("a escrever...") nativamente.
     payload_v2 = {
         "number": clean_number,
         "text": str(text).strip(),
@@ -83,6 +86,7 @@ def send_whatsapp(to, text, instance_name=None):
         logger.error(f"ERRO ao enviar mensagem via Evolution API ({url}): {e}")
         return False
 
+
 def criar_e_configurar_instancia_automatica(phone_number):
     """Cria e configura o webhook + definições de instância sem spam de requisições."""
     try:
@@ -108,7 +112,7 @@ def criar_e_configurar_instancia_automatica(phone_number):
         res_create = requests.post(url_create, headers=headers, json=payload_create, timeout=45)
         res_create.raise_for_status()
         
-        # 🟢 1. Definições da Instância (Ignorar Grupos, Rejeitar Chamadas e Tiques Azuis)
+        # 1. Definições da Instância
         try:
             url_settings = f"{Config.EVOLUTION_API_URL}/instance/setSettings/{client_instance}"
             payload_settings = {
@@ -124,7 +128,7 @@ def criar_e_configurar_instancia_automatica(phone_number):
         except Exception as set_err:
             logger.warning(f"Não foi possível aplicar definições de segurança na instância: {set_err}")
 
-        # 🟢 2. Configurar o Webhook Automaticamente
+        # 2. Configurar o Webhook Automaticamente
         webhook_target_url = getattr(Config, 'WEBHOOK_URL', None)
         if webhook_target_url:
             url_webhook = f"{Config.EVOLUTION_API_URL}/webhook/set/{client_instance}"
@@ -150,6 +154,7 @@ def criar_e_configurar_instancia_automatica(phone_number):
         logger.error(erro_msg)
         notificar_erro_admin(erro_msg)
         return False
+
 
 def gerar_e_enviar_qrcode_central(phone_number):
     """Solicita a ligação da instância e envia a imagem do QR Code ao utilizador."""
@@ -199,13 +204,13 @@ def gerar_e_enviar_qrcode_central(phone_number):
         logger.error(f"Erro ao gerar QR Code para {phone_number}: {e}")
         return False
 
+
 def aplicar_travas_instancia_central():
-    """🟢 Aplica as definições silenciosas à instância CENTRAL para parar os disparos pós-resposta."""
+    """Aplica as definições silenciosas à instância CENTRAL."""
     try:
         central_instance = _get_clean_instance()
         headers = {"apikey": Config.EVOLUTION_API_KEY, "Content-Type": "application/json"}
         
-        # Settings da Central
         url_settings = f"{Config.EVOLUTION_API_URL}/instance/setSettings/{central_instance}"
         payload_settings = {
             "reject_call": True,
@@ -218,7 +223,6 @@ def aplicar_travas_instancia_central():
         }
         requests.post(url_settings, headers=headers, json=payload_settings, timeout=30)
 
-        # Webhook da Central
         webhook_target_url = getattr(Config, 'WEBHOOK_URL', None)
         if webhook_target_url:
             url_webhook = f"{Config.EVOLUTION_API_URL}/webhook/set/{central_instance}"
@@ -238,3 +242,83 @@ def aplicar_travas_instancia_central():
             requests.post(url_webhook, headers=headers, json=payload_webhook, timeout=45)
     except Exception as e:
         logger.warning(f"Não foi possível reconfigurar a instância central: {e}")
+
+
+# ==========================================================
+# 🟢 NOVA FUNÇÃO: SINCRONIZAÇÃO AUTOMÁTICA DE CONTACTOS
+# ==========================================================
+def extrair_e_salvar_contactos_auto(tenant_id, instance_name):
+    """
+    Varre conversas ativas e participantes dos grupos via Evolution API
+    e armazena na subcoleção 'base_contactos' do Firestore no perfil do cliente.
+    """
+    import extensions
+
+    clean_instance = _get_clean_instance(instance_name)
+    headers = {"apikey": Config.EVOLUTION_API_KEY, "Content-Type": "application/json"}
+    base_url = Config.EVOLUTION_API_URL.rstrip('/')
+    
+    novos_contactos = 0
+    tenant_ref = extensions.db.collection('clientes_bot').document(tenant_id)
+    contactos_col = tenant_ref.collection('base_contactos')
+
+    try:
+        # 1. Busca conversas ativas (Chats diretos)
+        url_chats = f"{base_url}/chat/findChats/{clean_instance}"
+        try:
+            res_chats = requests.post(url_chats, headers=headers, json={}, timeout=20)
+            if res_chats.status_code != 200:
+                res_chats = requests.get(url_chats, headers=headers, timeout=20)
+        except Exception:
+            res_chats = None
+
+        if res_chats and res_chats.status_code == 200:
+            chats = res_chats.json()
+            if isinstance(chats, list):
+                for chat in chats:
+                    jid = chat.get("id") or chat.get("remoteJid", "")
+                    if jid and jid.endswith("@s.whatsapp.net"):
+                        phone = _limpar_numero(jid)
+                        nome = chat.get("name") or chat.get("pushName") or "Cliente"
+                        if phone and len(phone) >= 8:
+                            contactos_col.document(phone).set({
+                                "phone": phone,
+                                "nome": nome,
+                                "origem": "chat_direto"
+                            }, merge=True)
+                            novos_contactos += 1
+
+        # 2. Busca participantes de Grupos
+        url_groups = f"{base_url}/group/fetchAllGroups/{clean_instance}?getParticipants=true"
+        try:
+            res_groups = requests.get(url_groups, headers=headers, timeout=20)
+        except Exception:
+            res_groups = None
+
+        if res_groups and res_groups.status_code == 200:
+            grupos = res_groups.json()
+            if isinstance(grupos, list):
+                for grupo in grupos:
+                    participants = grupo.get("participants", [])
+                    grupo_nome = grupo.get("subject", "Grupo WhatsApp")
+                    for p in participants:
+                        p_jid = p.get("id") or p.get("jid", "")
+                        if p_jid and p_jid.endswith("@s.whatsapp.net"):
+                            phone = _limpar_numero(p_jid)
+                            if phone and len(phone) >= 8:
+                                contactos_col.document(phone).set({
+                                    "phone": phone,
+                                    "nome": "Membro de Grupo",
+                                    "origem": f"grupo_{grupo_nome}"
+                                }, merge=True)
+                                novos_contactos += 1
+
+        return (
+            f"✅ *Sincronização Concluída!*\n\n"
+            f"• Contactos guardados/atualizados: *{novos_contactos}*\n\n"
+            f"Agora já pode realizar o seu disparo em massa enviando `#disparo <sua mensagem>` sem precisar digitar números."
+        )
+
+    except Exception as e:
+        logger.error(f"Erro ao extrair contactos da Evolution API para tenant {tenant_id}: {e}", exc_info=True)
+        return f"❌ Erro ao sincronizar contactos: {str(e)}"
