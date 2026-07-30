@@ -48,22 +48,37 @@ def extrair_dados_sms_cliente_transferiste(sms_texto):
     if not sms_texto or not isinstance(sms_texto, str):
         return None
 
+    # Aceita 'as' ou 'às' com/sem acento
     padrao = (
         r"Confirmado\s+(?P<tx_id>[A-Z0-9]+)\.\s*"
         r"Transferiste\s+(?P<valor>[\d,.]+)\s*MT.*?\s+para\s+"
         r"(?P<destino>\d+)\s*-\s*"
         r"(?P<nome_destino>.*?)\s+aos\s+"
-        r"(?P<data_hora>\d{1,2}/\d{1,2}/\d{2,4}\s+as\s+\d{1,2}:\d{2}(?:\s*[AP]M)?)"
+        r"(?P<data_hora>\d{1,2}/\d{1,2}/\d{2,4}\s+[aà]s\s+\d{1,2}:\d{2}(?:\s*[AP]M)?)"
     )
 
     match = re.search(padrao, sms_texto, re.IGNORECASE)
     if match:
         dados = match.groupdict()
-        valor_clean = dados['valor'].replace(',', '')
+        valor_raw = dados['valor']
+        
+        # Tratamento seguro de decimais e milhar
+        if ',' in valor_raw and '.' in valor_raw:
+            valor_clean = valor_raw.replace(',', '')
+        elif ',' in valor_raw:
+            valor_clean = valor_raw.replace(',', '.')
+        else:
+            valor_clean = valor_raw
+
+        try:
+            valor_float = float(valor_clean)
+        except ValueError:
+            valor_float = 0.0
+
         return {
             "transaction_id": dados['tx_id'].upper(),
-            "valor": float(valor_clean),
-            "destino_telefone": re.sub(r'^258', '', dados['destino']),
+            "valor": valor_float,
+            "destino_telefone": re.sub(r'^\+?258', '', dados['destino']),
             "destino_nome": dados['nome_destino'].strip(),
             "data_transacao": dados['data_hora'].strip()
         }
@@ -71,14 +86,15 @@ def extrair_dados_sms_cliente_transferiste(sms_texto):
 
 
 def extrair_codigo_mpesa(texto):
-    """Extrai o ID da transação M-Pesa de qualquer mensagem."""
+    """Extrai o ID da transação M-Pesa garantindo que não confunda palavras em maiúsculas."""
     texto = (texto or "").strip().upper()
 
     dados_envio = extrair_dados_sms_cliente_transferiste(texto)
     if dados_envio:
         return dados_envio["transaction_id"]
 
-    match = re.search(r'\b[A-Z0-9]{8,12}\b', texto)
+    # Exige combinação de Letras e Números (Evita palavras como OBRIGADO, PROBLEMA, etc.)
+    match = re.search(r'\b(?=.*[0-9])(?=.*[A-Z])[A-Z0-9]{8,12}\b', texto)
     if match:
         return match.group(0)
 
@@ -99,7 +115,7 @@ def validar_e_ativar_pagamento_mpesa(tenant_id, client_phone, message_text):
             return (
                 "⚠️ *Código M-Pesa Não Identificado!*\n\n"
                 "Não conseguimos ler o código do seu pagamento.\n"
-                "Por favor, envie o **Código da Transação** (Ex: `DGU1L0KF9I3`) ou cole o SMS do M-Pesa."
+                "Por favor, envie o **Código da Transação** (Ex: `DGU1L0KF9I3`) ou cole o SMS completo do M-Pesa."
             )
 
         # 2. Verificar destinatário (caso o cliente tenha colado o SMS completo)
@@ -153,12 +169,26 @@ def validar_e_ativar_pagamento_mpesa(tenant_id, client_phone, message_text):
                 "Por favor, complete o valor restante para ativar a sua licença."
             )
 
-        # Cálculo da validade de 30 dias
+        # 6. Cálculo inteligente de validade (preserva dias em caso de renovação antecipada)
         dias_validade = plano["dias_validade"]
-        data_expiracao = agora + timedelta(days=dias_validade)
+        tenant_ref = extensions.db.collection('clientes_bot').document(tenant_id)
+        tenant_doc = tenant_ref.get()
+        tenant_dados = tenant_doc.to_dict() if tenant_doc.exists else {}
+
+        data_expiracao_atual = tenant_dados.get('data_expiracao')
+        if data_expiracao_atual:
+            if data_expiracao_atual.tzinfo is None:
+                data_expiracao_atual = data_expiracao_atual.replace(tzinfo=timezone.utc)
+            
+            # Se ainda não expirou, acumula os 30 dias na data de expiração existente
+            base_calculo = max(agora, data_expiracao_atual)
+        else:
+            base_calculo = agora
+
+        data_expiracao = base_calculo + timedelta(days=dias_validade)
         nome_pagador = dados_pago.get('remetente_nome', 'Cliente')
 
-        # 6. ATIVAÇÃO E ATUALIZAÇÃO NO FIRESTORE
+        # 7. ATIVAÇÃO E ATUALIZAÇÃO NO FIRESTORE
         pagamento_ref.set({
             "usado": True,
             "usado_por_tenant": tenant_id,
@@ -166,7 +196,6 @@ def validar_e_ativar_pagamento_mpesa(tenant_id, client_phone, message_text):
             "data_ativacao": agora
         }, merge=True)
 
-        tenant_ref = extensions.db.collection('clientes_bot').document(tenant_id)
         tenant_ref.set({
             "plano": plano["id"],
             "nome_plano": plano["nome"],
