@@ -8,14 +8,14 @@ logger = logging.getLogger(__name__)
 # Número oficial de recebimento M-Pesa (Negobot Moz)
 NUMERO_RECEBEDOR_OFICIAL = "855000929"
 
-# 🎯 TABELA OFICIAL DE PLANOS (Sincronizada com o fluxo central do Negobot Moz)
+# 🎯 TABELA OFICIAL DE PLANOS NEGOBOT MOZ
 TABELA_PLANOS = {
     500.0: {
         "id": "basico",
         "nome": "Plano Básico",
         "dias_validade": 30,
         "disparo_liberado": False,
-        "limite_conversas": 1000
+        "limite_conversas": 1500
     },
     1000.0: {
         "id": "medio",
@@ -28,29 +28,23 @@ TABELA_PLANOS = {
         "id": "premium",
         "nome": "Plano Premium",
         "dias_validade": 30,
-        "disparo_liberado": True,  # Disparos em massa e campanhas liberados
+        "disparo_liberado": True,  # Disparos em massa liberados
         "limite_conversas": None  # Ilimitadas
     }
 }
 
 
 def identificar_plano_por_valor(valor_pago):
-    """
-    Mapeia o valor transferido via M-Pesa para o plano correspondente.
-    Se o cliente pagar um valor superior ao Premium (ex: 3000 MT),
-    atribui o plano de maior nível aplicável.
-    """
+    """Mapeia o valor transferido via M-Pesa para o plano correspondente."""
     valores_ordenados = sorted(TABELA_PLANOS.keys(), reverse=True)
-    
     for val_minimo in valores_ordenados:
         if valor_pago >= val_minimo:
             return TABELA_PLANOS[val_minimo]
-            
     return None
 
 
 def extrair_dados_sms_cliente_transferiste(sms_texto):
-    """Extrai os dados da mensagem 'Transferiste...' enviada pelo cliente no WhatsApp."""
+    """Extrai os dados da mensagem 'Transferiste...' colada pelo cliente no WhatsApp."""
     if not sms_texto or not isinstance(sms_texto, str):
         return None
 
@@ -77,7 +71,7 @@ def extrair_dados_sms_cliente_transferiste(sms_texto):
 
 
 def extrair_codigo_mpesa(texto):
-    """Extrai o código da transação M-Pesa de qualquer mensagem."""
+    """Extrai o ID da transação M-Pesa de qualquer mensagem."""
     texto = (texto or "").strip().upper()
 
     dados_envio = extrair_dados_sms_cliente_transferiste(texto)
@@ -93,7 +87,7 @@ def extrair_codigo_mpesa(texto):
 
 def validar_e_ativar_pagamento_mpesa(tenant_id, client_phone, message_text):
     """
-    Valida a transação M-Pesa capturada pelo Auto Pay e ativa a conta no plano correto.
+    Valida a transação M-Pesa capturada pelo Auto Pay e ativa a conta no plano correspondente.
     """
     try:
         agora = datetime.now(timezone.utc)
@@ -105,10 +99,10 @@ def validar_e_ativar_pagamento_mpesa(tenant_id, client_phone, message_text):
             return (
                 "⚠️ *Código M-Pesa Não Identificado!*\n\n"
                 "Não conseguimos ler o código do seu pagamento.\n"
-                "Por favor, envie o **Código da Transação** (Ex: `DGU1L0KF9I3`) ou cole a mensagem do M-Pesa."
+                "Por favor, envie o **Código da Transação** (Ex: `DGU1L0KF9I3`) ou cole o SMS do M-Pesa."
             )
 
-        # 2. Verificar destinatário (caso tenha colado o SMS completo)
+        # 2. Verificar destinatário (caso o cliente tenha colado o SMS completo)
         dados_sms_cliente = extrair_dados_sms_cliente_transferiste(message_text)
         if dados_sms_cliente:
             num_destino = dados_sms_cliente.get("destino_telefone", "")
@@ -116,10 +110,10 @@ def validar_e_ativar_pagamento_mpesa(tenant_id, client_phone, message_text):
                 return (
                     f"⚠️ *Número Destino Incorreto!*\n\n"
                     f"A transferência foi realizada para `{num_destino}`.\n"
-                    f"Os pagamentos do Negobot Moz devem ser feitos para o número **855000929**."
+                    f"Os pagamentos do Negobot Moz devem ser feitos para o número **855000929** (Abel Francisco)."
                 )
 
-        # 3. Buscar no Firestore o registo criado pelo Negobot Auto Pay
+        # 3. Buscar no Firestore o registo inserido pelo Negobot Auto Pay
         pagamento_ref = extensions.db.collection('pagamentos_mpesa').document(tx_id)
         pagamento_doc = pagamento_ref.get()
 
@@ -135,19 +129,19 @@ def validar_e_ativar_pagamento_mpesa(tenant_id, client_phone, message_text):
             return (
                 f"⌛ *A aguardar confirmação do sistema...* (`{tx_id}`)\n\n"
                 "O seu pagamento ainda não foi sincronizado pelo sistema automático.\n"
-                "Aguarde **30 segundos** e envie novamente o código M-Pesa."
+                "Por favor, aguarde **30 segundos** e envie novamente o código M-Pesa."
             )
 
         dados_pago = pagamento_doc.to_dict() or {}
 
-        # 4. Anti-fraude: impede reutilização do mesmo comprovativo
+        # 4. Anti-fraude: impede reaproveitamento do comprovativo
         if dados_pago.get('usado') is True:
             return (
                 f"⚠️ *Código Já Utilizado!*\n\n"
-                f"A transação M-Pesa `{tx_id}` já foi utilizada para ativar uma conta."
+                f"A transação M-Pesa `{tx_id}` já foi resgatada anteriormente."
             )
 
-        # 5. Mapear valor pago para a Tabela Oficial de Planos
+        # 5. Mapear valor pago para o plano correto
         valor_pago = float(dados_pago.get('valor', 0))
         plano = identificar_plano_por_valor(valor_pago)
 
@@ -159,12 +153,12 @@ def validar_e_ativar_pagamento_mpesa(tenant_id, client_phone, message_text):
                 "Por favor, complete o valor restante para ativar a sua licença."
             )
 
-        # Cálculo da data de expiração (30 dias padrão)
+        # Cálculo da validade de 30 dias
         dias_validade = plano["dias_validade"]
         data_expiracao = agora + timedelta(days=dias_validade)
         nome_pagador = dados_pago.get('remetente_nome', 'Cliente')
 
-        # 6. ATIVAÇÃO DO PLANO E ATUALIZAÇÃO NO FIRESTORE
+        # 6. ATIVAÇÃO E ATUALIZAÇÃO NO FIRESTORE
         pagamento_ref.set({
             "usado": True,
             "usado_por_tenant": tenant_id,
@@ -187,7 +181,6 @@ def validar_e_ativar_pagamento_mpesa(tenant_id, client_phone, message_text):
 
         logger.info(f"✅ Conta {tenant_id} ativada no {plano['nome']} via M-Pesa {tx_id}")
 
-        # Mensagem customizada indicando se o recurso de disparos foi liberado
         recurso_disparo_str = "✅ *Disparos em Massa Liberados!*" if plano["disparo_liberado"] else "ℹ️ *Disparos em Massa:* Indisponível neste plano (exclusivo do Plano Premium)."
 
         return (
