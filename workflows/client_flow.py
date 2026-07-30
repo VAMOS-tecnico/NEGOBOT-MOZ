@@ -9,12 +9,13 @@ from services.groq_service import chamar_groq_rest
 from services.evolution_service import send_whatsapp
 from services.media_service import (
     extrair_texto_pdf_url, 
-    extrair_texto_excel_url, 
-    criar_prompt_profissional_groq, 
-    gerar_url_imagem_pollinations
+    extrair_texto_excel_url
 )
 
 logger = logging.getLogger(__name__)
+
+# Limite máximo de caracteres para a base extraída de documentos (proteção de tokens na Groq)
+MAX_KNOWLEDGE_CHARS = 12000
 
 def contem_palavra_exata(texto, lista_palavras):
     """Verifica se alguma palavra da lista existe como palavra inteira no texto."""
@@ -26,7 +27,7 @@ def contem_palavra_exata(texto, lista_palavras):
     return False
 
 def checar_timeout_atendimento_humano(conversa_ref, conversa_dados, agora):
-    """Verifica se o tempo limite de 2 minutos expirou."""
+    """Verifica se o tempo limite de atendimento humano expirou."""
     if conversa_dados and conversa_dados.get("status_atendimento") == "humano":
         ultima_interacao = conversa_dados.get("ultima_interacao")
         
@@ -59,7 +60,7 @@ def process_client_flow(
         if agora is None:
             agora = datetime.now(timezone.utc)
 
-        # 1. TRATAMENTO INTELIGENTE DE PAYLOAD E DETEÇÃO DE GRUPOS
+        # 1. TRATAMENTO INTELIGENTE DE PAYLOAD E DETECÇÃO DE GRUPOS
         remote_jid = ""
         has_participant = False
 
@@ -82,7 +83,7 @@ def process_client_flow(
                 msg_obj = data_inner.get('message', {}) if isinstance(data_inner, dict) else {}
                 message_text = msg_obj.get('conversation') or msg_obj.get('extendedTextMessage', {}).get('text') or ""
 
-            # Captura de documentos se vierem estruturados no payload interno
+            # Captura de documentos no payload interno
             if not document_message and isinstance(data_inner, dict):
                 msg_inner = data_inner.get('message', {})
                 document_message = (
@@ -126,16 +127,20 @@ def process_client_flow(
         # 3. MENSAGEM DO PRÓPRIO ATENDENTE HUMANO
         if is_from_me:
             conversa_ref.set({"status_atendimento": "humano", "ultima_mensagem_por": "atendente", "ultima_interacao": agora}, merge=True)
-            historico_ref.add({"role": "atendente", "text": message_text, "timestamp": agora})
+            historico_ref.add({"role": "atendente", "text": message_text or "[Documento/Mídia enviada pelo atendente]", "timestamp": agora})
             return
 
-        # 4. PROCESSAMENTO DE DOCUMENTOS (PDF / EXCEL) PARA TREINAMENTO DO CLIENTE
+        # 4. REGISTO IMEDIATO DA MENSAGEM DO CLIENTE NO FIRESTORE
+        conversa_ref.set({"ultima_interacao": agora, "ultima_mensagem_por": "cliente_final"}, merge=True)
+        texto_historico = message_text if message_text else "[Documento Enviado]"
+        historico_ref.add({"role": "user", "text": texto_historico, "timestamp": agora})
+
+        # 5. PROCESSAMENTO DE DOCUMENTOS (PDF / EXCEL) PARA BASE DE CONHECIMENTO
         if document_message and isinstance(document_message, dict):
             media_url = document_message.get('mediaUrl') or document_message.get('url') or document_message.get('fileUrl')
             file_name = document_message.get('fileName', 'documento')
             file_extension = os.path.splitext(file_name)[1].lower()
             
-            # Se não vier extensão no nome, tenta adivinhar pelo mimetype
             mimetype = document_message.get('mimetype', '')
             if not file_extension:
                 if 'pdf' in mimetype: file_extension = '.pdf'
@@ -149,13 +154,15 @@ def process_client_flow(
                 texto_extraido = ""
                 evolution_apikey = getattr(Config, 'EVOLUTION_GLOBAL_APIKEY', os.getenv("EVOLUTION_GLOBAL_APIKEY", ""))
 
-                if file_extension == '.pdf':
-                    texto_extraido = extrair_texto_pdf_url(media_url, apikey=evolution_apikey)
-                elif file_extension in ['.xlsx', '.xls', '.csv']:
-                    texto_extraido = extrair_texto_excel_url(media_url, apikey=evolution_apikey)
+                try:
+                    if file_extension == '.pdf':
+                        texto_extraido = extrair_texto_pdf_url(media_url, apikey=evolution_apikey)
+                    elif file_extension in ['.xlsx', '.xls', '.csv']:
+                        texto_extraido = extrair_texto_excel_url(media_url, apikey=evolution_apikey)
+                except Exception as err_doc:
+                    logger.error(f"Erro ao extrair texto do documento {file_name}: {err_doc}")
 
                 if texto_extraido:
-                    # Guarda os dados na base de conhecimento do cliente no Firestore
                     client_doc_ref.set({
                         "base_conhecimento_documentos": texto_extraido,
                         "ultimo_documento": file_name,
@@ -170,10 +177,6 @@ def process_client_flow(
                     erro_msg = "❌ Não foi possível extrair o texto deste documento. Certifique-se de que o ficheiro é válido e legível."
                     send_whatsapp(clean_user_phone, erro_msg, instance_name=nome_instancia_atual)
                     return
-
-        # 5. REGISTA A MENSAGEM DO CLIENTE IMEDIATAMENTE NO FIRESTORE
-        conversa_ref.set({"ultima_interacao": agora, "ultima_mensagem_por": "cliente_final"}, merge=True)
-        historico_ref.add({"role": "user", "text": message_text, "timestamp": agora})
 
         # 6. REGRAS DO CLIENTE
         default_rules = (
@@ -202,7 +205,8 @@ def process_client_flow(
         conversa_dados = conversa_doc.to_dict() if conversa_doc.exists else {}
         status_atendimento = conversa_dados.get("status_atendimento", "bot")
 
-        gatilhos_reset = ["/bot", "/reset", "continuar", "bot", "bom dia", "boa tarde", "boa noite", "olá", "ola"]
+        # Comandos explícitos para resetar para modo bot
+        gatilhos_reset = ["/bot", "/reset", "voltar para bot", "chamar bot", "modo bot"]
         tem_gatilho_reset = contem_palavra_exata(msg_clean, gatilhos_reset)
 
         if status_atendimento == "humano":
@@ -216,7 +220,7 @@ def process_client_flow(
             else:
                 return
 
-        # 8. PEDIDO EXPLICITO DE ATENDIMENTO HUMANO
+        # 8. PEDIDO EXPLÍCITO DE ATENDIMENTO HUMANO
         gatilhos_humano = [
             "falar com atendente", "atendente humano", "falar com humano", 
             "suporte humano", "falar com operador", "quero atendente", 
@@ -250,10 +254,11 @@ def process_client_flow(
 
         diretrizes = dados_cliente.get("diretrizes_corporativas") or default_rules
         
-        # Incorpora a base de conhecimento extraída do PDF/Excel se existir
+        # Tronca a base extraída se exceder o limite seguro para prevenir estouro de contexto
         bloco_conhecimento_extra = ""
         if base_conhecimento_docs:
-            bloco_conhecimento_extra = f"\n\nDOCUMENTAÇÃO E DADOS DA EMPRESA (EXTRAÍDOS DE PDF/EXCEL):\n{base_conhecimento_docs}\n"
+            doc_text_clean = base_conhecimento_docs[:MAX_KNOWLEDGE_CHARS]
+            bloco_conhecimento_extra = f"\n\nDOCUMENTAÇÃO E DADOS DA EMPRESA (EXTRAÍDOS DE PDF/EXCEL):\n{doc_text_clean}\n"
 
         sys_instruction = f"""Você é o assistente virtual oficial de atendimento desta empresa.
 Português de Moçambique, tom profissional, atencioso e conciso.
@@ -277,7 +282,7 @@ REGRA DE ATENDIMENTO:
 
         response_text = response_text.replace("[TRANSICAO_HUMANO]", "").strip()
         
-        # Envia a resposta no WhatsApp
+        # Envia a resposta no WhatsApp e sincroniza histórico no Firestore
         send_whatsapp(clean_user_phone, response_text, instance_name=nome_instancia_atual)
         historico_ref.add({"role": "assistant", "text": response_text, "timestamp": agora})
         conversa_ref.set({"status_atendimento": "bot", "ultima_mensagem_por": "bot", "ultima_interacao": agora}, merge=True)
