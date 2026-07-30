@@ -1,51 +1,128 @@
 import re
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import extensions
 
 logger = logging.getLogger(__name__)
 
-# Valor oficial do Plano Premium
-VALOR_PLANO_PREMIUM = 1500.0  # em Meticais (MT)
+# Número oficial de recebimento M-Pesa (Negobot Moz)
+NUMERO_RECEBEDOR_OFICIAL = "855000929"
+
+# 🎯 TABELA OFICIAL DE PLANOS (Sincronizada com o fluxo central do Negobot Moz)
+TABELA_PLANOS = {
+    500.0: {
+        "id": "basico",
+        "nome": "Plano Básico",
+        "dias_validade": 30,
+        "disparo_liberado": False,
+        "limite_conversas": 1000
+    },
+    1000.0: {
+        "id": "medio",
+        "nome": "Plano Médio",
+        "dias_validade": 30,
+        "disparo_liberado": False,
+        "limite_conversas": None  # Ilimitadas
+    },
+    1500.0: {
+        "id": "premium",
+        "nome": "Plano Premium",
+        "dias_validade": 30,
+        "disparo_liberado": True,  # Disparos em massa e campanhas liberados
+        "limite_conversas": None  # Ilimitadas
+    }
+}
+
+
+def identificar_plano_por_valor(valor_pago):
+    """
+    Mapeia o valor transferido via M-Pesa para o plano correspondente.
+    Se o cliente pagar um valor superior ao Premium (ex: 3000 MT),
+    atribui o plano de maior nível aplicável.
+    """
+    valores_ordenados = sorted(TABELA_PLANOS.keys(), reverse=True)
+    
+    for val_minimo in valores_ordenados:
+        if valor_pago >= val_minimo:
+            return TABELA_PLANOS[val_minimo]
+            
+    return None
+
+
+def extrair_dados_sms_cliente_transferiste(sms_texto):
+    """Extrai os dados da mensagem 'Transferiste...' enviada pelo cliente no WhatsApp."""
+    if not sms_texto or not isinstance(sms_texto, str):
+        return None
+
+    padrao = (
+        r"Confirmado\s+(?P<tx_id>[A-Z0-9]+)\.\s*"
+        r"Transferiste\s+(?P<valor>[\d,.]+)\s*MT.*?\s+para\s+"
+        r"(?P<destino>\d+)\s*-\s*"
+        r"(?P<nome_destino>.*?)\s+aos\s+"
+        r"(?P<data_hora>\d{1,2}/\d{1,2}/\d{2,4}\s+as\s+\d{1,2}:\d{2}(?:\s*[AP]M)?)"
+    )
+
+    match = re.search(padrao, sms_texto, re.IGNORECASE)
+    if match:
+        dados = match.groupdict()
+        valor_clean = dados['valor'].replace(',', '')
+        return {
+            "transaction_id": dados['tx_id'].upper(),
+            "valor": float(valor_clean),
+            "destino_telefone": re.sub(r'^258', '', dados['destino']),
+            "destino_nome": dados['nome_destino'].strip(),
+            "data_transacao": dados['data_hora'].strip()
+        }
+    return None
 
 
 def extrair_codigo_mpesa(texto):
-    """
-    Extrai o código/ID da transação M-Pesa a partir da mensagem enviada pelo cliente.
-    Suporta códigos típicos M-Pesa em Moçambique (ex: 10B1234567, B12345678, etc.).
-    """
-    texto = (texto or "").upper()
-    
-    # Procura por padrões comuns de ID M-Pesa (alfanumérico de 8 a 12 caracteres)
+    """Extrai o código da transação M-Pesa de qualquer mensagem."""
+    texto = (texto or "").strip().upper()
+
+    dados_envio = extrair_dados_sms_cliente_transferiste(texto)
+    if dados_envio:
+        return dados_envio["transaction_id"]
+
     match = re.search(r'\b[A-Z0-9]{8,12}\b', texto)
     if match:
         return match.group(0)
+
     return None
 
 
 def validar_e_ativar_pagamento_mpesa(tenant_id, client_phone, message_text):
     """
-    Cruza o código/comprovativo M-Pesa enviado pelo cliente com a coleção 
-    'pagamentos_mpesa' alimentada em tempo real pelo app 'Negobot Auto Pay'.
+    Valida a transação M-Pesa capturada pelo Auto Pay e ativa a conta no plano correto.
     """
     try:
         agora = datetime.now(timezone.utc)
-        
-        # 1. Extrair o código M-Pesa da mensagem do cliente
+
+        # 1. Extrair ID M-Pesa
         tx_id = extrair_codigo_mpesa(message_text)
-        
+
         if not tx_id:
             return (
-                "⚠️ *Código de Transação Não Identificado!*\n\n"
-                "Não conseguimos encontrar o código M-Pesa na sua mensagem.\n"
-                "Por favor, envie a **mensagem de confirmação do M-Pesa** ou digite apenas o **Código** (Exemplo: *10B1234567*)."
+                "⚠️ *Código M-Pesa Não Identificado!*\n\n"
+                "Não conseguimos ler o código do seu pagamento.\n"
+                "Por favor, envie o **Código da Transação** (Ex: `DGU1L0KF9I3`) ou cole a mensagem do M-Pesa."
             )
 
-        # 2. Buscar a transação no Firestore (capturada pelo Negobot Auto Pay)
+        # 2. Verificar destinatário (caso tenha colado o SMS completo)
+        dados_sms_cliente = extrair_dados_sms_cliente_transferiste(message_text)
+        if dados_sms_cliente:
+            num_destino = dados_sms_cliente.get("destino_telefone", "")
+            if NUMERO_RECEBEDOR_OFICIAL not in num_destino:
+                return (
+                    f"⚠️ *Número Destino Incorreto!*\n\n"
+                    f"A transferência foi realizada para `{num_destino}`.\n"
+                    f"Os pagamentos do Negobot Moz devem ser feitos para o número **855000929**."
+                )
+
+        # 3. Buscar no Firestore o registo criado pelo Negobot Auto Pay
         pagamento_ref = extensions.db.collection('pagamentos_mpesa').document(tx_id)
         pagamento_doc = pagamento_ref.get()
 
-        # Fallback: Se o documento não usar o tx_id como ID da coleção, faz query pelo campo
         if not pagamento_doc.exists:
             docs = extensions.db.collection('pagamentos_mpesa')\
                 .where('transaction_id', '==', tx_id)\
@@ -56,62 +133,74 @@ def validar_e_ativar_pagamento_mpesa(tenant_id, client_phone, message_text):
 
         if not pagamento_doc.exists:
             return (
-                f"❌ *Transação Não Encontrada!* (`{tx_id}`)\n\n"
-                "O pagamento ainda não deu entrada no nosso sistema automático.\n"
-                "• Confirme se a transferência foi feita para **855000929** (Abel Francisco).\n"
-                "• Aguarde cerca de 1 a 2 minutos para sincronização da mensagem e tente novamente."
+                f"⌛ *A aguardar confirmação do sistema...* (`{tx_id}`)\n\n"
+                "O seu pagamento ainda não foi sincronizado pelo sistema automático.\n"
+                "Aguarde **30 segundos** e envie novamente o código M-Pesa."
             )
 
-        dados_pagamento = pagamento_doc.to_dict() or {}
+        dados_pago = pagamento_doc.to_dict() or {}
 
-        # 3. Proteção Anti-Fraude: Verificar se o código já foi utilizado
-        if dados_pagamento.get('usado') is True:
+        # 4. Anti-fraude: impede reutilização do mesmo comprovativo
+        if dados_pago.get('usado') is True:
             return (
-                f"⚠️ *Transação Já Utilizada!*\n\n"
-                f"O código M-Pesa `{tx_id}` já foi resgatado para ativar um plano anteriormente.\n"
-                "Se considera que isto é um erro, entre em contacto com a nossa central de suporte."
+                f"⚠️ *Código Já Utilizado!*\n\n"
+                f"A transação M-Pesa `{tx_id}` já foi utilizada para ativar uma conta."
             )
 
-        # 4. Validar o valor transferido
-        valor_pago = float(dados_pagamento.get('valor', 0))
-        if valor_pago < VALOR_PLANO_PREMIUM:
+        # 5. Mapear valor pago para a Tabela Oficial de Planos
+        valor_pago = float(dados_pago.get('valor', 0))
+        plano = identificar_plano_por_valor(valor_pago)
+
+        if not plano:
             return (
                 f"⚠️ *Valor Insuficiente!*\n\n"
-                f"Confirmámos a entrada do código `{tx_id}` no valor de *{valor_pago:.2f} MT*.\n"
-                f"O valor para o *Plano Premium* é de *{VALOR_PLANO_PREMIUM:.2f} MT*.\n"
-                "Por favor, faça o complemento do valor ou fale com o suporte."
+                f"Recebemos o código `{tx_id}` no valor de *{valor_pago:.2f} MT*.\n"
+                f"O plano mínimo (*Plano Básico*) custa *500.00 MT*.\n"
+                "Por favor, complete o valor restante para ativar a sua licença."
             )
 
-        # 5. ATIVAÇÃO DO PLANO E BLOQUEIO DA TRANSAÇÃO
-        # A) Marca a transação M-Pesa como USADA
+        # Cálculo da data de expiração (30 dias padrão)
+        dias_validade = plano["dias_validade"]
+        data_expiracao = agora + timedelta(days=dias_validade)
+        nome_pagador = dados_pago.get('remetente_nome', 'Cliente')
+
+        # 6. ATIVAÇÃO DO PLANO E ATUALIZAÇÃO NO FIRESTORE
         pagamento_ref.set({
             "usado": True,
             "usado_por_tenant": tenant_id,
             "usado_por_telefone": client_phone,
-            "data_resgate": agora
+            "data_ativacao": agora
         }, merge=True)
 
-        # B) Atualiza a conta da empresa no Firestore para PLANO PREMIUM
         tenant_ref = extensions.db.collection('clientes_bot').document(tenant_id)
         tenant_ref.set({
-            "plano": "premium",
-            "status_plano": "premium",
-            "data_ultima_renovacao": agora,
-            "metodo_pagamento": "M-Pesa AutoPay",
-            "ultimo_tx_id": tx_id
+            "plano": plano["id"],
+            "nome_plano": plano["nome"],
+            "status_plano": "ativo",
+            "disparo_liberado": plano["disparo_liberado"],
+            "limite_conversas": plano["limite_conversas"],
+            "data_ativacao": agora,
+            "data_expiracao": data_expiracao,
+            "ultimo_tx_id": tx_id,
+            "metodo_pagamento": "M-Pesa AutoPay"
         }, merge=True)
 
-        logger.info(f"🎉 Plano Premium ativado com sucesso para {tenant_id} via M-Pesa ID: {tx_id}")
+        logger.info(f"✅ Conta {tenant_id} ativada no {plano['nome']} via M-Pesa {tx_id}")
+
+        # Mensagem customizada indicando se o recurso de disparos foi liberado
+        recurso_disparo_str = "✅ *Disparos em Massa Liberados!*" if plano["disparo_liberado"] else "ℹ️ *Disparos em Massa:* Indisponível neste plano (exclusivo do Plano Premium)."
 
         return (
             f"🎉 *PAGAMENTO CONFIRMADO E PLANO ATIVADO!*\n\n"
             f"• *ID M-Pesa:* `{tx_id}`\n"
             f"• *Valor:* {valor_pago:.2f} MT\n"
-            f"• *Novo Plano:* ⭐ **Premium (Ativo)**\n\n"
-            f"Todas as ferramentas avançadas (incluindo **Disparos em Massa** `#disparo`) já estão **100% desbloqueadas**!\n\n"
-            f"Obrigado por utilizar o **Negobot Moz**! 🚀"
+            f"• *Titular:* {nome_pagador}\n"
+            f"• *Plano Ativo:* ⭐ **{plano['nome']}**\n"
+            f"• *Validade:* até {data_expiracao.strftime('%d/%m/%Y')}\n\n"
+            f"{recurso_disparo_str}\n\n"
+            f"A sua conta já está pronta a utilizar. Obrigado por confiar no **Negobot Moz**! 🚀"
         )
 
     except Exception as e:
-        logger.error(f"Erro ao validar pagamento M-Pesa para {tenant_id}: {e}", exc_info=True)
-        return "❌ Ocorreu um erro interno ao processar a validação do seu pagamento."
+        logger.error(f"Erro ao validar SMS M-Pesa do cliente: {e}", exc_info=True)
+        return "❌ Erro ao processar o pagamento. Tente novamente em instantes."
