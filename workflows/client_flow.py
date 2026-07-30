@@ -36,7 +36,7 @@ def checar_timeout_atendimento_humano(conversa_ref, conversa_dados, agora):
             if hasattr(ultima_interacao, 'tzinfo') and ultima_interacao.tzinfo is None:
                 ultima_interacao = ultima_interacao.replace(tzinfo=timezone.utc)
             
-            timeout_min = getattr(Config, 'TIMEOUT_HUMANO_MINUTOS', 2)
+            timeout_min = getattr(Config, 'TIMEOUT_HUMANO_MINUTOS', 15)
             minutos_decorridos = (agora - ultima_interacao).total_seconds() / 60.0
             
             if minutos_decorridos >= timeout_min:
@@ -125,8 +125,56 @@ def process_client_flow(
         conversa_ref = client_doc_ref.collection('conversas').document(clean_user_phone)
         historico_ref = conversa_ref.collection('historico')
 
-        # 3. VERIFICAÇÃO E EXECUÇÃO DE COMANDO DE DISPARO (#disparo)
+        # 3. VERIFICAÇÃO DO ESTADO DO PLANO E EXPIRAÇÃO
+        client_doc = client_doc_ref.get()
+        default_rules = (
+            "- Atenda os clientes finais com cortesia, agilidade e profissionalismo.\n"
+            "- NUNCA diga que a loja não tem stock de forma genérica e NUNCA invente preços ou produtos.\n"
+            "- Se o cliente perguntar por produtos, catálogo ou preços, responda:\n"
+            "  'Seja bem-vindo(a)! 🛍️ Para garantir a disponibilidade exata em stock do produto desejado, encaminharei o seu pedido à nossa equipa de vendas. Por favor, escreva o produto que procura e responderemos em instantes!'"
+        )
+
+        if not client_doc.exists:
+            dados_cliente = {
+                "status_plano": "demonstracao", 
+                "data_ativacao": agora, 
+                "data_expiracao": agora + timedelta(days=2), 
+                "diretrizes_corporativas": default_rules
+            }
+            client_doc_ref.set(dados_cliente)
+            base_conhecimento_docs = ""
+        else:
+            dados_cliente = client_doc.to_dict() or {}
+            base_conhecimento_docs = dados_cliente.get("base_conhecimento_documentos", "")
+
+        # Trava de Segurança: Verificação de Validade do Plano
+        status_plano = dados_cliente.get("status_plano", "demonstracao")
+        data_expiracao = dados_cliente.get("data_expiracao")
+
+        if data_expiracao:
+            if hasattr(data_expiracao, 'tzinfo') and data_expiracao.tzinfo is None:
+                data_expiracao = data_expiracao.replace(tzinfo=timezone.utc)
+            
+            if agora > data_expiracao or status_plano in ["expirado", "suspenso", "cancelado"]:
+                logger.warning(f"⚠️ Instância {nome_instancia_atual} com plano expirado. Atendimento automático suspenso.")
+                if is_from_me or clean_user_phone == dados_cliente.get("telefone_proprietario"):
+                    send_whatsapp(
+                        clean_user_phone,
+                        "⚠️ *Aviso Negobot Moz:* O seu período de teste/plano expirou. Efetue o pagamento da mensalidade para reativar o assistente virtual.",
+                        instance_name=nome_instancia_atual
+                    )
+                return
+
+        # 4. VERIFICAÇÃO E EXECUÇÃO DE COMANDO DE DISPARO (#disparo)
         if message_text.strip().lower().startswith('#disparo'):
+            if status_plano not in ["premium", "demonstracao", "ativo"]:
+                send_whatsapp(
+                    clean_user_phone,
+                    "❌ *Recurso Indisponível:* A ferramenta de Disparos em Massa está disponível apenas no *Plano Premium*. Faça o upgrade para utilizar esta função.",
+                    instance_name=nome_instancia_atual
+                )
+                return
+
             resposta_disparo = processar_disparo_cliente(
                 tenant_id=nome_instancia_atual,
                 client_phone=clean_user_phone,
@@ -136,19 +184,27 @@ def process_client_flow(
             send_whatsapp(clean_user_phone, resposta_disparo, instance_name=nome_instancia_atual)
             return
 
-        # 4. MENSAGEM DO PRÓPRIO ATENDENTE HUMANO
+        # 5. MENSAGEM DO PRÓPRIO ATENDENTE HUMANO
         if is_from_me:
             conversa_ref.set({"status_atendimento": "humano", "ultima_mensagem_por": "atendente", "ultima_interacao": agora}, merge=True)
             historico_ref.add({"role": "atendente", "text": message_text or "[Documento/Mídia enviada pelo atendente]", "timestamp": agora})
             return
 
-        # 5. REGISTO IMEDIATO DA MENSAGEM DO CLIENTE NO FIRESTORE
+        # 6. REGISTO IMEDIATO DA MENSAGEM DO CLIENTE NO FIRESTORE
         conversa_ref.set({"ultima_interacao": agora, "ultima_mensagem_por": "cliente_final"}, merge=True)
         texto_historico = message_text if message_text else "[Documento Enviado]"
         historico_ref.add({"role": "user", "text": texto_historico, "timestamp": agora})
 
-        # 6. PROCESSAMENTO DE DOCUMENTOS (PDF / EXCEL) PARA BASE DE CONHECIMENTO
+        # 7. PROCESSAMENTO DE DOCUMENTOS (PDF / EXCEL) PARA BASE DE CONHECIMENTO
         if document_message and isinstance(document_message, dict):
+            if status_plano == "basico":
+                send_whatsapp(
+                    clean_user_phone,
+                    "⚠️ O *Plano Básico* não inclui o processamento automático de documentos PDF/Excel. Atualize para o *Plano Médio* ou *Premium* para treinar o assistente com ficheiros.",
+                    instance_name=nome_instancia_atual
+                )
+                return
+
             media_url = document_message.get('mediaUrl') or document_message.get('url') or document_message.get('fileUrl')
             file_name = document_message.get('fileName', 'documento')
             file_extension = os.path.splitext(file_name)[1].lower()
@@ -190,34 +246,11 @@ def process_client_flow(
                     send_whatsapp(clean_user_phone, erro_msg, instance_name=nome_instancia_atual)
                     return
 
-        # 7. REGRAS DO CLIENTE
-        default_rules = (
-            "- Atenda os clientes finais com cortesia, agilidade e profissionalismo.\n"
-            "- NUNCA diga que a loja não tem stock de forma genérica e NUNCA invente preços ou produtos.\n"
-            "- Se o cliente perguntar por produtos, catálogo ou preços, responda:\n"
-            "  'Seja bem-vindo(a)! 🛍️ Para garantir a disponibilidade exata em stock do produto desejado, encaminharei o seu pedido à nossa equipa de vendas. Por favor, escreva o produto que procura e responderemos em instantes!'"
-        )
-
-        client_doc = client_doc_ref.get()
-        if not client_doc.exists:
-            dados_cliente = {
-                "status_plano": "demonstracao", 
-                "data_ativacao": agora, 
-                "data_expiracao": agora + timedelta(days=2), 
-                "diretrizes_corporativas": default_rules
-            }
-            client_doc_ref.set(dados_cliente)
-            base_conhecimento_docs = ""
-        else:
-            dados_cliente = client_doc.to_dict() or {}
-            base_conhecimento_docs = dados_cliente.get("base_conhecimento_documentos", "")
-
-        # 8. VERIFICAÇÃO DE MODO HUMANO E TIMEOUT (2 MINUTOS)
+        # 8. VERIFICAÇÃO DE MODO HUMANO E TIMEOUT
         conversa_doc = conversa_ref.get()
         conversa_dados = conversa_doc.to_dict() if conversa_doc.exists else {}
         status_atendimento = conversa_dados.get("status_atendimento", "bot")
 
-        # Comandos explícitos para resetar para modo bot
         gatilhos_reset = ["/bot", "/reset", "voltar para bot", "chamar bot", "modo bot"]
         tem_gatilho_reset = contem_palavra_exata(msg_clean, gatilhos_reset)
 
@@ -227,7 +260,7 @@ def process_client_flow(
                 conversa_ref.set({"status_atendimento": "bot"}, merge=True)
                 status_atendimento = "bot"
             elif checar_timeout_atendimento_humano(conversa_ref, conversa_dados, agora):
-                logger.info(f"⏳ Passaram 2 minutos. O bot assumiu o atendimento de {clean_user_phone}.")
+                logger.info(f"⏳ Tempo esgotado. O bot assumiu o atendimento de {clean_user_phone}.")
                 status_atendimento = "bot"
             else:
                 return
@@ -239,7 +272,7 @@ def process_client_flow(
             "falar com pessoa", "passar para humano"
         ]
         if contem_palavra_exata(msg_clean, gatilhos_humano):
-            timeout_min = getattr(Config, 'TIMEOUT_HUMANO_MINUTOS', 2)
+            timeout_min = getattr(Config, 'TIMEOUT_HUMANO_MINUTOS', 15)
             conversa_ref.set({
                 "status_atendimento": "humano",
                 "ultima_mensagem_por": "cliente_final",
@@ -266,7 +299,6 @@ def process_client_flow(
 
         diretrizes = dados_cliente.get("diretrizes_corporativas") or default_rules
         
-        # Tronca a base extraída se exceder o limite seguro para prevenir estouro de contexto
         bloco_conhecimento_extra = ""
         if base_conhecimento_docs:
             doc_text_clean = base_conhecimento_docs[:MAX_KNOWLEDGE_CHARS]
@@ -294,7 +326,6 @@ REGRA DE ATENDIMENTO:
 
         response_text = response_text.replace("[TRANSICAO_HUMANO]", "").strip()
         
-        # Envia a resposta no WhatsApp e sincroniza histórico no Firestore
         send_whatsapp(clean_user_phone, response_text, instance_name=nome_instancia_atual)
         historico_ref.add({"role": "assistant", "text": response_text, "timestamp": agora})
         conversa_ref.set({"status_atendimento": "bot", "ultima_mensagem_por": "bot", "ultima_interacao": agora}, merge=True)
