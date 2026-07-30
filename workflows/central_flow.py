@@ -15,7 +15,7 @@ from services.evolution_service import (
     gerar_e_enviar_qrcode_central
 )
 from services.admin_service import processar_mensagem_admin
-from services.payment_service import validar_e_ativar_pagamento_mpesa  # 👈 Importação do serviço de Pagamentos M-Pesa
+from services.payment_service import validar_e_ativar_pagamento_mpesa
 
 logger = logging.getLogger(__name__)
 
@@ -62,9 +62,9 @@ def process_central_flow(phone_number_or_data=None, message_text="", msg_clean="
 
         raw_jid_str = str(raw_jid).strip().lower()
 
-        # 🚫 TRAVA DE SEGURANÇA MÁXIMA: Ignora grupos de WhatsApp (@g.us) imediatamente
+        # 🚫 TRAVA DE SEGURANÇA MÁXIMA: Ignora grupos de WhatsApp (@g.us)
         if "@g.us" in raw_jid_str or (isinstance(payload, dict) and payload.get('data', {}).get('key', {}).get('participant')):
-            logger.info(f"🚫 Mensagem de grupo ignorada para economizar APIs: {raw_jid_str}")
+            logger.info(f"🚫 Mensagem de grupo ignorada: {raw_jid_str}")
             return
 
         # Sanitização do número individual do cliente (ex: 25884xxxxxxx)
@@ -86,10 +86,14 @@ def process_central_flow(phone_number_or_data=None, message_text="", msg_clean="
         else:
             msg_clean = msg_clean.lower().strip()
 
-        # Ignora mensagens enviadas pelo próprio atendente humano
+        # ⚠️ CORREÇÃO: Se o atendente responder manualmente, assume a conversa no modo "humano"
         if is_from_me:
             chat_ref = extensions.db.collection('chats').document(clean_phone)
-            chat_ref.set({"ultima_mensagem_por": "atendente", "ultima_interacao": agora}, merge=True)
+            chat_ref.set({
+                "status_atendimento": "humano",
+                "ultima_mensagem_por": "atendente", 
+                "ultima_interacao": agora
+            }, merge=True)
             return
 
         # 📢 INTERCEÇÃO DO COMANDO DE DISPARO (ADMINISTRADOR)
@@ -99,30 +103,31 @@ def process_central_flow(phone_number_or_data=None, message_text="", msg_clean="
             send_whatsapp(clean_phone, resposta_admin, instance_name=central_instance)
             return
 
-        # 💳 VERIFICAÇÃO AUTOMÁTICA DE COMPROVATIVO M-PESA
-        if (
+        # 💳 VERIFICAÇÃO DE COMPROVATIVO M-PESA (Com verificação rigorosa para evitar falsos positivos)
+        eh_comprovativo_mpesa = (
             msg_clean.startswith('#pago') 
             or msg_clean.startswith('#comprovativo')
             or "transferiste" in msg_clean 
             or "confirmado" in msg_clean
-            or re.search(r'\b[A-Z0-9]{8,12}\b', message_text.upper())
-        ):
+            or re.search(r'\b(3g|4g|5g|[a-z0-9]{10})\b', message_text.lower()) and "m-pesa" in message_text.lower()
+        )
+
+        if eh_comprovativo_mpesa:
             tenant_id = f"cliente_{clean_phone}"
             resposta_pagamento = validar_e_ativar_pagamento_mpesa(
                 tenant_id=tenant_id,
                 client_phone=clean_phone,
                 message_text=message_text
             )
-            # Se for uma mensagem de processamento de pagamento válida, responde e encerra o fluxo
             if any(termo in resposta_pagamento for termo in ["PAGAMENTO CONFIRMADO", "Aguarde", "Insuficiente", "Já Utilizado", "Não Identificado"]):
                 send_whatsapp(clean_phone, resposta_pagamento, instance_name=central_instance)
                 return
 
-        # FILTRO DE SEGURANÇA: Se a mensagem for APENAS um link de YouTube / redes sociais sem texto relevante
+        # FILTRO DE SEGURANÇA: Links de redes sociais sem texto complementar
         if ("youtube.com" in msg_clean or "youtu.be" in msg_clean or "tiktok.com" in msg_clean) and len(msg_clean.split()) <= 2:
             send_whatsapp(
                 clean_phone,
-                "Olá! 👋 Sou o assistente oficial do **Negobot Moz**. Automatizamos o WhatsApp de empresas e negócios.\n\nEscreva **TESTE** para experimentar a nossa plataforma grátis por 2 dias!",
+                "Olá! 👋 Sou o assistente oficial do **Negobot Moz**. Automatizamos o WhatsApp de empresas e negócios em Moçambique.\n\nEscreva **TESTE** para experimentar a nossa plataforma grátis por 2 dias!",
                 instance_name=central_instance
             )
             return
@@ -152,9 +157,9 @@ def process_central_flow(phone_number_or_data=None, message_text="", msg_clean="
             gerar_e_enviar_qrcode_central(clean_phone)
             return
 
-        # 4. Gatilhos de Teste Grátis (Quando o cliente digita TESTE)
-        gatilhos_teste = ["teste", "testar", "quero o bot", "começar", "criar bot", "demo"]
-        if any(g in msg_clean for g in gatilhos_teste):
+        # 4. Gatilhos de Teste Grátis (Com limites de palavras para evitar disparos acidentais)
+        gatilhos_teste = [r'\bteste\b', r'\btestar\b', r'quero o bot', r'começar', r'criar bot', r'\bdemo\b']
+        if any(re.search(pattern, msg_clean) for pattern in gatilhos_teste):
             send_whatsapp(clean_phone, "⏳ *A preparar o seu teste grátis de 2 dias do Negobot Moz...* 🚀", instance_name=central_instance)
             
             cliente_doc_ref.set({
@@ -191,8 +196,8 @@ def process_central_flow(phone_number_or_data=None, message_text="", msg_clean="
                     return
 
         # 6. Transferência Manual para Atendimento Humano
-        gatilhos_humano = ["falar com atendente", "suporte humano", "atendente", "humano", "#suporte", "falar com pessoa"]
-        if any(g in msg_clean for g in gatilhos_humano):
+        gatilhos_humano = [r'falar com atendente', r'suporte humano', r'\batendente\b', r'\bhumano\b', r'#suporte', r'falar com pessoa']
+        if any(re.search(pattern, msg_clean) for pattern in gatilhos_humano):
             timeout_min = getattr(Config, 'TIMEOUT_HUMANO_MINUTOS', 15)
             chat_ref.set({
                 "status_atendimento": "humano",
@@ -206,7 +211,7 @@ def process_central_flow(phone_number_or_data=None, message_text="", msg_clean="
             )
             return
 
-        # 7. Resposta Inteligente via Groq (Com Filtro de Foco no Negócio)
+        # 7. Resposta Inteligente via Groq
         chat_ref.set({"status_atendimento": "bot", "ultima_mensagem_por": "cliente_final", "ultima_interacao": agora}, merge=True)
         save_chat_history(clean_phone, "user", message_text)
 
@@ -226,9 +231,8 @@ ATENÇÃO - REGRAS ESTRITAS (CLIENTE EM TESTE GRÁTIS):
 - Este cliente JÁ SOLICITOU O TESTE GRÁTIS e a conta dele já foi criada no sistema.
 - PROIBIDO enviar apresentações longas de vendas ou falar de stocks/produtos genéricos.
 - PROIBIDO comentar sobre vídeos, links do YouTube ou conteúdos externos recebidos.
-- A SUA RESPOSTA DEVE TER NO MÁXIMO 2 FRASES CURTAS:
-  1. Cumprimente o cliente com cortesia (ex: "Olá! Bom dia! 👋").
-  2. Diga que o teste dele já está ativo e oriente-o a digitar **#qrcode** para receber um novo QR Code de conexão.
+- Responda à dúvida pontual do cliente de forma muito breve se houver, mas REFORCE sempre que ele deve digitar **#qrcode** para conectar ou reconectar o WhatsApp dele.
+- Mantenha a resposta em no máximo 2 ou 3 frases curtas.
 """
         else:
             sys_instruction_central = """Você é o assistente comercial oficial da NEGOBOT MOZ.
@@ -251,7 +255,7 @@ Perfeito para pequenos negócios que querem parar de responder sempre às mesmas
 Ideal para empresas em crescimento que recebem muitos clientes ao mesmo tempo e precisam de interatividade.
 • Atendimento: Tudo do Plano Básico + Conversas ILIMITADAS.
 • Multimédia: Processamento de Fotos e leitura básica de tabelas Excel.
-• Recursos: Menu Interativo de navegação (ex: "1 para serviços, 2 para falar com atendente") e relatórios de uso mensais.
+• Recursos: Menu Interativo de navegação e relatórios de uso mensais.
 • Suporte: Suporte prioritário respondido em até 12h.
 
 3. Plano Premium — 1.500 MT / mês
