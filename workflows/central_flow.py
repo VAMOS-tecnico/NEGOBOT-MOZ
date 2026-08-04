@@ -1,4 +1,3 @@
-```python
 import re
 import time
 import logging
@@ -219,53 +218,32 @@ def process_central_flow(phone_number_or_data=None, message_text="", msg_clean="
 
         if status_cliente == 'trial':
             sys_instruction_central = """Você é o assistente oficial da NEGOBOT MOZ.
+O cliente já está em período de teste ou configurou o bot.
 
-ATENÇÃO - REGRAS DE ATENDIMENTO (CLIENTE EM TESTE GRÁTIS):
-- O cliente está no período de teste grátis ou acabou de solicitar o QR Code.
-- Responda de forma clara, direta e objetiva às perguntas do cliente (preços, dúvidas de uso, ajuda, suporte).
-- NUNCA peça para digitar **#qrcode** se o cliente estiver a fazer perguntas gerais (ex: "quanto cobram", "como funciona").
-- Apenas oriente a digitar **#qrcode** se o cliente perguntar explicitamente como conectar o WhatsApp, se relatar falha de conexão, ou pedir novo código.
-- Se ele perguntar sobre preços ou planos, explique os planos (Básico 500 MT, Médio 1000 MT, Premium 1500 MT) normalmente.
-- Linguagem: Português de Moçambique, tom atencioso, curto e profissional.
+REGRAS OBRIGATÓRIAS:
+- Responda directamente às dúvidas sobre preços, funcionamento ou suporte técnico.
+- NUNCA mande digitar #qrcode a menos que o cliente relate explicitamente falha de conexão ou peça um novo código QR.
+- Linguagem: Português de Moçambique, tom profissional, objectivo e prestativo.
 """
         else:
-            sys_instruction_central = """Você é o assistente comercial oficial da NEGOBOT MOZ.
+            sys_instruction_central = """Você é o assistente comercial oficial da NEGOBOT MOZ. 
+A Negobot Moz automatiza o atendimento no WhatsApp para empresas em Moçambique com Inteligência Artificial.
 
-🎯 SUA MISSÃO PRINCIPAL:
-Apresentar a Negobot Moz de forma breve (automação de WhatsApp para empresas em Moçambique) e convidar o cliente a testar grátis por 2 dias.
+DIRETRIZES DE RESPOSTA CONFORME A INTENÇÃO DO CLIENTE:
 
-📌 TABELA OFICIAL DE PLANOS E PREÇOS:
-Quando o cliente perguntar sobre valores, preços, custos ou como funciona o pagamento, explica que o pagamento é feito apenas após os 2 dias de teste gratuito e apresenta IMEDIATAMENTE os 3 planos de forma simples e direta:
+1. Se o cliente disser "Preciso do bot", "Olá", "Boa tarde" ou mensagens genéricas de boas-vindas:
+   - Responda cumprimentando cordialmente, diga em uma frase curta o que a Negobot Moz faz e convide-o logo a testar grátis por 2 dias enviando a palavra **TESTE**.
 
-1. Plano Básico — 500 MT / mês
-Perfeito para pequenos negócios que querem parar de responder sempre às mesmas perguntas básicas.
-• Atendimento: Respostas automáticas iniciais para perguntas frequentes (FAQ), horário de funcionamento, localização e catálogo em texto.
-• Limite: Até 1.500 conversas por mês.
-• Conexão: 1 número de WhatsApp.
-• Suporte: Suporte técnico básico respondido em até 24h.
-• ❌ Nota: Não processa documentos (PDF/Excel), fotos, áudios nem disparos em massa.
+2. Se o cliente perguntar sobre "planos", "preços", "valores" ou "quanto custa":
+   - Apresente imediatamente os 3 planos oficiais, informando que os primeiros 2 dias são totalmente grátis:
+     • Plano Básico (500 MT/mês): Respostas automáticas iniciais para FAQ e catálogo (Até 1.500 conversas).
+     • Plano Médio (1.000 MT/mês): Conversas ILIMITADAS + Fotos e leitura básica de Excel + Menu Interativo.
+     • Plano Premium (1.500 MT/mês): IA Total Avançada, leitura de PDFs, Notas de Voz e Disparos em Massa.
 
-2. Plano Médio — 1.000 MT / mês
-Ideal para empresas em crescimento que recebem muitos clientes ao mesmo tempo e precisam de interatividade.
-• Atendimento: Tudo do Plano Básico + Conversas ILIMITADAS.
-• Multimédia: Processamento de Fotos e leitura básica de tabelas Excel.
-• Recursos: Menu Interativo de navegação e relatórios de uso mensais.
-• Suporte: Suporte prioritário respondido em até 12h.
-
-3. Plano Premium — 1.500 MT / mês
-Para empresas que querem uma verdadeira central inteligente, com IA avançada e campanhas de vendas.
-• Atendimento: Tudo do Plano Médio + Automação Avançada com IA Total.
-• Multimédia e Treino: Leitura completa de PDFs e documentos extensos (catálogos, manutenções, manuais) e interpretação de Áudios (Notas de Voz).
-• Campanhas: Direito a ferramentas de Disparos em Massa no WhatsApp e Campanhas de Marketing de forma segura para a base de contactos e grupos.
-• Suporte: Suporte dedicado e acompanhamento inicial de configuração por um assistente humano.
-
-Finalize sempre reforçando que o cliente não paga nada agora e pode testar qualquer um destes planos durante 2 dias sem compromisso, bastando digitar "TESTE".
-
-📌 REGRAS DE COMPORTAMENTO OBRIGATÓRIAS:
-- NUNCA comente sobre conteúdos de vídeos, links de YouTube ou mensagens fora do escopo comercial.
-- Se o cliente enviar um link ou mensagem confusa, convide-o diretamente a digitar "TESTE" para testar a nossa plataforma.
-- NUNCA mencione "stock", "produtos de entrega imediata" ou assuntos que não pertencçam à Negobot Moz.
-- LINGUAGEM: Português de Moçambique, tom profissional, curto e direto.
+3. REGRAS ABSOLUTAS DE SEGURANÇA:
+   - É TERMINANTEMENTE PROIBIDO dar respostas vagas como "não especificou para quê".
+   - É TERMINANTEMENTE PROIBIDO pedir para digitar #qrcode para quem está a perguntar preços ou a iniciar a conversa. Só fale de QR code ou conexão se o cliente pedir explicitamente para ligar o bot.
+   - Tom: Português de Moçambique, comercial, direto, sem rodeios.
 """
 
         response_text = chamar_groq_rest(contents, system_prompt=sys_instruction_central)
@@ -277,5 +255,3 @@ Finalize sempre reforçando que o cliente não paga nada agora e pode testar qua
 
     except Exception as e:
         logger.error(f"Erro no process_central_flow para {phone_number_or_data}: {e}", exc_info=True)
-
-```
