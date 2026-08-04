@@ -14,7 +14,6 @@ from services.evolution_service import (
     criar_e_configurar_instancia_automatica, 
     gerar_e_enviar_qrcode_central
 )
-from services.admin_service import processar_mensagem_admin
 from services.payment_service import validar_e_ativar_pagamento_mpesa
 
 logger = logging.getLogger(__name__)
@@ -86,7 +85,7 @@ def process_central_flow(phone_number_or_data=None, message_text="", msg_clean="
         else:
             msg_clean = msg_clean.lower().strip()
 
-        # ⚠️ CORREÇÃO: Se o atendente responder manualmente, assume a conversa no modo "humano"
+        # ⚠️ Se o atendente responder manualmente, assume a conversa no modo "humano"
         if is_from_me:
             chat_ref = extensions.db.collection('chats').document(clean_phone)
             chat_ref.set({
@@ -96,14 +95,7 @@ def process_central_flow(phone_number_or_data=None, message_text="", msg_clean="
             }, merge=True)
             return
 
-        # 📢 INTERCEÇÃO DO COMANDO DE DISPARO (ADMINISTRADOR)
-        api_key_evolution = getattr(Config, 'EVOLUTION_API_KEY', '') or getattr(Config, 'AUTHENTICATION_API_KEY', '')
-        resposta_admin = processar_mensagem_admin(clean_phone, message_text, central_instance, api_key_evolution)
-        if resposta_admin:
-            send_whatsapp(clean_phone, resposta_admin, instance_name=central_instance)
-            return
-
-        # 💳 VERIFICAÇÃO DE COMPROVATIVO M-PESA (Com verificação rigorosa para evitar falsos positivos)
+        # 💳 VERIFICAÇÃO DE COMPROVATIVO M-PESA
         eh_comprovativo_mpesa = (
             msg_clean.startswith('#pago') 
             or msg_clean.startswith('#comprovativo')
@@ -157,7 +149,7 @@ def process_central_flow(phone_number_or_data=None, message_text="", msg_clean="
             gerar_e_enviar_qrcode_central(clean_phone)
             return
 
-        # 4. Gatilhos de Teste Grátis (Com limites de palavras para evitar disparos acidentais)
+        # 4. Gatilhos de Teste Grátis
         gatilhos_teste = [r'\bteste\b', r'\btestar\b', r'quero o bot', r'começar', r'criar bot', r'\bdemo\b']
         if any(re.search(pattern, msg_clean) for pattern in gatilhos_teste):
             send_whatsapp(clean_phone, "⏳ *A preparar o seu teste grátis de 2 dias do Negobot Moz...* 🚀", instance_name=central_instance)
