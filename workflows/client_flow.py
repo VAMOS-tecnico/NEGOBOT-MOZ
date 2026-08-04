@@ -1,6 +1,9 @@
 import re
 import os
+import time
+import random
 import logging
+import threading
 from datetime import datetime, timedelta, timezone
 from firebase_admin import firestore
 from config import Config
@@ -16,6 +19,64 @@ logger = logging.getLogger(__name__)
 
 # Limite máximo de caracteres para a base extraída de documentos (proteção de tokens na Groq)
 MAX_KNOWLEDGE_CHARS = 12000
+
+# ------------------------------------------------------------------------------
+# FUNÇÕES AUXILIARES ANTI-BLOQUEIO E SPINTAX
+# ------------------------------------------------------------------------------
+def processar_spintax(texto: str) -> str:
+    """Converte variações {Opção 1|Opção 2} em texto aleatório único."""
+    pattern = re.compile(r'\{([^{}]+)\}')
+    while True:
+        match = pattern.search(texto)
+        if not match:
+            break
+        opcoes = match.group(1).split('|')
+        texto = texto[:match.start()] + random.choice(opcoes) + texto[match.end():]
+    return texto
+
+def processar_disparo_em_massa(instance_name: str, numeros: list, mensagem_base: str, delay_base: int = 7):
+    """Executa o loop de disparo seguro em segundo plano."""
+    sucessos = 0
+    falhas = 0
+    total = len(numeros)
+
+    logger.info(f"🛡️ [DISPARO INICIADO] Instância: {instance_name} | Total: {total} contactos")
+
+    for index, numero in enumerate(numeros, start=1):
+        numero_limpo = re.sub(r'\D', '', str(numero))
+        
+        # Auto-correção para o formato de Moçambique se o utilizador não colocar o 258
+        if len(numero_limpo) == 9 and numero_limpo.startswith(('84', '85', '86', '87')):
+            numero_limpo = '258' + numero_limpo
+
+        if not numero_limpo or len(numero_limpo) < 8:
+            logger.warning(f"[{index}/{total}] ⚠️ Número inválido ignorado: {numero}")
+            continue
+
+        mensagem_variada = processar_spintax(mensagem_base)
+        
+        try:
+            send_whatsapp(numero_limpo, mensagem_variada, instance_name=instance_name)
+            sucessos += 1
+            logger.info(f"[{index}/{total}] ✅ Enviado para: {numero_limpo}")
+        except Exception as err:
+            falhas += 1
+            logger.error(f"[{index}/{total}] ❌ Falha ao enviar para {numero_limpo}: {err}")
+
+        if index == total:
+            break
+
+        # Pausa por lote (a cada 12 envios, pausa entre 60 a 120 segundos)
+        if index % 12 == 0:
+            pausa_lote = random.uniform(60, 120)
+            logger.info(f"☕ Pausa de segurança por lote ({index}/{total}). Aguardando {int(pausa_lote)}s...")
+            time.sleep(pausa_lote)
+        else:
+            # Pausa dinâmica entre mensagens individuais (jitter)
+            pausa = random.uniform(delay_base, delay_base + 6)
+            time.sleep(pausa)
+
+    logger.info(f"🏁 [DISPARO CONCLUÍDO] Sucessos: {sucessos} | Falhas: {falhas} | Total: {total}")
 
 def contem_palavra_exata(texto, lista_palavras):
     """Verifica se alguma palavra da lista existe como palavra inteira no texto."""
@@ -46,6 +107,9 @@ def checar_timeout_atendimento_humano(conversa_ref, conversa_dados, agora):
                 return True
     return False
 
+# ------------------------------------------------------------------------------
+# FLUXO PRINCIPAL DE PROCESSAMENTO
+# ------------------------------------------------------------------------------
 def process_client_flow(
     nome_instancia_atual, 
     phone_number="", 
@@ -83,7 +147,6 @@ def process_client_flow(
                 msg_obj = data_inner.get('message', {}) if isinstance(data_inner, dict) else {}
                 message_text = msg_obj.get('conversation') or msg_obj.get('extendedTextMessage', {}).get('text') or ""
 
-            # Captura de documentos no payload interno
             if not document_message and isinstance(data_inner, dict):
                 msg_inner = data_inner.get('message', {})
                 document_message = (
@@ -147,7 +210,6 @@ def process_client_flow(
             dados_cliente = client_doc.to_dict() or {}
             base_conhecimento_docs = dados_cliente.get("base_conhecimento_documentos", "")
 
-        # Trava de Segurança: Verificação de Validade do Plano
         status_plano = dados_cliente.get("status_plano", "demonstracao")
         data_expiracao = dados_cliente.get("data_expiracao")
 
@@ -164,6 +226,96 @@ def process_client_flow(
                         instance_name=nome_instancia_atual
                     )
                 return
+
+        # ----------------------------------------------------------------------
+        # 🎯 INTERCEPÇÃO DE COMANDOS DE DISPARO (#disparo, #broadcast, #ajuda_disparo)
+        # ----------------------------------------------------------------------
+        if msg_clean.startswith("#disparo") or msg_clean.startswith("#broadcast") or msg_clean == "#ajuda_disparo":
+            admin_phones_env = os.getenv("ADMIN_PHONES", "")
+            admin_list = [re.sub(r'\D', '', p) for p in admin_phones_env.split(",") if p]
+            is_admin = clean_user_phone in admin_list
+
+            # Comando de Ajuda
+            if msg_clean == "#ajuda_disparo":
+                ajuda_txt = (
+                    "🛠️ *Comandos de Disparo em Massa Protegido*\n\n"
+                    "• `#disparo 258841234567,258857654321 | {Olá|Oi} Sua Mensagem`\n"
+                    "• `#ajuda_disparo` -> Mostra este painel de ajuda\n\n"
+                    "💡 *Dica:* Use `{opção1|opção2}` na mensagem para variar o texto automaticamente!"
+                )
+                send_whatsapp(clean_user_phone, ajuda_txt, instance_name=nome_instancia_atual)
+                return
+
+            # Validação de Permissão de Plano (Se não for Admin)
+            if not is_admin and status_plano not in ["premium", "demonstracao", "ativo"]:
+                send_whatsapp(
+                    clean_user_phone,
+                    "❌ *Recurso Indisponível:* O envio de disparos em massa é exclusivo do *Plano Premium*.",
+                    instance_name=nome_instancia_atual
+                )
+                return
+
+            if not is_admin and status_plano == "demonstracao":
+                disparos_usados = dados_cliente.get("disparos_teste_usados", 0)
+                if disparos_usados >= 2:
+                    send_whatsapp(
+                        clean_user_phone,
+                        "⚠️ *Limite de Teste Atingido:* No plano de demonstração são permitidos apenas 2 disparos. Assine o Plano Premium para disparar sem limites!",
+                        instance_name=nome_instancia_atual
+                    )
+                    return
+
+            # Extração de Números e Mensagem
+            conteudo = message_text.replace("#disparo", "").replace("#broadcast", "").strip()
+            if "|" not in conteudo:
+                send_whatsapp(
+                    clean_user_phone,
+                    "❌ *Formato incorreto!* Envie no seguinte formato:\n\n`#disparo 258841234567,258859876543 | {Olá|Oi}! Sua mensagem promocional`",
+                    instance_name=nome_instancia_atual
+                )
+                return
+
+            partes = conteudo.split("|", 1)
+            raw_nums = partes[0].split(",")
+            mensagem_envio = partes[1].strip()
+
+            numeros_validos = []
+            for n in raw_nums:
+                num_c = re.sub(r'\D', '', n)
+                if len(num_c) == 9 and num_c.startswith(('84', '85', '86', '87')):
+                    num_c = '258' + num_c
+                if num_c:
+                    numeros_validos.append(num_c)
+
+            if not numeros_validos or not mensagem_envio:
+                send_whatsapp(
+                    clean_user_phone,
+                    "❌ *Erro:* Nenhum número de destinatário válido ou mensagem vazia.",
+                    instance_name=nome_instancia_atual
+                )
+                return
+
+            # Incrementa contador de testes
+            if not is_admin and status_plano == "demonstracao":
+                client_doc_ref.set({"disparos_teste_usados": firestore.Increment(1)}, merge=True)
+
+            # Inicia o disparo em segundo plano sem bloquear a rota
+            thread_disparo = threading.Thread(
+                target=processar_disparo_em_massa,
+                args=(nome_instancia_atual, numeros_validos, mensagem_envio),
+                kwargs={"delay_base": 7}
+            )
+            thread_disparo.daemon = True
+            thread_disparo.start()
+
+            confirmacao = (
+                f"🛡️ *Disparo Protegido Iniciado!*\n\n"
+                f"• *Destinatários:* {len(numeros_validos)}\n"
+                f"• *Proteção Anti-Bloqueio:* Ativa (Intervalos dinâmicos e variação de texto)\n"
+                f"• *Instância:* `{nome_instancia_atual}`"
+            )
+            send_whatsapp(clean_user_phone, confirmacao, instance_name=nome_instancia_atual)
+            return
 
         # 4. MENSAGEM DO PRÓPRIO ATENDENTE HUMANO
         if is_from_me:
