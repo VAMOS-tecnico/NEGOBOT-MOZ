@@ -1,5 +1,7 @@
 import re
 import time
+import random
+import threading
 import requests
 import logging
 from urllib.parse import quote
@@ -9,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 def _get_clean_instance(instance_name=None):
-    """Sanitiza e codifica o nome da instância para evitar erros de URL (ex: espaços)."""
+    """Sanitiza e codifica o nome da instância para evitar erros de URL."""
     target = instance_name or getattr(Config, 'EVOLUTION_INSTANCE_NAME', '')
     return quote(str(target).strip())
 
@@ -37,7 +39,7 @@ def notificar_erro_admin(erro_msg):
                 "text": f"⚠️ *[ALERTA CRÍTICO - NEGOBOT]*\n\nOcorreu uma falha no servidor:\n❌ `{erro_msg}`\n\n*Verifique os logs.*",
                 "delay": 1200
             }
-            requests.post(url, headers=headers, json=payload, timeout=45)
+            requests.post(url, headers=headers, json=payload, timeout=30)
         except Exception as e:
             logger.error(f"Falha ao enviar notificação de erro ao admin: {e}")
 
@@ -47,15 +49,15 @@ def send_whatsapp(to, text, instance_name=None):
     if not text or not str(text).strip():
         return False
 
-    # Preserva JIDs de grupos (@g.us) ou limpa números individuais
-    clean_target = to if str(to).endswith('@g.us') else _limpar_numero(to)
+    is_group = str(to).endswith('@g.us')
+    clean_target = str(to).strip() if is_group else _limpar_numero(to)
+    
     if not clean_target:
         logger.error(f"Destino inválido fornecido para envio: '{to}'")
         return False
 
     clean_instance = _get_clean_instance(instance_name)
     headers = {"apikey": Config.EVOLUTION_API_KEY, "Content-Type": "application/json"}
-    
     url = f"{Config.EVOLUTION_API_URL}/message/sendText/{clean_instance}"
     
     payload_v2 = {
@@ -65,21 +67,17 @@ def send_whatsapp(to, text, instance_name=None):
     }
 
     try:
-        res = requests.post(url, headers=headers, json=payload_v2, timeout=60)
+        res = requests.post(url, headers=headers, json=payload_v2, timeout=45)
         
-        # Se retornar 400 Bad Request, tenta o payload legado (v1)
+        # Tenta o payload v1/legado caso retorne 400
         if res.status_code == 400:
             logger.warning(f"Tentativa v2 retornou 400. Tentando payload v1 para {clean_target}...")
             payload_v1 = {
                 "number": clean_target,
-                "options": {
-                    "delay": 1200
-                },
-                "textMessage": {
-                    "text": str(text).strip()
-                }
+                "options": {"delay": 1200},
+                "textMessage": {"text": str(text).strip()}
             }
-            res = requests.post(url, headers=headers, json=payload_v1, timeout=60)
+            res = requests.post(url, headers=headers, json=payload_v1, timeout=45)
 
         res.raise_for_status()
         return True
@@ -89,16 +87,16 @@ def send_whatsapp(to, text, instance_name=None):
 
 
 def criar_e_configurar_instancia_automatica(phone_number):
-    """Cria e configura o webhook + definições de instância sem spam de requisições."""
+    """Cria e configura o webhook + definições de instância."""
     try:
         client_instance_raw = _limpar_numero(phone_number)
         client_instance = quote(client_instance_raw)
         headers = {"apikey": Config.EVOLUTION_API_KEY, "Content-Type": "application/json"}
         
-        # Limpeza preventiva de instâncias anteriores
+        # Limpeza preventiva
         try:
-            requests.delete(f"{Config.EVOLUTION_API_URL}/instance/logout/{client_instance}", headers=headers, timeout=30)
-            requests.delete(f"{Config.EVOLUTION_API_URL}/instance/delete/{client_instance}", headers=headers, timeout=30)
+            requests.delete(f"{Config.EVOLUTION_API_URL}/instance/logout/{client_instance}", headers=headers, timeout=15)
+            requests.delete(f"{Config.EVOLUTION_API_URL}/instance/delete/{client_instance}", headers=headers, timeout=15)
         except Exception:
             pass
         
@@ -110,7 +108,7 @@ def criar_e_configurar_instancia_automatica(phone_number):
             "qrcode": True, 
             "integration": "WHATSAPP-BAILEYS"
         }
-        res_create = requests.post(url_create, headers=headers, json=payload_create, timeout=45)
+        res_create = requests.post(url_create, headers=headers, json=payload_create, timeout=30)
         res_create.raise_for_status()
         
         # 1. Definições da Instância
@@ -125,11 +123,11 @@ def criar_e_configurar_instancia_automatica(phone_number):
                 "read_status": False,
                 "sync_full_history": False
             }
-            requests.post(url_settings, headers=headers, json=payload_settings, timeout=30)
+            requests.post(url_settings, headers=headers, json=payload_settings, timeout=20)
         except Exception as set_err:
-            logger.warning(f"Não foi possível aplicar definições de segurança na instância: {set_err}")
+            logger.warning(f"Não foi possível aplicar definições na instância: {set_err}")
 
-        # 2. Configurar o Webhook Automaticamente
+        # 2. Configurar o Webhook
         webhook_target_url = getattr(Config, 'WEBHOOK_URL', None)
         if webhook_target_url:
             url_webhook = f"{Config.EVOLUTION_API_URL}/webhook/set/{client_instance}"
@@ -146,8 +144,8 @@ def criar_e_configurar_instancia_automatica(phone_number):
                 ],
                 "groupsIgnore": True
             }
-            res_wh = requests.post(url_webhook, headers=headers, json=payload_webhook, timeout=45)
-            logger.info(f"Webhook configurado automaticamente para {client_instance}: {res_wh.status_code}")
+            res_wh = requests.post(url_webhook, headers=headers, json=payload_webhook, timeout=30)
+            logger.info(f"Webhook configurado para {client_instance}: {res_wh.status_code}")
 
         return True
     except Exception as e:
@@ -158,23 +156,25 @@ def criar_e_configurar_instancia_automatica(phone_number):
 
 
 def gerar_e_enviar_qrcode_central(phone_number):
-    """Solicita a ligação da instância e envia a imagem do QR Code ao utilizador."""
+    """Solicita a ligação da instância e envia o QR Code ao utilizador."""
     try:
         client_instance_raw = _limpar_numero(phone_number)
         client_instance = quote(client_instance_raw)
         headers = {"apikey": Config.EVOLUTION_API_KEY, "Content-Type": "application/json"}
         
         url_connect = f"{Config.EVOLUTION_API_URL}/instance/connect/{client_instance}"
-        response_connect = requests.get(url_connect, headers=headers, timeout=45)
+        response_connect = requests.get(url_connect, headers=headers, timeout=35)
         response_connect.raise_for_status()
         
         dados_resposta = response_connect.json()
         if dados_resposta.get("instance", {}).get("state") == "open":
-            send_whatsapp(phone_number, "✅ O seu assistente virtual já se encontra ativo e operacional!")
+            send_whatsapp(phone_number, "✅ O seu assistente virtual já se encontra ativo e operational!")
             return True
             
-        base64_qrcode = dados_resposta.get("base64")
+        # Extração resiliente da chave base64 (suporta Evolution v1 e v2)
+        base64_qrcode = dados_resposta.get("base64") or dados_resposta.get("qrcode", {}).get("base64")
         if not base64_qrcode:
+            logger.error(f"Nenhum QR Code retornado para a instância {client_instance_raw}")
             return False
 
         if "," in base64_qrcode:
@@ -199,60 +199,19 @@ def gerar_e_enviar_qrcode_central(phone_number):
             "fileName": "qrcode.png",
             "delay": 1200
         }
-        requests.post(url_send_media, headers=headers, json=payload_media, timeout=60)
+        requests.post(url_send_media, headers=headers, json=payload_media, timeout=45)
         return True
     except Exception as e:
         logger.error(f"Erro ao gerar QR Code para {phone_number}: {e}")
         return False
 
 
-def aplicar_travas_instancia_central():
-    """Aplica as definições silenciosas à instância CENTRAL."""
-    try:
-        central_instance = _get_clean_instance()
-        headers = {"apikey": Config.EVOLUTION_API_KEY, "Content-Type": "application/json"}
-        
-        url_settings = f"{Config.EVOLUTION_API_URL}/instance/setSettings/{central_instance}"
-        payload_settings = {
-            "reject_call": True,
-            "msg_call": "",
-            "groups_ignore": True,
-            "always_online": False,
-            "read_messages": True,
-            "read_status": False,
-            "sync_full_history": False
-        }
-        requests.post(url_settings, headers=headers, json=payload_settings, timeout=30)
-
-        webhook_target_url = getattr(Config, 'WEBHOOK_URL', None)
-        if webhook_target_url:
-            url_webhook = f"{Config.EVOLUTION_API_URL}/webhook/set/{central_instance}"
-            payload_webhook = {
-                "url": webhook_target_url,
-                "enabled": True,
-                "byEvents": False,
-                "base64": False,
-                "webhookByEvents": False,
-                "events": [
-                    "MESSAGES_UPSERT",
-                    "CHATS_UPSERT",
-                    "CONNECTION_UPDATE"
-                ],
-                "groupsIgnore": True
-            }
-            requests.post(url_webhook, headers=headers, json=payload_webhook, timeout=45)
-    except Exception as e:
-        logger.warning(f"Não foi possível reconfigurar a instância central: {e}")
-
-
 # ==========================================================
-# 🟢 FUNÇÕES DE MAPEAMENTO E SINCRONIZAÇÃO DE CONTACTOS/GRUPOS
+# 🟢 SINCRONIZAÇÃO E EXTRAÇÃO DE CONTATOS/GRUPOS
 # ==========================================================
 
 def extrair_contactos_conversas(tenant_id, instance_name):
-    """Extrai apenas contactos das conversas privadas existentes."""
     import extensions
-
     clean_instance = _get_clean_instance(instance_name)
     headers = {"apikey": Config.EVOLUTION_API_KEY, "Content-Type": "application/json"}
     base_url = Config.EVOLUTION_API_URL.rstrip('/')
@@ -292,16 +251,13 @@ def extrair_contactos_conversas(tenant_id, instance_name):
             f"• Total de contactos de conversas guardados: *{novos_contactos}*\n\n"
             f"Já pode enviar a sua campanha privada enviando:\n`#disparo <sua mensagem>`"
         )
-
     except Exception as e:
         logger.error(f"Erro ao extrair conversas para tenant {tenant_id}: {e}", exc_info=True)
         return f"❌ Erro ao sincronizar conversas: {str(e)}"
 
 
 def extrair_contactos_grupos(tenant_id, instance_name):
-    """Extrai contactos individuais dos membros dos grupos para disparos privados."""
     import extensions
-
     clean_instance = _get_clean_instance(instance_name)
     headers = {"apikey": Config.EVOLUTION_API_KEY, "Content-Type": "application/json"}
     base_url = Config.EVOLUTION_API_URL.rstrip('/')
@@ -312,12 +268,9 @@ def extrair_contactos_grupos(tenant_id, instance_name):
 
     try:
         url_groups = f"{base_url}/group/fetchAllGroups/{clean_instance}?getParticipants=true"
-        try:
-            res_groups = requests.get(url_groups, headers=headers, timeout=20)
-        except Exception:
-            res_groups = None
+        res_groups = requests.get(url_groups, headers=headers, timeout=25)
 
-        if res_groups and res_groups.status_code == 200:
+        if res_groups.status_code == 200:
             grupos = res_groups.json()
             if isinstance(grupos, list):
                 for grupo in grupos:
@@ -341,16 +294,13 @@ def extrair_contactos_grupos(tenant_id, instance_name):
             f"• Total de membros de grupos guardados: *{novos_contactos}*\n\n"
             f"Já pode enviar a sua campanha privada enviando:\n`#disparo <sua mensagem>`"
         )
-
     except Exception as e:
         logger.error(f"Erro ao extrair grupos para tenant {tenant_id}: {e}", exc_info=True)
         return f"❌ Erro ao sincronizar membros de grupos: {str(e)}"
 
 
 def sincronizar_grupos_destino(tenant_id, instance_name):
-    """Mapeia os IDs dos grupos em si (@g.us) para permitir publicações diretas nos chats dos grupos."""
     import extensions
-
     clean_instance = _get_clean_instance(instance_name)
     headers = {"apikey": Config.EVOLUTION_API_KEY, "Content-Type": "application/json"}
     base_url = Config.EVOLUTION_API_URL.rstrip('/')
@@ -360,7 +310,7 @@ def sincronizar_grupos_destino(tenant_id, instance_name):
 
     try:
         url_groups = f"{base_url}/group/fetchAllGroups/{clean_instance}?getParticipants=false"
-        res_groups = requests.get(url_groups, headers=headers, timeout=20)
+        res_groups = requests.get(url_groups, headers=headers, timeout=25)
 
         total_grupos = 0
         if res_groups.status_code == 200:
@@ -382,17 +332,16 @@ def sincronizar_grupos_destino(tenant_id, instance_name):
         return (
             f"✅ *Grupos Mapeados com Sucesso!*\n\n"
             f"• Total de grupos prontos para receber mensagens: *{total_grupos}*\n\n"
-            f"Para enviar uma mensagem direta na conversa destes grupos, use:\n"
+            f"Para enviar uma mensagem direta nestes grupos, use:\n"
             f"`#disparo_grupos <sua mensagem>`"
         )
-
     except Exception as e:
         logger.error(f"Erro ao mapear grupos para tenant {tenant_id}: {e}", exc_info=True)
         return f"❌ Erro ao mapear grupos: {str(e)}"
 
 
 def extrair_e_salvar_contactos_auto(tenant_id, instance_name):
-    """Executa a sincronização completa de conversas, membros de grupos e mapeamento de grupos."""
+    """Executa a sincronização completa de conversas, membros de grupos e mapeamento."""
     extrair_contactos_conversas(tenant_id, instance_name)
     extrair_contactos_grupos(tenant_id, instance_name)
     sincronizar_grupos_destino(tenant_id, instance_name)
@@ -407,22 +356,15 @@ def extrair_e_salvar_contactos_auto(tenant_id, instance_name):
 
 
 # ==========================================================
-# 🟢 FUNÇÕES DE DISPARO DE MENSAGENS EM MASSA
+# 🟢 DISPAROS EM MASSA (COM ANTI-SPAM E WORKER ASYNC)
 # ==========================================================
 
-def enviar_disparo_privado(tenant_id, instance_name, mensagem):
-    """Dispara uma mensagem no privado para a base de contactos guardada."""
+def _worker_disparo_privado(tenant_id, instance_name, mensagem):
+    """Worker executado em thread separada para evitar timeout do HTTP."""
     import extensions
-
-    if not mensagem or not mensagem.strip():
-        return "⚠️ Escreva a mensagem que deseja enviar. Exemplo:\n`#disparo Olá! Temos novidades.`"
-
     clean_instance = _get_clean_instance(instance_name)
-    headers = {"apikey": Config.EVOLUTION_API_KEY, "Content-Type": "application/json"}
-    url_send = f"{Config.EVOLUTION_API_URL}/message/sendText/{clean_instance}"
-
     tenant_ref = extensions.db.collection('clientes_bot').document(tenant_id)
-    contactos = tenant_ref.collection('base_contactos').stream()
+    contactos = list(tenant_ref.collection('base_contactos').stream())
 
     sucessos = 0
     falhas = 0
@@ -433,43 +375,40 @@ def enviar_disparo_privado(tenant_id, instance_name, mensagem):
         if not phone:
             continue
 
-        payload = {
-            "number": _limpar_numero(phone),
-            "text": mensagem.strip(),
-            "delay": 1500
-        }
-
-        try:
-            res = requests.post(url_send, headers=headers, json=payload, timeout=30)
-            if res.status_code in [200, 201]:
-                sucessos += 1
-            else:
-                falhas += 1
-        except Exception:
+        if send_whatsapp(phone, mensagem, instance_name=clean_instance):
+            sucessos += 1
+        else:
             falhas += 1
 
-        time.sleep(1.5)
+        # Delay dinâmico Anti-Banimento (entre 3 e 7 segundos)
+        time.sleep(random.uniform(3.0, 7.0))
 
-    return (
+    relatorio = (
         f"🚀 *Disparo Privado Finalizado!*\n\n"
-        f"✅ Enviado com sucesso para: *{sucessos} contactos*\n"
-        f"❌ Falhas de envio: *{falhas}*"
+        f"✅ Enviado com sucesso: *{sucessos}*\n"
+        f"❌ Falhas: *{falhas}*"
     )
+    # Envia o relatório final via WhatsApp para a própria instância ou admin
+    send_whatsapp(tenant_id, relatorio, instance_name=clean_instance)
 
 
-def enviar_disparo_grupos(tenant_id, instance_name, mensagem):
-    """Publica uma mensagem diretamente dentro dos chats de todos os grupos mapeados."""
-    import extensions
-
+def enviar_disparo_privado(tenant_id, instance_name, mensagem):
     if not mensagem or not mensagem.strip():
-        return "⚠️ Escreva a mensagem que deseja publicar nos grupos. Exemplo:\n`#disparo_grupos Olá a todos!`"
+        return "⚠️ Escreva a mensagem que deseja enviar. Exemplo:\n`#disparo Olá! Temos novidades.`"
 
+    # Inicia a execução em background para não bloquear a requisição da API
+    thread = threading.Thread(target=_worker_disparo_privado, args=(tenant_id, instance_name, mensagem))
+    thread.start()
+
+    return "⏳ *Disparo Privado Iniciado!*\n\nO processo está a decorrer em segundo plano para proteção da conta. Receberá um relatório quando terminar."
+
+
+def _worker_disparo_grupos(tenant_id, instance_name, mensagem):
+    """Worker executado em thread separada para envios em grupo."""
+    import extensions
     clean_instance = _get_clean_instance(instance_name)
-    headers = {"apikey": Config.EVOLUTION_API_KEY, "Content-Type": "application/json"}
-    url_send = f"{Config.EVOLUTION_API_URL}/message/sendText/{clean_instance}"
-
     tenant_ref = extensions.db.collection('clientes_bot').document(tenant_id)
-    grupos = tenant_ref.collection('base_grupos').stream()
+    grupos = list(tenant_ref.collection('base_grupos').stream())
 
     sucessos = 0
     falhas = 0
@@ -480,25 +419,27 @@ def enviar_disparo_grupos(tenant_id, instance_name, mensagem):
         if not group_jid:
             continue
 
-        payload = {
-            "number": group_jid,
-            "text": mensagem.strip(),
-            "delay": 2000
-        }
-
-        try:
-            res = requests.post(url_send, headers=headers, json=payload, timeout=30)
-            if res.status_code in [200, 201]:
-                sucessos += 1
-            else:
-                falhas += 1
-        except Exception:
+        if send_whatsapp(group_jid, mensagem, instance_name=clean_instance):
+            sucessos += 1
+        else:
             falhas += 1
 
-        time.sleep(2)
+        # Delay dinâmico para grupos (entre 5 e 10 segundos)
+        time.sleep(random.uniform(5.0, 10.0))
 
-    return (
+    relatorio = (
         f"🚀 *Disparo em Grupos Finalizado!*\n\n"
-        f"✅ Publicado com sucesso em: *{sucessos} grupos*\n"
-        f"❌ Falhas de envio: *{falhas}*"
+        f"✅ Publicado em: *{sucessos} grupos*\n"
+        f"❌ Falhas: *{falhas}*"
     )
+    send_whatsapp(tenant_id, relatorio, instance_name=clean_instance)
+
+
+def enviar_disparo_grupos(tenant_id, instance_name, mensagem):
+    if not mensagem or not mensagem.strip():
+        return "⚠️ Escreva a mensagem que deseja publicar nos grupos. Exemplo:\n`#disparo_grupos Olá a todos!`"
+
+    thread = threading.Thread(target=_worker_disparo_grupos, args=(tenant_id, instance_name, mensagem))
+    thread.start()
+
+    return "⏳ *Disparo em Grupos Iniciado!*\n\nAs publicações estão a ser efetuadas com intervalos de segurança em segundo plano."
