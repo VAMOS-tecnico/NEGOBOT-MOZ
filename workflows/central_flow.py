@@ -12,10 +12,12 @@ from database.chat_repo import (
 from services.groq_service import chamar_groq_rest
 from services.evolution_service import (
     send_whatsapp, 
+    send_media, 
     criar_e_configurar_instancia_automatica, 
     gerar_e_enviar_qrcode_central
 )
 from services.payment_service import validar_e_ativar_pagamento_mpesa
+from services.image_generator_service import gerar_imagem_publicitaria
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +51,7 @@ def checar_timeout_atendimento_humano(conversa_ref, conversa_dados: dict, agora:
 def process_central_flow(phone_number_or_data=None, message_text: str = "", msg_clean: str = "", is_from_me: bool = False, agora: datetime = None, data: dict = None, **kwargs):
     """
     Workflow central do Negobot Moz focado na apresentação, conversão, 
-    validação de pagamentos M-Pesa e atendimento a clientes.
+    validação de pagamentos M-Pesa, geração de artes publicitárias e atendimento a clientes.
     """
     try:
         if agora is None:
@@ -149,6 +151,25 @@ def process_central_flow(phone_number_or_data=None, message_text: str = "", msg_
             send_whatsapp(clean_phone, resposta_instrucao_pagamento, instance_name=central_instance)
             return
 
+        # 🎨 3. GERAÇÃO AUTOMÁTICA DE IMAGENS / ARTES PUBLICITÁRIAS
+        gatilhos_imagem = ["#imagem", "gerar imagem", "cria uma arte", "criar imagem", "faz um cartaz", "gerar arte", "criar cartaz"]
+        if any(termo in msg_clean for termo in gatilhos_imagem):
+            send_whatsapp(clean_phone, "🎨 *A processar e a gerar a sua arte publicitária...* Por favor, aguarde alguns segundos. 🚀", instance_name=central_instance)
+            
+            url_imagem = gerar_imagem_publicitaria(message_text)
+            if url_imagem:
+                send_media(
+                    phone_number=clean_phone,
+                    media_url=url_imagem,
+                    caption="✨ *Aqui está a sua arte publicitária criada pelo Negobot Moz!*",
+                    instance_name=central_instance
+                )
+                save_chat_history(clean_phone, "user", message_text)
+                save_chat_history(clean_phone, "assistant", "[Arte publicitária gerada e enviada]")
+            else:
+                send_whatsapp(clean_phone, "❌ *Não foi possível gerar a imagem no momento.* Tente novamente detalhando melhor o seu pedido.", instance_name=central_instance)
+            return
+
         # 🛡️ FILTRO DE SEGURANÇA: Links de redes sociais sem texto complementar
         if ("youtube.com" in msg_clean or "youtu.be" in msg_clean or "tiktok.com" in msg_clean) and len(msg_clean.split()) <= 2:
             send_whatsapp(
@@ -158,7 +179,7 @@ def process_central_flow(phone_number_or_data=None, message_text: str = "", msg_
             )
             return
 
-        # 3. Consulta de estado no Firestore
+        # 4. Consulta de estado no Firestore
         chat_ref = extensions.db.collection('chats').document(clean_phone)
         chat_doc = chat_ref.get()
         chat_dados = chat_doc.to_dict() if chat_doc.exists else {}
@@ -175,7 +196,7 @@ def process_central_flow(phone_number_or_data=None, message_text: str = "", msg_
                 "status": "prospect"
             }, merge=True)
 
-        # 4. Comando explícito de regeração de QR Code (#qrcode)
+        # 5. Comando explícito de regeração de QR Code (#qrcode)
         if msg_clean == "#qrcode":
             send_whatsapp(clean_phone, "🔄 *A gerar o seu novo QR Code do Negobot Moz...* Por favor, aguarde alguns segundos.", instance_name=central_instance)
             criar_e_configurar_instancia_automatica(clean_phone)
@@ -183,7 +204,7 @@ def process_central_flow(phone_number_or_data=None, message_text: str = "", msg_
             gerar_e_enviar_qrcode_central(clean_phone)
             return
 
-        # 5. Gatilhos de Teste Grátis (Refinados com limites de palavra)
+        # 6. Gatilhos de Teste Grátis
         gatilhos_teste = [r'\bteste\b', r'\btestar\b', r'quero o bot', r'\bcomeçar\b', r'criar bot', r'\bdemo\b']
         if any(re.search(pattern, msg_clean) for pattern in gatilhos_teste) and not eh_duvida_pagamento:
             send_whatsapp(clean_phone, "⏳ *A preparar o seu teste grátis de 2 dias do Negobot Moz...* 🚀", instance_name=central_instance)
@@ -207,7 +228,7 @@ def process_central_flow(phone_number_or_data=None, message_text: str = "", msg_
             gerar_e_enviar_qrcode_central(clean_phone)
             return
 
-        # 6. Modo de Atendimento Humano
+        # 7. Modo de Atendimento Humano
         status_atendimento = chat_dados.get("status_atendimento", "bot")
         if status_atendimento == "humano":
             if checar_timeout_atendimento_humano(chat_ref, chat_dados, agora):
@@ -221,7 +242,7 @@ def process_central_flow(phone_number_or_data=None, message_text: str = "", msg_
                     save_chat_history(clean_phone, "user", message_text)
                     return
 
-        # 7. Transferência Manual para Atendimento Humano
+        # 8. Transferência Manual para Atendimento Humano
         gatilhos_humano = [r'falar com atendente', r'suporte humano', r'\batendente\b', r'\bhumano\b', r'#suporte', r'falar com pessoa']
         if any(re.search(pattern, msg_clean) for pattern in gatilhos_humano):
             timeout_min = getattr(Config, 'TIMEOUT_HUMANO_MINUTOS', 15)
@@ -237,7 +258,7 @@ def process_central_flow(phone_number_or_data=None, message_text: str = "", msg_
             )
             return
 
-        # 8. Resposta Inteligente via Groq REST API (Fallback de Conversação)
+        # 9. Resposta Inteligente via Groq REST API (Fallback de Conversação)
         chat_ref.set({"status_atendimento": "bot", "ultima_mensagem_por": "cliente_final", "ultima_interacao": agora}, merge=True)
         save_chat_history(clean_phone, "user", message_text)
 
@@ -256,6 +277,9 @@ def process_central_flow(phone_number_or_data=None, message_text: str = "", msg_
 ATENÇÃO - REGRAS DE ATENDIMENTO (CLIENTE EM TESTE GRÁTIS):
 - O cliente está no período de teste grátis ou acabou de solicitar o QR Code.
 - Responda de forma clara, direta e objetiva às perguntas do cliente (preços, dúvidas de uso, ajuda, suporte).
+
+🎨 CRIAÇÃO DE ARTES / PUBLICIDADE:
+- Se o cliente solicitar a criação de cartazes ou artes para publicidade, informe que pode digitar #imagem seguido da descrição do que deseja (ex: #imagem cartaz para loja de roupas promoção de fim de semana).
 
 💳 INSTRUÇÕES DE PAGAMENTO (SE PERGUNTADO):
 - Se o cliente perguntar como pagar: explique que o pagamento é feito via M-Pesa para o número 855000929 (Negobot Moz).
@@ -297,9 +321,9 @@ Ideal para empresas em crescimento que recebem muitos clientes ao mesmo tempo e 
 • Suporte: Suporte prioritário respondido em até 12h.
 
 3. Plano Premium — 1.500 MT / mês
-Para empresas que querem uma verdadeira central inteligente, com IA avançada e campanhas de vendas.
+Para empresas que querem uma verdadeira central inteligente, com IA avançada, artes publicitárias e campanhas de vendas.
 • Atendimento: Tudo do Plano Médio + Automação Avançada com IA Total.
-• Multimédia e Treino: Leitura completa de PDFs e documentos extensos (catálogos, manutenções, manuais) e interpretação de Áudios (Notas de Voz).
+• Multimédia e Treino: Leitura completa de PDFs e documentos extensos (catálogos, manutenções, manuais), interpretação de Áudios e Geração de Artes Publicitárias (#imagem).
 • Campanhas: Direito a ferramentas de Disparos em Massa no WhatsApp e Campanhas de Marketing de forma segura para a base de contactos e grupos.
 • Suporte: Suporte dedicado e acompanhamento inicial de configuração por um assistente humano.
 
