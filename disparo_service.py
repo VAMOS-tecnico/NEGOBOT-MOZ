@@ -18,15 +18,22 @@ logger = logging.getLogger("disparo_service")
 
 app = FastAPI(
     title="Negobot Moz - Módulo Unificado & Anti-Bloqueio de Disparos",
-    description="Gestão de disparos em massa com proteção contra banimento da Meta."
+    description="Gestão de disparos em massa com proteção contra banimento da Meta.",
+    version="2026.2"
 )
 
 # ------------------------------------------------------------------------------
-# VARIÁVEIS DE AMBIENTE E SEGURANÇA
+# VARIÁVEIS DE AMBIENTE E SEGURANÇA (TRATAMENTO DE FALLBACKS)
 # ------------------------------------------------------------------------------
-EVOLUTION_API_URL = os.getenv("EVOLUTION_API_URL", "https://evolution.62.238.52.209.sslip.io")
+EVOLUTION_API_URL = os.getenv("EVOLUTION_API_URL", "https://evolution.62.238.52.209.sslip.io").rstrip("/")
 API_KEY = os.getenv("EVOLUTION_API_KEY", os.getenv("AUTHENTICATION_API_KEY", "negobot_moz_secret_key_2026"))
-ADMIN_PHONES = os.getenv("ADMIN_PHONES", "25884xxxxxxx,25885xxxxxxx").split(",")
+
+# Trata a lista de admins de forma segura evitando contaminação por caracteres 'x'
+RAW_ADMIN_PHONES = os.getenv("ADMIN_PHONES", "")
+if RAW_ADMIN_PHONES:
+    ADMIN_PHONES = [p.strip() for p in RAW_ADMIN_PHONES.split(",") if p.strip()]
+else:
+    ADMIN_PHONES = ["258840000000"]  # Subsitua pelo número de admin real nas variáveis de ambiente
 
 # Parâmetros Padrão Anti-Bloqueio
 DELAY_MIN_SEGUNDOS = 7      # Tempo mínimo entre envios
@@ -73,29 +80,34 @@ def processar_spintax(texto: str) -> str:
     return texto
 
 # ------------------------------------------------------------------------------
-# CORE DE ENVIO COM DIGITAÇÃO SIMULADA
+# CORE DE ENVIO COM COMPATIBILIDADE E LOG DE ERROS
 # ------------------------------------------------------------------------------
 def enviar_mensagem_unica(instance_name: str, number: str, text: str) -> bool:
-    """Envia uma única mensagem simulando tempo de digitação variável humano."""
+    """Envia uma única mensagem com payload compatível com a Evolution API e logs detalhados."""
     endpoint = f"{EVOLUTION_API_URL}/message/sendText/{instance_name}"
     headers = {
         "apikey": API_KEY,
         "Content-Type": "application/json"
     }
     
-    # Gera um tempo de digitação humano aleatório entre 1.5s e 4.5s
+    # Simula tempo de digitação humano
     tempo_digitacao_ms = random.randint(1500, 4500)
     
     payload = {
         "number": number,
         "text": text,
-        "delay": tempo_digitacao_ms
+        "delay": tempo_digitacao_ms,
+        "linkPreview": False
     }
     try:
         response = requests.post(endpoint, json=payload, headers=headers, timeout=12)
-        return response.status_code in [200, 201]
+        if response.status_code in [200, 201]:
+            return True
+        else:
+            logger.error(f"❌ Erro Evolution API para {number} | Status: {response.status_code} | Resposta: {response.text}")
+            return False
     except Exception as e:
-        logger.error(f"Erro ao enviar mensagem para {number}: {e}")
+        logger.error(f"❌ Erro de conexão com Evolution API para {number}: {e}")
         return False
 
 # ------------------------------------------------------------------------------
@@ -119,6 +131,7 @@ def processar_disparo_em_massa(instance_name: str, numeros: List[str], mensagem_
 
         if not numero_limpo or len(numero_limpo) < 8:
             logger.warning(f"[{index}/{total}] ⚠️ Número inválido ignorado: {numero}")
+            falhas += 1
             continue
 
         # 1. Aplica Spintax para gerar mensagem única por destinatário
@@ -145,7 +158,7 @@ def processar_disparo_em_massa(instance_name: str, numeros: List[str], mensagem_
             time.sleep(tempo_pausa_lote)
         else:
             # 4. Pausa aleatória entre mensagens individuais (Jitter)
-            delay_calculado = random.uniform(max(5, delay_base), max(5, delay_base) + DELAY_MAX_SEGUNDOS - DELAY_MIN_SEGUNDOS)
+            delay_calculado = random.uniform(max(5, delay_base), max(5, delay_base) + (DELAY_MAX_SEGUNDOS - DELAY_MIN_SEGUNDOS))
             logger.debug(f"Aguardando {delay_calculado:.2f}s até o próximo envio...")
             time.sleep(delay_calculado)
 
@@ -156,8 +169,12 @@ def processar_disparo_em_massa(instance_name: str, numeros: List[str], mensagem_
 # ------------------------------------------------------------------------------
 def processar_disparo_cliente_saas(tenant_id: str, client_phone: str, message_text: str, background_tasks: BackgroundTasks) -> str:
     """Valida permissões do plano SaaS e inicia a fila de disparo protegido."""
-    client_doc_ref = extensions.db.collection('clientes_bot').document(tenant_id)
-    client_doc = client_doc_ref.get()
+    try:
+        client_doc_ref = extensions.db.collection('clientes_bot').document(tenant_id)
+        client_doc = client_doc_ref.get()
+    except Exception as e:
+        logger.error(f"Erro ao conectar com Firestore em extensions.db: {e}")
+        return "❌ *Erro de conexão com o banco de dados.*"
 
     if not client_doc.exists:
         return "❌ *Conta não encontrada.* Registe a sua empresa na plataforma."
@@ -228,9 +245,12 @@ def processar_disparo_cliente_saas(tenant_id: str, client_phone: str, message_te
 # ------------------------------------------------------------------------------
 def processar_mensagem_admin(admin_phone: str, text_message: str, instance_name: str, background_tasks: BackgroundTasks) -> Optional[str]:
     clean_admin = re.sub(r'\D', '', str(admin_phone))
-    admin_list_clean = [re.sub(r'\D', '', p) for p in ADMIN_PHONES if p]
+    
+    # Limpa apenas caracteres numéricos dos números admin configurados
+    admin_list_clean = [re.sub(r'\D', '', p) for p in ADMIN_PHONES if p and re.sub(r'\D', '', p)]
 
     if clean_admin not in admin_list_clean:
+        logger.warning(f"Tentativa não autorizada do número: {clean_admin}. Admins ativos: {admin_list_clean}")
         return None
 
     msg_clean = text_message.strip()
@@ -240,7 +260,7 @@ def processar_mensagem_admin(admin_phone: str, text_message: str, instance_name:
             conteudo = msg_clean.replace("#disparo", "").replace("#broadcast", "").strip()
 
             if "|" not in conteudo:
-                return "❌ *Formato Admin incorreto!* Use:\n`#disparo num1,num2 | {Olá|Oi} mensagem`"
+                return "❌ *Formato Admin incorreto!* Use:\n`#disparo num1,num2 | {Olá|Oi} Sua Mensagem`"
 
             partes = conteudo.split("|", 1)
             lista_numeros_raw = partes[0].split(",")
@@ -249,7 +269,7 @@ def processar_mensagem_admin(admin_phone: str, text_message: str, instance_name:
             numeros_filtrados = [re.sub(r'\D', '', n) for n in lista_numeros_raw if re.sub(r'\D', '', n)]
 
             if not numeros_filtrados or not mensagem_envio:
-                return "❌ *Parâmetros inválidos (números ou mensagem ausentes).* "
+                return "❌ *Parâmetros inválidos (números ou mensagem ausentes).*"
 
             background_tasks.add_task(
                 processar_disparo_em_massa,
