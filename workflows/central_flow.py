@@ -2,6 +2,7 @@ import re
 import time
 import logging
 from datetime import datetime, timedelta, timezone
+
 from config import Config
 import extensions
 from database.chat_repo import (
@@ -18,8 +19,12 @@ from services.payment_service import validar_e_ativar_pagamento_mpesa
 
 logger = logging.getLogger(__name__)
 
-def checar_timeout_atendimento_humano(conversa_ref, conversa_dados, agora):
-    """Verifica se o tempo limite de espera por atendimento humano expirou."""
+
+def checar_timeout_atendimento_humano(conversa_ref, conversa_dados: dict, agora: datetime) -> bool:
+    """
+    Verifica se o tempo limite de espera por atendimento humano expirou.
+    Retorna True se o timeout ocorreu e o atendimento voltou ao bot, caso contrário False.
+    """
     if conversa_dados and conversa_dados.get("status_atendimento") == "humano":
         ultima_interacao = conversa_dados.get("ultima_interacao")
         ultima_msg_por = conversa_dados.get("ultima_mensagem_por")
@@ -30,21 +35,27 @@ def checar_timeout_atendimento_humano(conversa_ref, conversa_dados, agora):
             
             timeout_min = getattr(Config, 'TIMEOUT_HUMANO_MINUTOS', 15)
             minutos_decorridos = (agora - ultima_interacao).total_seconds() / 60.0
+            
             if minutos_decorridos >= timeout_min:
                 conversa_ref.set({
                     "status_atendimento": "bot",
                     "ultima_interacao": agora
                 }, merge=True)
+                logger.info(f"Timeout humano atingido ({minutos_decorridos:.1f} min). Bot reassumiu.")
                 return True
     return False
 
-def process_central_flow(phone_number_or_data=None, message_text="", msg_clean="", is_from_me=False, agora=None, data=None, **kwargs):
-    """Workflow central do Negobot Moz focado na apresentação, conversão e acompanhamento de clientes."""
+
+def process_central_flow(phone_number_or_data=None, message_text: str = "", msg_clean: str = "", is_from_me: bool = False, agora: datetime = None, data: dict = None, **kwargs):
+    """
+    Workflow central do Negobot Moz focado na apresentação, conversão, 
+    validação de pagamentos M-Pesa e atendimento a clientes.
+    """
     try:
         if agora is None:
             agora = datetime.now(timezone.utc)
 
-        # Compatibilidade de parâmetros
+        # Compatibilidade de payload
         payload = data if data is not None else phone_number_or_data
 
         # 1. Extração do identificador da conversa (JID)
@@ -69,12 +80,12 @@ def process_central_flow(phone_number_or_data=None, message_text="", msg_clean="
         # Sanitização do número individual do cliente (ex: 25884xxxxxxx)
         clean_phone = re.sub(r'\D', '', raw_jid_str.split('@')[0])
         if not clean_phone:
-            logger.warning("Número de telefone inválido no process_central_flow.")
+            logger.warning("Número de telefone inválido ou ausente no process_central_flow.")
             return
 
-        central_instance = Config.EVOLUTION_INSTANCE_NAME
+        central_instance = getattr(Config, 'EVOLUTION_INSTANCE_NAME', 'central')
 
-        # Extração de texto caso venha direto do payload
+        # Extração do texto caso venha do payload
         if not message_text and isinstance(payload, dict):
             data_payload = payload.get('data', {}) if isinstance(payload.get('data'), dict) else payload
             msg_obj = data_payload.get('message', {}) if isinstance(data_payload, dict) else {}
@@ -85,7 +96,7 @@ def process_central_flow(phone_number_or_data=None, message_text="", msg_clean="
         else:
             msg_clean = msg_clean.lower().strip()
 
-        # ⚠️ Se o atendente responder manualmente, assume a conversa no modo "humano"
+        # ⚠️ Se o atendente responder manualmente via interface/WhatsApp, assume o modo "humano"
         if is_from_me:
             chat_ref = extensions.db.collection('chats').document(clean_phone)
             chat_ref.set({
@@ -95,13 +106,13 @@ def process_central_flow(phone_number_or_data=None, message_text="", msg_clean="
             }, merge=True)
             return
 
-        # 💳 VERIFICAÇÃO DE COMPROVATIVO M-PESA
+        # 💳 VERIFICAÇÃO E ATIVAÇÃO DE COMPROVATIVO M-PESA
         eh_comprovativo_mpesa = (
             msg_clean.startswith('#pago') 
             or msg_clean.startswith('#comprovativo')
             or "transferiste" in msg_clean 
             or "confirmado" in msg_clean
-            or re.search(r'\b(3g|4g|5g|[a-z0-9]{10})\b', message_text.lower()) and "m-pesa" in message_text.lower()
+            or (bool(re.search(r'\b(3g|4g|5g|[a-z0-9]{10})\b', message_text.lower())) and "m-pesa" in message_text.lower())
         )
 
         if eh_comprovativo_mpesa:
@@ -115,7 +126,7 @@ def process_central_flow(phone_number_or_data=None, message_text="", msg_clean="
                 send_whatsapp(clean_phone, resposta_pagamento, instance_name=central_instance)
                 return
 
-        # FILTRO DE SEGURANÇA: Links de redes sociais sem texto complementar
+        # 🛡️ FILTRO DE SEGURANÇA: Links de redes sociais sem texto complementar
         if ("youtube.com" in msg_clean or "youtu.be" in msg_clean or "tiktok.com" in msg_clean) and len(msg_clean.split()) <= 2:
             send_whatsapp(
                 clean_phone,
@@ -203,7 +214,7 @@ def process_central_flow(phone_number_or_data=None, message_text="", msg_clean="
             )
             return
 
-        # 7. Resposta Inteligente via Groq
+        # 7. Resposta Inteligente via Groq REST API
         chat_ref.set({"status_atendimento": "bot", "ultima_mensagem_por": "cliente_final", "ultima_interacao": agora}, merge=True)
         save_chat_history(clean_phone, "user", message_text)
 
@@ -263,7 +274,7 @@ Finalize sempre reforçando que o cliente não paga nada agora e pode testar qua
 📌 REGRAS DE COMPORTAMENTO OBRIGATÓRIAS:
 - NUNCA comente sobre conteúdos de vídeos, links de YouTube ou mensagens fora do escopo comercial.
 - Se o cliente enviar um link ou mensagem confusa, convide-o diretamente a digitar "TESTE" para testar a nossa plataforma.
-- NUNCA mencione "stock", "produtos de entrega imediata" ou assuntos que não pertencçam à Negobot Moz.
+- NUNCA mencione "stock", "produtos de entrega imediata" ou assuntos que não pertençam à Negobot Moz.
 - LINGUAGEM: Português de Moçambique, tom profissional, curto e direto.
 """
 
