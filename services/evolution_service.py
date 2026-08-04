@@ -69,7 +69,6 @@ def send_whatsapp(to, text, instance_name=None):
     try:
         res = requests.post(url, headers=headers, json=payload_v2, timeout=45)
         
-        # Tenta o payload v1/legado caso retorne 400
         if res.status_code == 400:
             logger.warning(f"Tentativa v2 retornou 400. Tentando payload v1 para {clean_target}...")
             payload_v1 = {
@@ -86,6 +85,34 @@ def send_whatsapp(to, text, instance_name=None):
         return False
 
 
+def send_media(to, media, caption="", mediatype="image", filename="media.png", instance_name=None):
+    """Função de atalho compatível para envio de mídias exigida pelo central_flow."""
+    try:
+        is_group = str(to).endswith('@g.us')
+        clean_target = str(to).strip() if is_group else _limpar_numero(to)
+        clean_instance = _get_clean_instance(instance_name)
+        headers = {"apikey": Config.EVOLUTION_API_KEY, "Content-Type": "application/json"}
+        
+        if media and "," in str(media):
+            media = str(media).split(",")[1]
+
+        url_send_media = f"{Config.EVOLUTION_API_URL}/message/sendMedia/{clean_instance}"
+        payload = {
+            "number": clean_target,
+            "caption": caption,
+            "media": media,
+            "mediatype": mediatype,
+            "fileName": filename,
+            "delay": 1200
+        }
+        res = requests.post(url_send_media, headers=headers, json=payload, timeout=45)
+        res.raise_for_status()
+        return True
+    except Exception as e:
+        logger.error(f"Erro em send_media: {e}")
+        return False
+
+
 def criar_e_configurar_instancia_automatica(phone_number):
     """Cria e configura o webhook + definições de instância."""
     try:
@@ -93,7 +120,6 @@ def criar_e_configurar_instancia_automatica(phone_number):
         client_instance = quote(client_instance_raw)
         headers = {"apikey": Config.EVOLUTION_API_KEY, "Content-Type": "application/json"}
         
-        # Limpeza preventiva
         try:
             requests.delete(f"{Config.EVOLUTION_API_URL}/instance/logout/{client_instance}", headers=headers, timeout=15)
             requests.delete(f"{Config.EVOLUTION_API_URL}/instance/delete/{client_instance}", headers=headers, timeout=15)
@@ -111,7 +137,6 @@ def criar_e_configurar_instancia_automatica(phone_number):
         res_create = requests.post(url_create, headers=headers, json=payload_create, timeout=30)
         res_create.raise_for_status()
         
-        # 1. Definições da Instância
         try:
             url_settings = f"{Config.EVOLUTION_API_URL}/instance/setSettings/{client_instance}"
             payload_settings = {
@@ -127,7 +152,6 @@ def criar_e_configurar_instancia_automatica(phone_number):
         except Exception as set_err:
             logger.warning(f"Não foi possível aplicar definições na instância: {set_err}")
 
-        # 2. Configurar o Webhook
         webhook_target_url = getattr(Config, 'WEBHOOK_URL', None)
         if webhook_target_url:
             url_webhook = f"{Config.EVOLUTION_API_URL}/webhook/set/{client_instance}"
@@ -168,21 +192,14 @@ def gerar_e_enviar_qrcode_central(phone_number):
         
         dados_resposta = response_connect.json()
         if dados_resposta.get("instance", {}).get("state") == "open":
-            send_whatsapp(phone_number, "✅ O seu assistente virtual já se encontra ativo e operational!")
+            send_whatsapp(phone_number, "✅ O seu assistente virtual já se encontra ativo e operacional!")
             return True
             
-        # Extração resiliente da chave base64 (suporta Evolution v1 e v2)
         base64_qrcode = dados_resposta.get("base64") or dados_resposta.get("qrcode", {}).get("base64")
         if not base64_qrcode:
             logger.error(f"Nenhum QR Code retornado para a instância {client_instance_raw}")
             return False
 
-        if "," in base64_qrcode:
-            base64_qrcode = base64_qrcode.split(",")[1]
-
-        central_instance = _get_clean_instance()
-        url_send_media = f"{Config.EVOLUTION_API_URL}/message/sendMedia/{central_instance}"
-        
         caption_text = (
             "🤖 *Aqui está o seu QR Code do Negobot Moz!* 🚀\n\n"
             "1️⃣ Abra o WhatsApp que vai atender os seus clientes.\n"
@@ -191,15 +208,14 @@ def gerar_e_enviar_qrcode_central(phone_number):
             "Se expirar, digite *#qrcode* aqui para gerar um novo!"
         )
         
-        payload_media = {
-            "number": client_instance_raw,
-            "caption": caption_text,
-            "media": base64_qrcode,
-            "mediatype": "image",
-            "fileName": "qrcode.png",
-            "delay": 1200
-        }
-        requests.post(url_send_media, headers=headers, json=payload_media, timeout=45)
+        send_media(
+            to=phone_number,
+            media=base64_qrcode,
+            caption=caption_text,
+            mediatype="image",
+            filename="qrcode.png",
+            instance_name=_get_clean_instance()
+        )
         return True
     except Exception as e:
         logger.error(f"Erro ao gerar QR Code para {phone_number}: {e}")
@@ -380,7 +396,6 @@ def _worker_disparo_privado(tenant_id, instance_name, mensagem):
         else:
             falhas += 1
 
-        # Delay dinâmico Anti-Banimento (entre 3 e 7 segundos)
         time.sleep(random.uniform(3.0, 7.0))
 
     relatorio = (
@@ -388,7 +403,6 @@ def _worker_disparo_privado(tenant_id, instance_name, mensagem):
         f"✅ Enviado com sucesso: *{sucessos}*\n"
         f"❌ Falhas: *{falhas}*"
     )
-    # Envia o relatório final via WhatsApp para a própria instância ou admin
     send_whatsapp(tenant_id, relatorio, instance_name=clean_instance)
 
 
@@ -396,7 +410,6 @@ def enviar_disparo_privado(tenant_id, instance_name, mensagem):
     if not mensagem or not mensagem.strip():
         return "⚠️ Escreva a mensagem que deseja enviar. Exemplo:\n`#disparo Olá! Temos novidades.`"
 
-    # Inicia a execução em background para não bloquear a requisição da API
     thread = threading.Thread(target=_worker_disparo_privado, args=(tenant_id, instance_name, mensagem))
     thread.start()
 
@@ -424,7 +437,6 @@ def _worker_disparo_grupos(tenant_id, instance_name, mensagem):
         else:
             falhas += 1
 
-        # Delay dinâmico para grupos (entre 5 e 10 segundos)
         time.sleep(random.uniform(5.0, 10.0))
 
     relatorio = (
