@@ -11,7 +11,6 @@ from services.media_service import (
     extrair_texto_pdf_url, 
     extrair_texto_excel_url
 )
-from services.client_broadcast_service import processar_disparo_cliente
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +60,7 @@ def process_client_flow(
         if agora is None:
             agora = datetime.now(timezone.utc)
 
-        # 1. TRATAMENTO INTELIGENTE DE PAYLOAD E DETECÇÃO DE GRUPOS
+        # 1. TRATAMENTO DE PAYLOAD E DETECÇÃO DE GRUPOS
         remote_jid = ""
         has_participant = False
 
@@ -157,7 +156,7 @@ def process_client_flow(
                 data_expiracao = data_expiracao.replace(tzinfo=timezone.utc)
             
             if agora > data_expiracao or status_plano in ["expirado", "suspenso", "cancelado"]:
-                logger.warning(f"⚠️ Instância {nome_instancia_atual} com plano expirado. Atendimento automático suspenso.")
+                logger.warning(f"⚠️ Instância {nome_instancia_atual} com plano expirado. Atendimento suspenso.")
                 if is_from_me or clean_user_phone == dados_cliente.get("telefone_proprietario"):
                     send_whatsapp(
                         clean_user_phone,
@@ -166,57 +165,18 @@ def process_client_flow(
                     )
                 return
 
-        # 4. VERIFICAÇÃO E EXECUÇÃO DE COMANDO DE DISPARO (#disparo)
-        if message_text.strip().lower().startswith('#disparo'):
-            # Permite apenas Premium, Ativo e Demonstração
-            if status_plano not in ["premium", "demonstracao", "ativo"]:
-                send_whatsapp(
-                    clean_user_phone,
-                    "❌ *Recurso Indisponível:* A ferramenta de Disparos em Massa está disponível apenas no *Plano Premium*. Faça o upgrade para utilizar esta função.",
-                    instance_name=nome_instancia_atual
-                )
-                return
-
-            # Trava de Segurança para o Teste Grátis: Máximo 2 disparos
-            if status_plano == "demonstracao":
-                disparos_usados = dados_cliente.get("disparos_teste_usados", 0)
-                if disparos_usados >= 2:
-                    send_whatsapp(
-                        clean_user_phone,
-                        "⚠️ *Limite do Teste Atingido:* Durante o período de teste grátis só são permitidos *2 disparos em massa*.\n\nPara continuar a fazer disparos ilimitados para os seus clientes, subscreva o *Plano Premium* (1.500 MT/mês).",
-                        instance_name=nome_instancia_atual
-                    )
-                    return
-
-            # Executa o disparo
-            resposta_disparo = processar_disparo_cliente(
-                tenant_id=nome_instancia_atual,
-                client_phone=clean_user_phone,
-                message_text=message_text,
-                instance_name=nome_instancia_atual
-            )
-
-            # Contabiliza o disparo efetuado se o cliente estiver em demonstração
-            if status_plano == "demonstracao":
-                client_doc_ref.set({
-                    "disparos_teste_usados": firestore.Increment(1)
-                }, merge=True)
-
-            send_whatsapp(clean_user_phone, resposta_disparo, instance_name=nome_instancia_atual)
-            return
-
-        # 5. MENSAGEM DO PRÓPRIO ATENDENTE HUMANO
+        # 4. MENSAGEM DO PRÓPRIO ATENDENTE HUMANO
         if is_from_me:
             conversa_ref.set({"status_atendimento": "humano", "ultima_mensagem_por": "atendente", "ultima_interacao": agora}, merge=True)
             historico_ref.add({"role": "atendente", "text": message_text or "[Documento/Mídia enviada pelo atendente]", "timestamp": agora})
             return
 
-        # 6. REGISTO IMEDIATO DA MENSAGEM DO CLIENTE NO FIRESTORE
+        # 5. REGISTO IMEDIATO DA MENSAGEM DO CLIENTE NO FIRESTORE
         conversa_ref.set({"ultima_interacao": agora, "ultima_mensagem_por": "cliente_final"}, merge=True)
         texto_historico = message_text if message_text else "[Documento Enviado]"
         historico_ref.add({"role": "user", "text": texto_historico, "timestamp": agora})
 
-        # 7. PROCESSAMENTO DE DOCUMENTOS (PDF / EXCEL) PARA BASE DE CONHECIMENTO
+        # 6. PROCESSAMENTO DE DOCUMENTOS (PDF / EXCEL) PARA BASE DE CONHECIMENTO
         if document_message and isinstance(document_message, dict):
             if status_plano == "basico":
                 send_whatsapp(
@@ -267,7 +227,7 @@ def process_client_flow(
                     send_whatsapp(clean_user_phone, erro_msg, instance_name=nome_instancia_atual)
                     return
 
-        # 8. VERIFICAÇÃO DE MODO HUMANO E TIMEOUT
+        # 7. VERIFICAÇÃO DE MODO HUMANO E TIMEOUT
         conversa_doc = conversa_ref.get()
         conversa_dados = conversa_doc.to_dict() if conversa_doc.exists else {}
         status_atendimento = conversa_dados.get("status_atendimento", "bot")
@@ -286,7 +246,7 @@ def process_client_flow(
             else:
                 return
 
-        # 9. PEDIDO EXPLÍCITO DE ATENDIMENTO HUMANO
+        # 8. PEDIDO EXPLÍCITO DE ATENDIMENTO HUMANO
         gatilhos_humano = [
             "falar com atendente", "atendente humano", "falar com humano", 
             "suporte humano", "falar com operador", "quero atendente", 
@@ -306,7 +266,7 @@ def process_client_flow(
             )
             return
 
-        # 10. PREPARAÇÃO DO HISTÓRICO PARA A GROQ
+        # 9. PREPARAÇÃO DO HISTÓRICO PARA A GROQ
         docs_h = historico_ref.order_by('timestamp', direction=firestore.Query.DESCENDING).limit(10).stream()
         lista_m = [d.to_dict() for d in docs_h]
         lista_m.reverse()
@@ -335,7 +295,7 @@ REGRA DE ATENDIMENTO:
 - Responda às dúvidas do cliente com clareza utilizando os dados oficiais fornecidos acima.
 - NUNCA tente transferir o atendimento e NUNCA invente informações que não estejam presentes nos dados da empresa."""
 
-        # 11. RESPOSTA DA GROQ COM FALLBACK DE SEGURANÇA
+        # 10. RESPOSTA DA GROQ COM FALLBACK DE SEGURANÇA
         response_text = None
         try:
             response_text = chamar_groq_rest(contents, system_prompt=sys_instruction)
