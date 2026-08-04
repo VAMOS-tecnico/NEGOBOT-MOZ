@@ -21,6 +21,11 @@ def init_extensions(app=None):
         if raw_config:
             try:
                 cred_dict = json.loads(raw_config.strip())
+                
+                # CORREÇÃO DA CHAVE PRIVADA PARA SUBSTITUIR \n LITERAL POR QUEBRAS DE LINHA
+                if "private_key" in cred_dict:
+                    cred_dict["private_key"] = cred_dict["private_key"].replace('\\n', '\n')
+
                 cred = credentials.Certificate(cred_dict)
                 firebase_admin.initialize_app(cred)
                 logger.info("📦 [SISTEMA] Firebase inicializado com sucesso via variável de ambiente!")
