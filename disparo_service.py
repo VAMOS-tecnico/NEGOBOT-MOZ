@@ -8,12 +8,23 @@ from typing import List, Optional
 from fastapi import FastAPI, BackgroundTasks, HTTPException
 from pydantic import BaseModel
 from firebase_admin import firestore
+from dotenv import load_dotenv
+
+# Importa as extensões da aplicação (instância do Firebase/Firestore)
 import extensions
+
+# ------------------------------------------------------------------------------
+# CARREGAMENTO DE VARIÁVEIS DE AMBIENTE (.env)
+# ------------------------------------------------------------------------------
+load_dotenv()
 
 # ------------------------------------------------------------------------------
 # CONFIGURAÇÃO DE LOGS E APLICAÇÃO
 # ------------------------------------------------------------------------------
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+)
 logger = logging.getLogger("disparo_service")
 
 app = FastAPI(
@@ -23,21 +34,21 @@ app = FastAPI(
 )
 
 # ------------------------------------------------------------------------------
-# VARIÁVEIS DE AMBIENTE E SEGURANÇA (TRATAMENTO DE FALLBACKS)
+# VARIÁVEIS DE AMBIENTE E SEGURANÇA INTEGRADAS
 # ------------------------------------------------------------------------------
-EVOLUTION_API_URL = os.getenv("EVOLUTION_API_URL", "https://evolution.62.238.52.209.sslip.io").rstrip("/")
-API_KEY = os.getenv("EVOLUTION_API_KEY", os.getenv("AUTHENTICATION_API_KEY", "negobot_moz_secret_key_2026"))
+# Captura SERVER_URL ou EVOLUTION_API_URL do .env
+EVOLUTION_API_URL = os.getenv("SERVER_URL", os.getenv("EVOLUTION_API_URL", "https://evolution.62.238.52.209.sslip.io")).rstrip("/")
 
-# Trata a lista de admins de forma segura evitando contaminação por caracteres 'x'
+# Captura a AUTHENTICATION_API_KEY definida no seu .env do Evolution API
+API_KEY = os.getenv("AUTHENTICATION_API_KEY", os.getenv("EVOLUTION_API_KEY", "41AF721F-8171-4B9A-9C5F-F6D684FAF556"))
+
+# Processa e sanitiza a lista de telefones de administradores
 RAW_ADMIN_PHONES = os.getenv("ADMIN_PHONES", "")
-if RAW_ADMIN_PHONES:
-    ADMIN_PHONES = [p.strip() for p in RAW_ADMIN_PHONES.split(",") if p.strip()]
-else:
-    ADMIN_PHONES = ["258840000000"]  # Subsitua pelo número de admin real nas variáveis de ambiente
+ADMIN_PHONES = [re.sub(r'\D', '', p) for p in RAW_ADMIN_PHONES.split(",") if re.sub(r'\D', '', p)]
 
 # Parâmetros Padrão Anti-Bloqueio
-DELAY_MIN_SEGUNDOS = 7      # Tempo mínimo entre envios
-DELAY_MAX_SEGUNDOS = 15     # Tempo máximo entre envios
+DELAY_MIN_SEGUNDOS = 7      # Tempo mínimo entre envios (segundos)
+DELAY_MAX_SEGUNDOS = 15     # Tempo máximo entre envios (segundos)
 LOTE_TAMANHO = 12           # A cada X mensagens, faz uma pausa longa
 PAUSA_LOTE_MIN = 60         # Pausa longa mínima em segundos (1 minuto)
 PAUSA_LOTE_MAX = 120        # Pausa longa máxima em segundos (2 minutos)
@@ -80,17 +91,17 @@ def processar_spintax(texto: str) -> str:
     return texto
 
 # ------------------------------------------------------------------------------
-# CORE DE ENVIO COM COMPATIBILIDADE E LOG DE ERROS
+# CORE DE ENVIO COM DIGITAÇÃO SIMULADA E LOGS
 # ------------------------------------------------------------------------------
 def enviar_mensagem_unica(instance_name: str, number: str, text: str) -> bool:
-    """Envia uma única mensagem com payload compatível com a Evolution API e logs detalhados."""
+    """Envia uma única mensagem simulando tempo de digitação variável humano."""
     endpoint = f"{EVOLUTION_API_URL}/message/sendText/{instance_name}"
     headers = {
         "apikey": API_KEY,
         "Content-Type": "application/json"
     }
     
-    # Simula tempo de digitação humano
+    # Gera um tempo de digitação humano aleatório entre 1.5s e 4.5s
     tempo_digitacao_ms = random.randint(1500, 4500)
     
     payload = {
@@ -99,15 +110,16 @@ def enviar_mensagem_unica(instance_name: str, number: str, text: str) -> bool:
         "delay": tempo_digitacao_ms,
         "linkPreview": False
     }
+    
     try:
         response = requests.post(endpoint, json=payload, headers=headers, timeout=12)
         if response.status_code in [200, 201]:
             return True
         else:
-            logger.error(f"❌ Erro Evolution API para {number} | Status: {response.status_code} | Resposta: {response.text}")
+            logger.error(f"❌ Erro Evolution API ({response.status_code}) para {number}: {response.text}")
             return False
     except Exception as e:
-        logger.error(f"❌ Erro de conexão com Evolution API para {number}: {e}")
+        logger.error(f"❌ Exceção na conexão com a Evolution API para {number}: {e}")
         return False
 
 # ------------------------------------------------------------------------------
@@ -168,13 +180,13 @@ def processar_disparo_em_massa(instance_name: str, numeros: List[str], mensagem_
 # PROCESSADOR DE REGRAS SAAS (#disparo)
 # ------------------------------------------------------------------------------
 def processar_disparo_cliente_saas(tenant_id: str, client_phone: str, message_text: str, background_tasks: BackgroundTasks) -> str:
-    """Valida permissões do plano SaaS e inicia a fila de disparo protegido."""
+    """Valida permissões do plano SaaS no Firestore e inicia a fila de disparo protegido."""
     try:
         client_doc_ref = extensions.db.collection('clientes_bot').document(tenant_id)
         client_doc = client_doc_ref.get()
     except Exception as e:
-        logger.error(f"Erro ao conectar com Firestore em extensions.db: {e}")
-        return "❌ *Erro de conexão com o banco de dados.*"
+        logger.error(f"Erro de acesso ao Firestore (extensions.db): {e}")
+        return "❌ *Erro interno:* Falha de conexão com a base de dados."
 
     if not client_doc.exists:
         return "❌ *Conta não encontrada.* Registe a sua empresa na plataforma."
@@ -245,12 +257,9 @@ def processar_disparo_cliente_saas(tenant_id: str, client_phone: str, message_te
 # ------------------------------------------------------------------------------
 def processar_mensagem_admin(admin_phone: str, text_message: str, instance_name: str, background_tasks: BackgroundTasks) -> Optional[str]:
     clean_admin = re.sub(r'\D', '', str(admin_phone))
-    
-    # Limpa apenas caracteres numéricos dos números admin configurados
-    admin_list_clean = [re.sub(r'\D', '', p) for p in ADMIN_PHONES if p and re.sub(r'\D', '', p)]
 
-    if clean_admin not in admin_list_clean:
-        logger.warning(f"Tentativa não autorizada do número: {clean_admin}. Admins ativos: {admin_list_clean}")
+    if clean_admin not in ADMIN_PHONES:
+        logger.warning(f"Tentativa de acesso não autorizada: {clean_admin}. Admins válidos: {ADMIN_PHONES}")
         return None
 
     msg_clean = text_message.strip()
@@ -298,7 +307,12 @@ def processar_mensagem_admin(admin_phone: str, text_message: str, instance_name:
 # ------------------------------------------------------------------------------
 @app.get("/")
 def health_check():
-    return {"status": "online", "modulo": "Disparo em Massa Protegido", "versao": "2026.2"}
+    return {
+        "status": "online",
+        "modulo": "Disparo em Massa Protegido - Negobot Moz",
+        "evolution_url": EVOLUTION_API_URL,
+        "versao": "2026.2"
+    }
 
 @app.post("/api/v1/disparo-em-massa")
 def disparar_mensagens_json(dados: DisparoRequest, background_tasks: BackgroundTasks):
