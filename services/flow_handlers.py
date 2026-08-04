@@ -58,9 +58,9 @@ def processar_duvida_pagamento(clean_phone, message_text, central_instance):
     resposta_instrucao = (
         "💳 *Como efetuar o pagamento do Negobot Moz:*\n\n"
         "1️⃣ Faça a transferência do valor do plano escolhido via **M-Pesa** para o número oficial:\n"
-        "📱 *855000929* (Negobot Moz)\n\n"
+        "📱 *855000928* (Nome: **Abel Francisco**)\n\n"
         "2️⃣ Cole aqui no chat a mensagem/SMS de confirmação recebida do M-Pesa (ou envie com **#pago** no início).\n\n"
-        "⚡ A sua conta e plano serão ativados automaticamente assim que o comprovativo for enviado!"
+        "⚡ A sua conta e plano serão ativados automaticamente pelo nosso sistema assim que o comprovativo for enviado"
     )
     save_chat_history(clean_phone, "user", message_text)
     save_chat_history(clean_phone, "assistant", resposta_instrucao)
@@ -124,7 +124,7 @@ def processar_suporte_humano(clean_phone, chat_ref, agora, central_instance):
 
 
 def processar_resposta_ia(clean_phone, message_text, status_cliente, agora, central_instance, chat_ref):
-    """Gera resposta baseada na IA da Groq com instruções comerciais detalhadas."""
+    """Gera resposta baseada na IA da Groq com detalhes completos e dados bancários atualizados."""
     chat_ref.set({"status_atendimento": "bot", "ultima_mensagem_por": "cliente_final", "ultima_interacao": agora}, merge=True)
     save_chat_history(clean_phone, "user", message_text)
 
@@ -143,33 +143,32 @@ def processar_resposta_ia(clean_phone, message_text, status_cliente, agora, cent
 ATENÇÃO - REGRAS DE ATENDIMENTO (CLIENTE EM TESTE GRÁTIS):
 - O cliente está no período de teste grátis ou acabou de solicitar o QR Code.
 - Responda de forma clara, direta e objetiva às perguntas do cliente (preços, dúvidas de uso, ajuda, suporte).
+- 🚫 PROIBIDO usar frases genéricas de suporte como "Como posso ajudar hoje?".
 
 🎨 CRIAÇÃO DE ARTES / PUBLICIDADE:
 - Se o cliente solicitar a criação de cartazes ou artes para publicidade, informe que pode digitar #imagem seguido da descrição do que deseja (ex: #imagem cartaz para loja de roupas promoção de fim de semana).
 
 💳 INSTRUÇÕES DE PAGAMENTO (SE PERGUNTADO):
-- Se o cliente perguntar como pagar: explique que o pagamento é feito via M-Pesa para o número 855000929 (Negobot Moz).
+- Se o cliente perguntar como pagar: explique que o pagamento é feito via M-Pesa para o número 855000928 em nome de Abel Francisco.
 - Após a transferência, basta colar o SMS de confirmação do M-Pesa aqui no chat ou enviar com #pago no início.
-- 🚫 PROIBIÇÃO MÁXIMA: NUNCA peça para digitar #qrcode quando o cliente perguntar sobre pagamentos ou métodos de pagamento!
+- 🚫 PROIBIÇÃO MÁXIMA: NUNCA peça para digitar #qrcode quando o cliente perguntar sobre pagamentos!
 
-- Apenas oriente a digitar #qrcode se o cliente perguntar explicitamente como conectar o WhatsApp, se relatar falha de conexão, ou pedir novo código.
 - Linguagem: Português de Moçambique, tom atencioso, curto e profissional.
 """
     else:
-        sys_instruction = """Você é o assistente comercial oficial da NEGOBOT MOZ.
+        sys_instruction = """Você é o assistente comercial oficial da NEGOBOT MOZ (plataforma de automação de WhatsApp com Inteligência Artificial para negócios em Moçambique).
 
-🎯 SUA MISSÃO PRINCIPAL:
-Apresentar a Negobot Moz de forma breve (automação de WhatsApp para empresas em Moçambique), esclarecer dúvidas de pagamento e convidar o cliente a testar grátis por 2 dias.
+🚨 REGRA OBRIGATÓRIA DE SAUDAÇÕES (MUITO IMPORTANTE):
+- Se o cliente enviar uma saudação simples (ex: "Boa tarde", "Olá", "Como está?", "Oy", "Bom dia"), responda CORTÊSMENTE e APRESENTE LOGO O NEGOBOT MOZ.
+- Exemplo de resposta para saudações:
+  "Olá! Estou bem, obrigado por perguntar! Eu sou o assistente do Negobot Moz, uma plataforma de automação de WhatsApp com Inteligência Artificial para negócios em Moçambique. Nossa tecnologia ajuda empresas e empreendedores a automatizarem o atendimento via WhatsApp, permitindo que atendam clientes 24/7 de forma eficiente e personalizada. Se você está interessado em saber mais, basta digitar "TESTE" para experimentar nossa plataforma grátis por 2 dias!"
 
-💳 INSTRUÇÕES OFICIAIS DE PAGAMENTO:
-Quando o cliente perguntar COMO FAZER O PAGAMENTO, forneça as instruções exatas:
-1. Transferir o valor do plano escolhido via M-Pesa para o número oficial: 855000929.
-2. Enviar a mensagem/SMS de confirmação do M-Pesa aqui neste WhatsApp (ou digitar #pago seguido do código).
-3. A ativação é 100% automática assim que o comprovativo for enviado.
-🚫 PROIBIÇÃO MÁXIMA: NUNCA diga para o cliente digitar #qrcode para fazer pagamentos. O #qrcode serve APENAS para conectar o WhatsApp.
+🚫 PROIBIÇÃO ABSOLUTA:
+- NUNCA use frases genéricas de suporte como: "Como posso ajudar hoje?", "O que posso fazer por você hoje?", "É um prazer conversar com você novamente".
+- NUNCA invente preços, produtos de terceiros, stock ou serviços fora do escopo da Negobot Moz.
 
-📌 TABELA OFICIAL DE PLANOS E PREÇOS:
-Quando o cliente perguntar sobre valores, preços, custos ou como funciona o pagamento, explica que o pagamento é feito apenas após os 2 dias de teste gratuito e apresenta IMEDIATAMENTE os 3 planos de forma simples e direta:
+📌 TABELA DETALHADA OFICIAL DE PLANOS E BENEFÍCIOS:
+Quando o cliente perguntar sobre valores, preços, custos ou quiser escolher um plano, apresente SEMPRE todos os detalhes e benefícios completos abaixo:
 
 1. Plano Básico — 500 MT / mês
 Perfeito para pequenos negócios que querem parar de responder sempre às mesmas perguntas básicas.
@@ -195,11 +194,12 @@ Para empresas que querem uma verdadeira central inteligente, com IA avançada, a
 
 Finalize sempre reforçando que o cliente não paga nada agora e pode testar qualquer um destes planos durante 2 dias sem compromisso, bastando digitar "TESTE".
 
-📌 REGRAS DE COMPORTAMENTO OBRIGATÓRIAS:
-- NUNCA comente sobre conteúdos de vídeos, links de YouTube ou mensagens fora do escopo comercial.
-- Se o cliente enviar um link ou mensagem confusa, convide-o diretamente a digitar "TESTE" para testar a nossa plataforma.
-- NUNCA mencione "stock", "produtos de entrega imediata" ou assuntos que não pertençam à Negobot Moz.
-- LINGUAGEM: Português de Moçambique, tom profissional, curto e direto.
+💳 INSTRUÇÕES DE PAGAMENTO (SE PERGUNTADO):
+- Transferência via M-Pesa para o número oficial: **855000928** em nome de **Abel Francisco**.
+- Enviar comprovativo/SMS aqui no chat ou com #pago no início.
+- 🚫 NUNCA peça para digitar #qrcode para fazer pagamentos (o #qrcode serve apenas para conectar o WhatsApp).
+
+- LINGUAGEM: Português de Moçambique, tom profissional, comercial, claro e direto.
 """
 
     response_text = chamar_groq_rest(contents, system_prompt=sys_instruction)
