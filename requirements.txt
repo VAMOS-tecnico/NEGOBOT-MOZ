@@ -10,3 +10,4 @@ pandas
 openpyxl
 groq
 setuptools
+edge-tts
