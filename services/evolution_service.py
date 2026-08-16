@@ -156,17 +156,19 @@ def criar_e_configurar_instancia_automatica(phone_number):
         if webhook_target_url:
             url_webhook = f"{Config.EVOLUTION_API_URL}/webhook/set/{client_instance}"
             payload_webhook = {
-                "url": webhook_target_url,
-                "enabled": True,
-                "byEvents": False,
-                "base64": False,
-                "webhookByEvents": False,
-                "events": [
-                    "MESSAGES_UPSERT",
-                    "CHATS_UPSERT",
-                    "CONNECTION_UPDATE"
-                ],
-                "groupsIgnore": True
+                "webhook": {
+                    "url": webhook_target_url,
+                    "enabled": True,
+                    "byEvents": False,
+                    "base64": False,
+                    "webhookByEvents": False,
+                    "events": [
+                        "MESSAGES_UPSERT",
+                        "CHATS_UPSERT",
+                        "CONNECTION_UPDATE"
+                    ],
+                    "groupsIgnore": True
+                }
             }
             res_wh = requests.post(url_webhook, headers=headers, json=payload_webhook, timeout=30)
             logger.info(f"Webhook configurado para {client_instance}: {res_wh.status_code}")
