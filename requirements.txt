@@ -11,3 +11,4 @@ openpyxl
 groq
 setuptools
 edge-tts
+redis==5.0.8

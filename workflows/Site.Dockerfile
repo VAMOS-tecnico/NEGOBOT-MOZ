@@ -2,14 +2,9 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends gcc \
-    && rm -rf /var/lib/apt/lists/*
+RUN pip install --no-cache-dir Flask gunicorn
 
-COPY requirements.txt ./requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
-
-COPY . ./
+COPY index.html platform.html site_server.py ./
 
 RUN python -m py_compile site_server.py
 
