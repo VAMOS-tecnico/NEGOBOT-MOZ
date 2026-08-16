@@ -56,6 +56,8 @@ def extrair_texto_mensagem(data_payload):
 @webhook_bp.route('/webhook', methods=['POST'])
 def universal_webhook():
     data = request.json
+    if data:
+        logger.info("Webhook recebido: event=%s instance=%s", data.get("event"), data.get("instance"))
     if not data:
         return 'OK', 200
 
