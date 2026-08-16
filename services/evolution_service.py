@@ -1,4 +1,7 @@
 import re
+import base64
+import os
+import tempfile
 import time
 import random
 import threading
@@ -83,6 +86,64 @@ def send_whatsapp(to, text, instance_name=None):
     except Exception as e:
         logger.error(f"ERRO ao enviar mensagem via Evolution API ({url}): {e}")
         return False
+
+
+def transcrever_audio_mensagem(data_payload, instance_name=None):
+    """Obtém um áudio recebido pela Evolution e transcreve-o com o Whisper da Groq."""
+    try:
+        from services.groq_service import transcrever_audio_groq
+
+        if not isinstance(data_payload, dict):
+            return ""
+        message = data_payload.get("message") or {}
+        audio = message.get("audioMessage") or {}
+        if not isinstance(audio, dict):
+            return ""
+
+        media_bytes = b""
+        media_url = audio.get("url") or audio.get("mediaUrl")
+        headers = {"apikey": Config.EVOLUTION_API_KEY, "Content-Type": "application/json"}
+        clean_instance = _get_clean_instance(instance_name)
+
+        if media_url:
+            response = requests.get(str(media_url), headers=headers, timeout=45)
+            response.raise_for_status()
+            media_bytes = response.content
+        else:
+            message_key = data_payload.get("key") or {}
+            request_payload = {
+                "message": {
+                    "key": message_key,
+                    "message": message
+                },
+                "convertToMp4": False
+            }
+            endpoint = f"{Config.EVOLUTION_API_URL}/chat/getBase64FromMediaMessage/{clean_instance}"
+            response = requests.post(endpoint, headers=headers, json=request_payload, timeout=45)
+            response.raise_for_status()
+            result = response.json() or {}
+            encoded = result.get("base64") or result.get("data", {}).get("base64")
+            if not encoded:
+                logger.error("A Evolution não devolveu base64 para o áudio recebido.")
+                return ""
+            if "," in str(encoded):
+                encoded = str(encoded).split(",", 1)[1]
+            media_bytes = base64.b64decode(encoded, validate=False)
+
+        if not media_bytes or len(media_bytes) > 20 * 1024 * 1024:
+            logger.error("Áudio inválido ou acima do limite de 20 MB.")
+            return ""
+
+        suffix = ".ogg" if "ogg" in str(audio.get("mimetype", "")) else ".bin"
+        with tempfile.NamedTemporaryFile(prefix="negobot-audio-", suffix=suffix, delete=True) as temporary:
+            temporary.write(media_bytes)
+            temporary.flush()
+            with open(temporary.name, "rb") as audio_file:
+                transcript = transcrever_audio_groq(audio_file)
+        return str(transcript or "").strip()
+    except Exception as exc:
+        logger.error("Erro ao obter/transcrever áudio da Evolution: %s", exc)
+        return ""
 
 
 def send_media(to, media, caption="", mediatype="image", filename="media.png", instance_name=None):

@@ -3,7 +3,7 @@ import logging
 from datetime import datetime, timezone
 from flask import Blueprint, request
 from config import Config
-from services.evolution_service import notificar_erro_admin
+from services.evolution_service import notificar_erro_admin, send_whatsapp, transcrever_audio_mensagem
 from workflows.central_flow import process_central_flow
 from workflows.client_flow import process_client_flow
 
@@ -103,7 +103,6 @@ def processar_webhook_background(data):
 
         # Extração de variáveis cruciais
         message_text = extrair_texto_mensagem(data_payload)
-        msg_clean = message_text.strip().lower()
         agora = datetime.now(timezone.utc)
 
         # 🎯 CAPTURA ROBUSTA DA INSTÂNCIA (Evolution API v1 e v2)
@@ -119,6 +118,22 @@ def processar_webhook_background(data):
             instance_name = str(instance_name).split('@')[0]
 
         phone_number = remote_jid or key.get('participant') or key.get('id') or ''
+
+        # Áudio: obter a mídia da Evolution e transcrever com Whisper/Groq antes do fluxo normal.
+        if isinstance(data_payload.get('message'), dict) and 'audioMessage' in data_payload.get('message', {}):
+            transcript = transcrever_audio_mensagem(data_payload, instance_name=instance_name)
+            if transcript:
+                message_text = transcript
+                logger.warning("Áudio transcrito com sucesso para o fluxo do bot.")
+            else:
+                send_whatsapp(
+                    phone_number,
+                    "🎙️ Recebi a sua mensagem de voz, mas não consegui transcrevê-la neste momento. Por favor, tente enviar novamente ou escreva a mensagem.",
+                    instance_name=instance_name
+                )
+                return
+
+        msg_clean = message_text.strip().lower()
 
         # Anexos se existirem
         message_obj = data_payload.get('message', {}) if isinstance(data_payload, dict) else {}
