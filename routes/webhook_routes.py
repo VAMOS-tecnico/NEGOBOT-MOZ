@@ -57,7 +57,7 @@ def extrair_texto_mensagem(data_payload):
 def universal_webhook():
     data = request.json
     if data:
-        logger.info("Webhook recebido: event=%s instance=%s", data.get("event"), data.get("instance"))
+        logger.warning("Webhook recebido: event=%s instance=%s", data.get("event"), data.get("instance"))
     if not data:
         return 'OK', 200
 
