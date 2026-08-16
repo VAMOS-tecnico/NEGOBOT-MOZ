@@ -119,10 +119,7 @@ def transcrever_audio_mensagem(data_payload, instance_name=None):
         else:
             message_key = data_payload.get("key") or {}
             request_payload = {
-                "message": {
-                    "key": message_key,
-                    "message": message
-                },
+                "message": data_payload,
                 "convertToMp4": False
             }
             endpoint = f"{Config.EVOLUTION_API_URL}/chat/getBase64FromMediaMessage/{clean_instance}"
