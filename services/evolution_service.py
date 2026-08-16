@@ -141,6 +141,7 @@ def transcrever_audio_mensagem(data_payload, instance_name=None):
             logger.error("Áudio inválido ou acima do limite de 20 MB.")
             return ""
 
+        logger.warning("Áudio preparado para Whisper: bytes=%s magic=%s mimetype=%s", len(media_bytes), media_bytes[:12].hex(), audio.get("mimetype", "unknown"))
         suffix = ".ogg" if "ogg" in str(audio.get("mimetype", "")) else ".bin"
         with tempfile.NamedTemporaryFile(prefix="negobot-audio-", suffix=suffix, delete=True) as temporary:
             temporary.write(media_bytes)
