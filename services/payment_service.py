@@ -1,5 +1,5 @@
-import re
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 import extensions
 
@@ -101,6 +101,58 @@ def extrair_codigo_mpesa(texto):
     return None
 
 
+def _valor_autopay(raw_value):
+    text = str(raw_value or "").strip().replace(" MT", "").replace("MT", "")
+    if "," in text and "." in text:
+        if text.rfind(",") > text.rfind("."):
+            text = text.replace(".", "").replace(",", ".")
+        else:
+            text = text.replace(",", "")
+    elif "," in text:
+        text = text.replace(",", ".")
+    try:
+        return float(text)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _buscar_registo_autopay(tx_id):
+    """Lê o contrato real do AutoPay e normaliza-o para o motor de planos."""
+    if not extensions.db:
+        return None, None
+    candidates = [("transacoes_sucesso", "id"), ("pagamentos_mpesa", "transaction_id")]
+    for collection_name, id_field in candidates:
+        direct_ref = extensions.db.collection(collection_name).document(tx_id)
+        direct_doc = direct_ref.get()
+        if direct_doc.exists:
+            data = direct_doc.to_dict() or {}
+            return direct_ref, {
+                "transaction_id": str(data.get("id") or data.get("transaction_id") or direct_doc.id).upper(),
+                "valor": _valor_autopay(data.get("amount", data.get("valor"))),
+                "remetente_nome": data.get("sender_name", data.get("remetente_nome", "Cliente")),
+                "remetente_telefone": data.get("sender_phone", data.get("remetente_telefone", "")),
+                "status": str(data.get("status", "pago")).lower(),
+                "usado": bool(data.get("usado", False)),
+                "source_collection": collection_name,
+                "raw": data,
+            }
+        matches = extensions.db.collection(collection_name).where(id_field, "==", tx_id).limit(1).get()
+        if matches:
+            matched_doc = matches[0]
+            data = matched_doc.to_dict() or {}
+            return matched_doc.reference, {
+                "transaction_id": str(data.get("id") or data.get("transaction_id") or tx_id).upper(),
+                "valor": _valor_autopay(data.get("amount", data.get("valor"))),
+                "remetente_nome": data.get("sender_name", data.get("remetente_nome", "Cliente")),
+                "remetente_telefone": data.get("sender_phone", data.get("remetente_telefone", "")),
+                "status": str(data.get("status", "pago")).lower(),
+                "usado": bool(data.get("usado", False)),
+                "source_collection": collection_name,
+                "raw": data,
+            }
+    return None, None
+
+
 def validar_e_ativar_pagamento_mpesa(tenant_id, client_phone, message_text):
     """
     Valida a transação M-Pesa capturada pelo Auto Pay e ativa a conta no plano correspondente.
@@ -129,35 +181,38 @@ def validar_e_ativar_pagamento_mpesa(tenant_id, client_phone, message_text):
                     f"Os pagamentos do Negobot Moz devem ser feitos para o número **855000929** (Abel Francisco)."
                 )
 
-        # 3. Buscar no Firestore o registo inserido pelo Negobot Auto Pay
-        pagamento_ref = extensions.db.collection('pagamentos_mpesa').document(tx_id)
-        pagamento_doc = pagamento_ref.get()
-
-        if not pagamento_doc.exists:
-            docs = extensions.db.collection('pagamentos_mpesa')\
-                .where('transaction_id', '==', tx_id)\
-                .limit(1).get()
-            if docs:
-                pagamento_doc = docs[0]
-                pagamento_ref = pagamento_doc.reference
-
-        if not pagamento_doc.exists:
+        # 3. Buscar no Firestore o registo real inserido pelo AutoPay Android.
+        pagamento_ref, dados_pago = _buscar_registo_autopay(tx_id)
+        if pagamento_ref is None or dados_pago is None:
             return (
                 f"⌛ *A aguardar confirmação do sistema...* (`{tx_id}`)\n\n"
-                "O seu pagamento ainda não foi sincronizado pelo sistema automático.\n"
+                "O seu pagamento ainda não foi sincronizado pelo AutoPay.\n"
                 "Por favor, aguarde **30 segundos** e envie novamente o código M-Pesa."
             )
 
-        dados_pago = pagamento_doc.to_dict() or {}
+        if dados_pago.get("source_collection") == "transacoes_sucesso" and dados_pago.get("status") not in {"pago", "paid", "confirmado", "confirmed"}:
+            return (
+                f"⌛ *A aguardar confirmação do sistema...* (`{tx_id}`)\n\n"
+                "O AutoPay ainda não marcou esta transação como paga."
+            )
 
-        # 4. Anti-fraude: impede reaproveitamento do comprovativo
+        # 4. Anti-fraude: impede reaproveitamento do comprovativo.
         if dados_pago.get('usado') is True:
             return (
                 f"⚠️ *Código Já Utilizado!*\n\n"
                 f"A transação M-Pesa `{tx_id}` já foi resgatada anteriormente."
             )
 
-        # 5. Mapear valor pago para o plano correto
+        # 5. Confirmar que o comprovativo pertence ao número que pede a ativação.
+        sender_phone = re.sub(r"\D", "", str(dados_pago.get("remetente_telefone") or ""))
+        requested_phone = re.sub(r"\D", "", str(client_phone or ""))
+        if sender_phone and requested_phone and sender_phone[-9:] != requested_phone[-9:]:
+            return (
+                "⚠️ *Número do pagador não coincide.*\n\n"
+                "O AutoPay recebeu a transferência de outro número. Entra com o número que efetuou o pagamento ou contacta o administrador."
+            )
+
+        # 6. Mapear valor pago para o plano correto
         valor_pago = float(dados_pago.get('valor', 0))
         plano = identificar_plano_por_valor(valor_pago)
 

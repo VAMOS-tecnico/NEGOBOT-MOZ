@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="pt-PT">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Assistente | NEGOBOT-MOZ</title>
+  <style>
+    :root{--ink:#07111f;--panel:#10243b;--line:rgba(255,255,255,.12);--text:#edf7f5;--muted:#91a9ba;--cyan:#57e7d4;--lime:#c8f26b;--coral:#ff9d84}*{box-sizing:border-box}body{margin:0;min-height:100vh;color:var(--text);background:radial-gradient(circle at 75% 8%,#163a50 0,transparent 35%),var(--ink);font:15px Inter,system-ui,sans-serif}.wrap{width:min(980px,calc(100% - 32px));margin:auto;padding:34px 0 50px}.top{display:flex;justify-content:space-between;align-items:center;gap:18px;margin-bottom:30px}.brand{display:flex;align-items:center;gap:10px;font-weight:800}.mark{width:31px;height:31px;display:grid;place-items:center;border-radius:10px;color:var(--ink);background:var(--cyan)}.mark:after{content:"";width:11px;height:11px;border:3px solid var(--ink);border-top-color:transparent;border-radius:50%;transform:rotate(-35deg)}.links{display:flex;gap:10px;flex-wrap:wrap}.links a{padding:10px 13px;border:1px solid var(--line);border-radius:9px;color:var(--text);text-decoration:none}.links a.primary{color:var(--ink);border-color:var(--cyan);background:var(--cyan);font-weight:800}.hero{text-align:center;margin:46px auto 28px;max-width:700px}.kicker{color:var(--cyan);font-size:11px;font-weight:800;letter-spacing:.16em;text-transform:uppercase}.hero h1{margin:12px 0;font-size:clamp(34px,6vw,62px);letter-spacing:-.06em}.hero p{color:var(--muted);line-height:1.6}.chat{max-width:720px;margin:28px auto;padding:18px;border:1px solid var(--line);border-radius:18px;background:rgba(16,36,59,.82)}#messages{display:grid;gap:12px;min-height:180px;max-height:430px;overflow:auto;padding:4px}.msg{max-width:84%;padding:13px 15px;border-radius:13px;color:#c6d8e1;background:#1b3952;line-height:1.5;white-space:pre-wrap}.msg.me{justify-self:end;color:var(--ink);background:var(--cyan)}.form{display:flex;gap:10px;margin-top:16px}.form textarea{min-height:50px;flex:1;resize:vertical;padding:13px;border:1px solid var(--line);border-radius:10px;color:var(--text);background:rgba(0,0,0,.16)}button{padding:12px 17px;border:0;border-radius:10px;color:var(--ink);background:var(--lime);font-weight:800;cursor:pointer}.note{min-height:20px;color:var(--coral);font-size:13px;margin-top:10px}.footer{text-align:center;color:#668195;font-size:12px;margin-top:28px}@media(max-width:620px){.top{align-items:flex-start;flex-direction:column}.form{align-items:stretch;flex-direction:column}}
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <header class="top"><a class="brand" href="/"><span class="mark"></span>NEGOBOT-MOZ</a><nav class="links"><a href="/">Site</a><a href="/#planos">Ver planos</a><a href="/falar-whatsapp" class="primary">Falar no WhatsApp ↗</a></nav></header>
+    <section class="hero"><div class="kicker">Assistente comercial</div><h1>Descobre o plano certo para o teu negócio.</h1><p>Pergunta sobre funcionalidades, preços, demonstração, pagamento ou ligação do WhatsApp. Se preferires, continua a conversa diretamente pelo assistente WhatsApp.</p></section>
+    <section class="chat"><div id="messages"><div class="msg">Olá. Sou o assistente do NEGOBOT-MOZ. Posso explicar os planos e ajudar-te a começar a demonstração de 2 dias.</div></div><form class="form" id="chat-form"><textarea id="message" required maxlength="1200" placeholder="Ex.: Qual é o plano indicado para uma loja com muitos clientes?"></textarea><button>Enviar</button></form><div class="note" id="note"></div></section>
+    <div class="footer">Os pagamentos são validados pelo AutoPay antes de qualquer ativação. © 2026 NEGOBOT-MOZ</div>
+  </main>
+  <script>
+    const messages=document.getElementById('messages'),form=document.getElementById('chat-form'),input=document.getElementById('message'),note=document.getElementById('note');
+    function add(text,me=false){const el=document.createElement('div');el.className='msg'+(me?' me':'');el.textContent=text;messages.appendChild(el);messages.scrollTop=messages.scrollHeight;return el}
+    form.addEventListener('submit',async e=>{e.preventDefault();const text=input.value.trim();if(!text)return;add(text,true);input.value='';note.textContent='A preparar resposta…';form.querySelector('button').disabled=true;try{const res=await fetch('/api/platform/public/assistant/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,source:'platform'})});const data=await res.json();if(!res.ok)throw new Error(data.error||'Não foi possível responder.');add(data.answer||'Posso ajudar-te a escolher um plano.');note.textContent='';}catch(error){note.textContent=error.message}finally{form.querySelector('button').disabled=false}});
+  </script>
+</body>
+</html>

@@ -1,0 +1,28 @@
+# Python generated files
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+
+# Local environments and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+firebase-adminsdk*.json
+service-account*.json
+
+# Frontend dependencies and builds
+node_modules/
+dist/
+.vite/
+
+# Local IDE/OS files
+.vscode/
+.idea/
+.DS_Store
+
+# Local logs and temporary files
+*.log
+*.tmp

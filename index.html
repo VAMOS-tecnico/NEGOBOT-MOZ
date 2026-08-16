@@ -64,7 +64,7 @@
     .section-head h2 { max-width:600px; margin:0; font-size:clamp(36px,4.5vw,60px); line-height:1; }
     .section-head p { max-width:360px; margin:0; color:#71899c; line-height:1.6; }
     .section-dark .section-head p { color:#9aafbd; }
-    .features { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; }
+    .features { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; }.public-plans{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}.public-plan{padding:28px;border:1px solid #dce7e8;border-radius:16px;background:#fff}.public-plan.featured{border:2px solid var(--cyan);box-shadow:0 18px 40px rgba(22,60,74,.12)}.public-plan h3{margin:0 0 8px;font-size:25px}.public-price{margin:14px 0;font:700 32px "Space Grotesk",sans-serif;color:#12616b}.public-plan ul{margin:0;padding-left:18px;color:#6e8593;font-size:14px;line-height:1.7}.public-plan .button{margin-top:22px}@media (max-width:850px){.public-plans{grid-template-columns:1fr}}
     .feature { min-height:270px; padding:27px; border:1px solid #dce7e8; border-radius:16px; background:#fff; transition:transform .22s var(--ease),box-shadow .22s; }
     .feature:hover { transform:translateY(-7px); box-shadow:0 20px 40px rgba(22,60,74,.1); }
     .feature-number { color:#9db3be; font-family:"Space Grotesk"; font-size:13px; }
@@ -100,8 +100,8 @@
   <header class="nav">
     <div class="container nav-inner">
       <a class="brand" href="#top" aria-label="NEGOBOT-MOZ início"><span class="brand-mark" aria-hidden="true"></span>NEGOBOT-MOZ</a>
-      <nav class="nav-links" aria-label="Navegação principal"><a href="#capacidades">Capacidades</a><a href="#como-funciona">Como funciona</a><a href="#contacto">Contacto</a></nav>
-      <a class="nav-cta" href="/plataforma">Entrar na plataforma</a>
+      <nav class="nav-links" aria-label="Navegação principal"><a href="#capacidades">Capacidades</a><a href="#planos">Planos</a><a href="#como-funciona">Como funciona</a><a href="#contacto">Contacto</a></nav>
+      <a class="nav-cta" href="/assistente">Falar com assistente</a>
     </div>
   </header>
 
@@ -112,7 +112,7 @@
           <p class="eyebrow">Inteligência para atendimento</p>
           <h1>Mais respostas.<br><em>Mais negócio.</em></h1>
           <p class="hero-copy">O NEGOBOT-MOZ transforma conversas no WhatsApp em atendimento consistente, suporte mais rápido e novas oportunidades para empresas em Moçambique.</p>
-          <div class="actions"><a class="button button-primary" href="#contacto">Começar conversa <span aria-hidden="true">↗</span></a><a class="button button-ghost" href="#capacidades">Conhecer a plataforma</a></div>
+          <div class="actions"><a class="button button-primary" href="/falar-whatsapp">Falar com assistente WhatsApp <span aria-hidden="true">↗</span></a><a class="button button-ghost" href="/assistente">Falar com assistente na plataforma</a></div>
           <p class="hero-note">Atendimento automatizado com IA, Evolution API e Firebase Firestore.</p>
         </div>
         <div class="signal-card" aria-label="Exemplo de conversa com o NEGOBOT-MOZ">
@@ -141,6 +141,8 @@
       </div>
     </section>
 
+    <section class="section" id="planos"><div class="container"><div class="section-head"><h2>Um plano para cada fase do teu negócio.</h2><p>Começa com 2 dias de demonstração e escolhe o nível de automação que combina com a tua operação.</p></div><div class="public-plans"><article class="public-plan"><p class="eyebrow" style="color:#12616b">BÁSICO</p><h3>Plano Básico</h3><div class="public-price">500 MT / mês</div><ul><li>Até 1.500 conversas</li><li>FAQ, horário e catálogo em texto</li><li>1 número de WhatsApp</li><li>Suporte básico até 24h</li></ul><a class="button button-ghost" style="color:var(--ink);border-color:#c9d9dc" href="/assistente">Escolher Básico</a></article><article class="public-plan"><p class="eyebrow" style="color:#12616b">CRESCIMENTO</p><h3>Plano Médio</h3><div class="public-price">1.000 MT / mês</div><ul><li>Conversas ilimitadas</li><li>Fotos e leitura básica de Excel</li><li>Menu interativo e relatórios</li><li>Suporte prioritário até 12h</li></ul><a class="button button-ghost" style="color:var(--ink);border-color:#c9d9dc" href="/assistente">Escolher Médio</a></article><article class="public-plan featured"><p class="eyebrow" style="color:#12616b">MAIS COMPLETO</p><h3>Plano Premium</h3><div class="public-price">1.500 MT / mês</div><ul><li>IA avançada e documentos</li><li>Áudio, PDFs e artes publicitárias</li><li>Disparos e campanhas em massa</li><li>Suporte dedicado</li></ul><a class="button button-primary" href="/assistente">Escolher Premium</a></article></div></div></section>
+
     <section class="section section-dark" id="como-funciona">
       <div class="container workflow">
         <div><p class="eyebrow">Como funciona</p><h2>A conversa certa, no momento certo.</h2><p class="workflow-copy">O ecossistema modular do NEGOBOT-MOZ liga WhatsApp, IA, automações e persistência de dados para criar experiências de atendimento mais simples.</p></div>
@@ -152,7 +154,7 @@
       </div>
     </section>
 
-    <section class="cta" id="contacto"><div class="container cta-inner"><h2>Pronto para atender melhor?</h2><a class="button button-dark" href="https://wa.me/258" target="_blank" rel="noopener">Falar pelo WhatsApp <span aria-hidden="true">↗</span></a></div></section>
+    <section class="cta" id="contacto"><div class="container cta-inner"><h2>Pronto para atender melhor?</h2><div class="actions"><a class="button button-dark" href="/falar-whatsapp">Falar pelo WhatsApp <span aria-hidden="true">↗</span></a><a class="button button-ghost" href="/assistente">Falar na plataforma</a></div></div></section>
   </main>
 
   <footer class="footer"><div class="container footer-inner"><a class="brand" href="#top"><span class="brand-mark" aria-hidden="true"></span>NEGOBOT-MOZ</a><span>Atendimento inteligente para negócios em Moçambique.</span><span>© 2026 NEGOBOT-MOZ</span></div></footer>

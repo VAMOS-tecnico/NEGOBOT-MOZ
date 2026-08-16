@@ -58,7 +58,7 @@ def processar_duvida_pagamento(clean_phone, message_text, central_instance):
     resposta_instrucao = (
         "💳 *Como efetuar o pagamento do Negobot Moz:*\n\n"
         "1️⃣ Faça a transferência do valor do plano escolhido via **M-Pesa** para o número oficial:\n"
-        "📱 *855000928* (Nome: **Abel Francisco**)\n\n"
+        "📱 *855000929* (Nome: **Abel Francisco**)\n\n"
         "2️⃣ Cole aqui no chat a mensagem/SMS de confirmação recebida do M-Pesa (ou envie com **#pago** no início).\n\n"
         "⚡ A sua conta e plano serão ativados automaticamente pelo nosso sistema assim que o comprovativo for enviado"
     )
@@ -149,7 +149,7 @@ ATENÇÃO - REGRAS DE ATENDIMENTO (CLIENTE EM TESTE GRÁTIS):
 - Se o cliente solicitar a criação de cartazes ou artes para publicidade, informe que pode digitar #imagem seguido da descrição do que deseja (ex: #imagem cartaz para loja de roupas promoção de fim de semana).
 
 💳 INSTRUÇÕES DE PAGAMENTO (SE PERGUNTADO):
-- Se o cliente perguntar como pagar: explique que o pagamento é feito via M-Pesa para o número 855000928 em nome de Abel Francisco.
+- Se o cliente perguntar como pagar: explique que o pagamento é feito via M-Pesa para o número 855000929 em nome de Abel Francisco.
 - Após a transferência, basta colar o SMS de confirmação do M-Pesa aqui no chat ou enviar com #pago no início.
 - 🚫 PROIBIÇÃO MÁXIMA: NUNCA peça para digitar #qrcode quando o cliente perguntar sobre pagamentos!
 
@@ -195,7 +195,7 @@ Para empresas que querem uma verdadeira central inteligente, com IA avançada, a
 Finalize sempre reforçando que o cliente não paga nada agora e pode testar qualquer um destes planos durante 2 dias sem compromisso, bastando digitar "TESTE".
 
 💳 INSTRUÇÕES DE PAGAMENTO (SE PERGUNTADO):
-- Transferência via M-Pesa para o número oficial: **855000928** em nome de **Abel Francisco**.
+- Transferência via M-Pesa para o número oficial: **855000929** em nome de **Abel Francisco**.
 - Enviar comprovativo/SMS aqui no chat ou com #pago no início.
 - 🚫 NUNCA peça para digitar #qrcode para fazer pagamentos (o #qrcode serve apenas para conectar o WhatsApp).
 

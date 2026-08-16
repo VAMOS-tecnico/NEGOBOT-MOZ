@@ -5,9 +5,11 @@ import io
 import os
 import re
 import secrets
+import time
 from datetime import datetime, timezone
 from functools import wraps
 from typing import Any, Callable
+from urllib.parse import quote
 
 import requests
 from flask import Blueprint, jsonify, request, session
@@ -506,8 +508,36 @@ def verify_mpesa_payment():
         return jsonify({"error": "Introduza o código ou SMS do M-Pesa."}), 400
     tenant_id = _tenant_for_identity(_identity())
     try:
+        # A intenção permite ao listener AutoPay associar uma transação nova
+        # ao tenant mesmo quando o Android ainda não gravou tenant_id.
+        if client_phone:
+            _db().collection("payment_intents").add({
+                "tenant_id": tenant_id,
+                "client_phone": re.sub(r"\D", "", client_phone),
+                "status": "pending",
+                "source": "platform_verify",
+                "created_at": _now(),
+            })
         from services.payment_service import validar_e_ativar_pagamento_mpesa
         response = validar_e_ativar_pagamento_mpesa(tenant_id, client_phone, message_text)
+        if "PAGAMENTO CONFIRMADO" in str(response):
+            paid_doc = _db().collection("clientes_bot").document(tenant_id).get()
+            paid = paid_doc.to_dict() or {}
+            _db().collection("tenants").document(tenant_id).set({
+                "plan": paid.get("plano", paid.get("plan", "demonstracao")),
+                "plano": paid.get("plano", paid.get("plan", "demonstracao")),
+                "plan_name": paid.get("nome_plano", "Demonstração"),
+                "nome_plano": paid.get("nome_plano", "Demonstração"),
+                "status": paid.get("status_plano", "ativo"),
+                "status_plano": paid.get("status_plano", "ativo"),
+                "data_expiracao": paid.get("data_expiracao"),
+                "mass_broadcast": bool(paid.get("disparo_liberado", False)),
+                "disparo_liberado": bool(paid.get("disparo_liberado", False)),
+                "limite_conversas": paid.get("limite_conversas"),
+                "telefone_proprietario": client_phone or paid.get("telefone_proprietario"),
+                "updated_at": _now(),
+            }, merge=True)
+            _audit("mpesa_payment_confirmed", _identity(), tenant_id, {"plan": paid.get("plano"), "mass_broadcast": bool(paid.get("disparo_liberado", False))})
     except Exception:
         return jsonify({"error": "O serviço de pagamentos está temporariamente indisponível."}), 503
     return jsonify({"processed": True, "response": response})
@@ -557,3 +587,107 @@ def admin_health():
         except requests.RequestException:
             services["evolution"] = "offline"
     return jsonify({"services": services, "worker": "managed by Docker Compose"})
+
+
+@platform_bp.get("/client/plans")
+@_require_roles("client", "operator")
+def client_plans_catalog():
+    from services.payment_service import TABELA_PLANOS
+    benefits = {
+        "basico": [
+            "FAQ, horário, localização e catálogo em texto",
+            "Até 1.500 conversas por mês",
+            "1 número de WhatsApp",
+            "Suporte básico até 24 horas",
+            "Sem PDFs, Excel, fotos, áudios ou disparos em massa",
+        ],
+        "medio": [
+            "Tudo do Plano Básico",
+            "Conversas ilimitadas",
+            "Processamento de fotos e leitura básica de Excel",
+            "Menu interativo e relatórios mensais",
+            "Suporte prioritário até 12 horas",
+        ],
+        "premium": [
+            "Tudo do Plano Médio",
+            "Leitura de PDFs e documentos extensos",
+            "Interpretação de áudios e geração de artes (#imagem)",
+            "Disparos em massa e campanhas de marketing",
+            "Suporte dedicado e configuração inicial assistida",
+        ],
+    }
+    plans = []
+    for amount, data in sorted(TABELA_PLANOS.items()):
+        plans.append({
+            "id": data["id"],
+            "name": data["nome"],
+            "price_mt": int(amount),
+            "validity_days": data["dias_validade"],
+            "conversation_limit": data["limite_conversas"],
+            "mass_broadcast": bool(data["disparo_liberado"]),
+            "benefits": benefits.get(data["id"], []),
+        })
+    return jsonify({"plans": plans, "trial_days": 2, "mpesa_number": "855000929", "mpesa_name": "Abel Francisco"})
+
+
+@platform_bp.post("/client/evolution/qr")
+@_require_roles("client", "operator")
+def request_evolution_qr():
+    tenant_id = _tenant_for_identity(_identity())
+    payload = request.get_json(silent=True) or {}
+    tenant_ref = _db().collection("tenants").document(tenant_id)
+    tenant = tenant_ref.get().to_dict() or {}
+    status = str(tenant.get("status_plano", tenant.get("status", "demonstracao"))).lower()
+    if status in {"expirado", "suspenso", "cancelado"}:
+        return jsonify({"error": "Ativa ou renova o plano antes de ligar o WhatsApp."}), 402
+    phone = re.sub(r"\D", "", str(payload.get("phone") or tenant.get("telefone_proprietario") or tenant.get("phone") or ""))
+    if len(phone) < 8:
+        return jsonify({"error": "Indica o número de WhatsApp que será automatizado."}), 400
+    try:
+        from services.evolution_service import criar_e_configurar_instancia_automatica
+        if not criar_e_configurar_instancia_automatica(phone):
+            return jsonify({"error": "Não foi possível preparar a instância Evolution."}), 502
+        instance_name = phone
+        response = requests.get(f"{str(os.getenv('EVOLUTION_API_URL', '')).rstrip('/')}/instance/connect/{quote(instance_name)}", headers={"apikey": os.getenv("EVOLUTION_API_KEY", "")}, timeout=35)
+        response.raise_for_status()
+        data = response.json() or {}
+        state = data.get("instance", {}).get("state") or data.get("state") or "connecting"
+        base64_qr = data.get("base64") or (data.get("qrcode") or {}).get("base64")
+        tenant_ref.set({"instance_name": instance_name, "telefone_proprietario": phone, "evolution_state": state, "updated_at": _now()}, merge=True)
+        return jsonify({"state": state, "instance_name": instance_name, "qrcode": base64_qr and (base64_qr if str(base64_qr).startswith("data:") else f"data:image/png;base64,{base64_qr}")})
+    except requests.RequestException:
+        return jsonify({"error": "A Evolution API não respondeu ao pedido de QR Code."}), 502
+    except Exception:
+        return jsonify({"error": "Não foi possível gerar o QR Code neste momento."}), 502
+
+
+_PUBLIC_CHAT_RATE: dict[str, list[float]] = {}
+
+
+@platform_bp.post("/public/assistant/chat")
+def public_assistant_chat():
+    payload = request.get_json(silent=True) or {}
+    message = str(payload.get("message") or "").strip()
+    source = str(payload.get("source") or "platform").lower()
+    if source not in {"platform", "facebook", "instagram", "whatsapp", "other"}:
+        source = "platform"
+    if not message or len(message) > 1200:
+        return jsonify({"error": "Escreve uma mensagem entre 1 e 1.200 caracteres."}), 400
+    now = time.time()
+    visitor = request.headers.get("X-Forwarded-For", request.remote_addr or "public").split(",")[0].strip()
+    recent = [stamp for stamp in _PUBLIC_CHAT_RATE.get(visitor, []) if now - stamp < 600]
+    if len(recent) >= 12:
+        return jsonify({"error": "Atingiste o limite temporário de mensagens. Tenta novamente mais tarde."}), 429
+    recent.append(now)
+    _PUBLIC_CHAT_RATE[visitor] = recent
+    try:
+        _db().collection("public_leads").add({"source": source, "message": message[:1200], "created_at": _now()})
+    except Exception:
+        pass
+    prompt = """És o assistente comercial público do NEGOBOT-MOZ, em Português de Moçambique. Explica com clareza os planos reais: Básico 500 MT/mês com até 1.500 conversas e FAQ/catalogo em texto; Médio 1.000 MT/mês com conversas ilimitadas, fotos, Excel básico, menus e relatórios; Premium 1.500 MT/mês com IA avançada, PDFs, documentos, áudio, artes publicitárias e disparos em massa. Todos têm validade de 30 dias e existe demonstração de 2 dias. O pagamento é manual via M-Pesa para 855000929 em nome de Abel Francisco. Nunca digas que um pagamento foi confirmado sem validação AutoPay. Explica que o cliente deve enviar o SMS ou ID da transferência na plataforma ou ao bot WhatsApp; depois da confirmação, a Evolution API prepara o QR Code. Sê comercial, honesto e breve. Não inventes preços, limites ou integrações."""
+    try:
+        from services.groq_service import chamar_groq_rest
+        answer = chamar_groq_rest([{"role": "user", "content": message}], system_prompt=prompt)
+    except Exception:
+        answer = "Posso explicar os planos NEGOBOT-MOZ. Escolhe um plano ou fala connosco pelo WhatsApp para começar a demonstração de 2 dias."
+    return jsonify({"answer": answer, "source": source, "next": {"whatsapp": "/falar-whatsapp", "platform": "/plataforma"}})
