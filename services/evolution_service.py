@@ -102,10 +102,17 @@ def transcrever_audio_mensagem(data_payload, instance_name=None):
 
         media_bytes = b""
         media_url = audio.get("url") or audio.get("mediaUrl")
+        webhook_base64 = audio.get("base64") or message.get("base64") or data_payload.get("base64")
         headers = {"apikey": Config.EVOLUTION_API_KEY, "Content-Type": "application/json"}
         clean_instance = _get_clean_instance(instance_name)
 
-        if media_url:
+        if webhook_base64:
+            encoded = str(webhook_base64)
+            if "," in encoded:
+                encoded = encoded.split(",", 1)[1]
+            media_bytes = base64.b64decode(encoded, validate=False)
+            logger.warning("Áudio obtido diretamente do webhook: bytes=%s", len(media_bytes))
+        elif media_url:
             response = requests.get(str(media_url), headers=headers, timeout=45)
             response.raise_for_status()
             media_bytes = response.content
