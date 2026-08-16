@@ -11,9 +11,14 @@ def home():
     return send_from_directory(SITE_ROOT, "index.html")
 
 
+@app.get("/plataforma")
+def platform():
+    return send_from_directory(SITE_ROOT, "platform.html")
+
+
 @app.get("/health")
 def health():
-    return jsonify({"status": "online", "service": "negobot-site"})
+    return jsonify({"status": "online", "service": "negobot-site"}), 200
 
 
 if __name__ == "__main__":

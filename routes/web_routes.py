@@ -11,6 +11,11 @@ def home():
     return send_from_directory(SITE_ROOT, "index.html")
 
 
+@web_bp.route("/plataforma", methods=["GET"])
+def platform():
+    return send_from_directory(SITE_ROOT, "platform.html")
+
+
 @web_bp.route("/health", methods=["GET"])
 def health_check():
     return jsonify({"status": "online", "service": "negobot-moz"}), 200
