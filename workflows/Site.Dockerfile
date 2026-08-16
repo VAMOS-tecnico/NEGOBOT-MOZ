@@ -4,7 +4,8 @@ WORKDIR /app
 
 RUN pip install --no-cache-dir Flask gunicorn
 
-COPY index.html platform.html site_server.py ./
+COPY index.html platform.html assistant.html site_server.py ./
+COPY platform-react/dist ./platform-react/dist
 
 RUN python -m py_compile site_server.py
 

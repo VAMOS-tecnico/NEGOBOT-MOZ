@@ -163,6 +163,7 @@ function PlatformRouter({ user, onLogout }: { user: PlatformUser; onLogout: () =
 }
 
 export default function App() {
+  const appBasePath = import.meta.env.BASE_URL.replace(/\/$/, "");
   const [auth, setAuth] = useState<AuthState>(defaultAuth);
   const [loading, setLoading] = useState(true);
 
@@ -178,5 +179,5 @@ export default function App() {
 
   if (loading) return <main className="loading-shell"><div className="spinner" /><span>A carregar a plataforma...</span></main>;
 
-  return <BrowserRouter basename="/plataforma"><Routes><Route path="/login" element={auth.authenticated ? <Navigate to="/" replace /> : <LoginPage onLogin={(user) => setAuth({ authenticated: true, user })} />} /><Route path="/*" element={<ProtectedRoute auth={auth}><PlatformRouter user={authValue.auth.user!} onLogout={() => void authValue.logout()} /></ProtectedRoute>} /></Routes></BrowserRouter>;
+  return <BrowserRouter basename={appBasePath}><Routes><Route path="/login" element={auth.authenticated ? <Navigate to="/" replace /> : <LoginPage onLogin={(user) => setAuth({ authenticated: true, user })} />} /><Route path="/*" element={<ProtectedRoute auth={auth}><PlatformRouter user={authValue.auth.user!} onLogout={() => void authValue.logout()} /></ProtectedRoute>} /></Routes></BrowserRouter>;
 }
