@@ -1,5 +1,6 @@
 import re
 import logging
+import time
 from datetime import datetime, timezone
 
 from config import Config
@@ -111,8 +112,8 @@ def process_central_flow(phone_number_or_data=None, message_text: str = "", msg_
             cliente_doc_ref.set({"phone_number": clean_phone, "data_registro": agora, "status": "prospect"}, merge=True)
 
         # Comando #qrcode
-        if msg_clean == "#qrcode":
-            send_whatsapp(clean_phone, "🔄 *A gerar o seu novo QR Code...*", instance_name=central_instance)
+        if msg_clean in {"#qrcode", "qrcode", "qr code"}:
+            send_whatsapp(clean_phone, "🔄 *A gerar o seu novo QR Code...*\n\nSe o código anterior expirou, aguarda alguns segundos e lê o novo código no WhatsApp.", instance_name=central_instance)
             criar_e_configurar_instancia_automatica(clean_phone)
             time.sleep(2)
             gerar_e_enviar_qrcode_central(clean_phone)
