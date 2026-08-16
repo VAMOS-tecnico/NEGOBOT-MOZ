@@ -61,3 +61,13 @@ A criação de campanha grava primeiro a campanha e os destinatários deduplicad
 3. Campanhas, fila persistente, progresso, pausa, cancelamento e relatórios.
 4. Caixa de entrada, transição humana, base de conhecimento e configurações IA.
 5. Instâncias Evolution, webhooks, pagamentos, limites e auditoria administrativa.
+
+## Estado da migração React — 2026-08-16
+
+Foi criada a base `platform-react/` com Vite, React, TypeScript e React Router. O bundle usa a base pública `/plataforma/` e mantém o backend Flask como fonte de dados.
+
+A estrutura inicial inclui `src/lib/api.ts` para autenticação, overview, clientes, integrações, conversas, contactos, campanhas e planos; `App.tsx` para sessão, rotas e layout; `pages/AdminPage.tsx` para administração; e `pages/ClientPages.tsx` para conversas/contactos, campanhas e planos.
+
+O login usa `/api/platform/auth/me`, `/api/platform/auth/login` e `/api/platform/auth/logout`, mantendo a sessão HTTP do Flask. Os módulos de cliente usam `/api/platform/client/contacts`, `/api/platform/client/conversations`, `/api/platform/client/campaigns`, `/api/platform/client/plan`, `/api/platform/client/plans` e `/api/platform/client/integration/status`. A administração usa `/api/platform/admin/overview`, `/api/platform/admin/tenants` e `/api/platform/admin/health`.
+
+A build local foi validada com `pnpm run build`. A aplicação ainda não substitui `platform.html` no VPS; o frontend antigo continua a ser o fallback de produção até a migração completa e a validação autenticada.

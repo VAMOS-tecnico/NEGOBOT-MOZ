@@ -16,7 +16,9 @@ import {
   Wifi,
   X,
 } from "lucide-react";
-import { ApiError, api, type AuthState, type ClientPlan, type IntegrationStatus, type Overview, type PlatformUser, type Tenant } from "./lib/api";
+import { api, type AuthState, type ClientPlan, type IntegrationStatus, type Overview, type PlatformUser } from "./lib/api";
+import { AdminPage } from "./pages/AdminPage";
+import { BillingPage, CampaignsPage, ConversationsPage } from "./pages/ClientPages";
 
 type AuthContextValue = {
   auth: AuthState;
@@ -155,15 +157,6 @@ function QuickAction({ icon: Icon, title, text, path }: { icon: typeof MessageCi
   const navigate = useNavigate();
   return <button className="quick-card" onClick={() => navigate(path)}><span className="quick-icon"><Icon size={22} /></span><span><strong>{title}</strong><small>{text}</small></span><ChevronRight size={17} /></button>;
 }
-
-function PlaceholderPage({ title, description, icon: Icon }: { title: string; description: string; icon: typeof MessageCircle }) {
-  return <section className="empty-panel"><span className="empty-icon"><Icon size={30} /></span><span className="eyebrow">MÓDULO REACT</span><h1>{title}</h1><p>{description}</p><div className="alert info"><Activity size={16} /> A base está pronta; este módulo será ligado às rotas existentes na próxima etapa.</div></section>;
-}
-
-function AdminPage() { return <PlaceholderPage title="Administração" description="Clientes, integrações, auditoria e saúde da infraestrutura numa área protegida por permissões." icon={Settings2} />; }
-function ConversationsPage() { return <PlaceholderPage title="Conversas" description="Centraliza contactos, conversas e encaminhamento humano do assistente." icon={MessageCircle} />; }
-function CampaignsPage() { return <PlaceholderPage title="Campanhas" description="Cria, agenda e acompanha campanhas com a fila Redis persistente." icon={Send} />; }
-function BillingPage() { return <PlaceholderPage title="Plano e pagamentos" description="Consulta planos, pagamento M-Pesa, comprovativos e ativação do WhatsApp." icon={CircleDollarSign} />; }
 
 function PlatformRouter({ user, onLogout }: { user: PlatformUser; onLogout: () => void }) {
   return <AppShell user={user} onLogout={onLogout}><Routes><Route index element={<OverviewPage user={user} />} /><Route path="conversas" element={<ConversationsPage />} /><Route path="campanhas" element={<CampaignsPage />} /><Route path="plano" element={<BillingPage />} /><Route path="admin" element={(user.role === "owner" || user.role === "admin") ? <AdminPage /> : <Navigate to="/" replace />} /><Route path="*" element={<Navigate to="/" replace />} /></Routes></AppShell>;

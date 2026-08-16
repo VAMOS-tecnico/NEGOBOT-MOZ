@@ -62,6 +62,25 @@ export type Conversation = {
   status?: string;
 };
 
+export type Contact = {
+  id: string;
+  name: string;
+  phone: string;
+  opt_in?: boolean;
+  tags?: string[];
+};
+
+export type Campaign = {
+  id: string;
+  name: string;
+  message?: string;
+  status?: string;
+  total?: number;
+  sent?: number;
+  failed?: number;
+  created_at?: string;
+};
+
 export class ApiError extends Error {
   status: number;
 
@@ -119,6 +138,11 @@ export const api = {
     plan: () => request<ClientPlan>("/api/platform/client/plan"),
     integrationStatus: () => request<IntegrationStatus>("/api/platform/client/integration/status"),
     conversations: () => request<{ conversations: Conversation[] }>("/api/platform/client/conversations"),
+    contacts: () => request<{ contacts: Contact[] }>("/api/platform/client/contacts"),
+    createContact: (name: string, phone: string) => request<{ created: true; contact: Contact }>("/api/platform/client/contacts", { method: "POST", body: JSON.stringify({ name, phone, opt_in: true }) }),
+    campaigns: () => request<{ campaigns: Campaign[] }>("/api/platform/client/campaigns"),
+    createCampaign: (name: string, message: string) => request<{ created: true; campaign: Campaign }>("/api/platform/client/campaigns", { method: "POST", body: JSON.stringify({ name, message }) }),
+    campaignAction: (id: string, action: "pause" | "resume" | "cancel") => request<{ updated: true; status: string }>(`/api/platform/client/campaigns/${id}/actions/${action}`, { method: "POST" }),
     assistant: () => request<Record<string, unknown>>("/api/platform/client/assistant"),
   },
 };
