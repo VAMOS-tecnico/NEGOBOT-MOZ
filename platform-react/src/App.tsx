@@ -31,7 +31,7 @@ function QuickAction({ icon: Icon, title, text, path }: { icon: typeof MessageCi
 function PlatformRouter({ user, onLogout }: { user: PlatformUser; onLogout: () => void }) { return <AppShell user={user} onLogout={onLogout}><Routes><Route index element={<OverviewPage user={user} />} /><Route path="conversas" element={<ConversationsPage />} /><Route path="campanhas" element={<CampaignsPage />} /><Route path="whatsapp" element={<WhatsAppPage />} /><Route path="assistente" element={<AssistantPage />} /><Route path="plano" element={<BillingPage />} /><Route path="admin" element={(user.role === "owner" || user.role === "admin") ? <AdminPage /> : <Navigate to="/" replace />} /><Route path="*" element={<Navigate to="/" replace />} /></Routes></AppShell>; }
 
 export default function App() {
-  const appBasePath = import.meta.env.BASE_URL.replace(/\/$/, ""); const [auth, setAuth] = useState<AuthState>(defaultAuth); const [loading, setLoading] = useState(true);
+  const appBasePath = window.location.pathname.startsWith("/plataforma-react") ? "/plataforma-react" : "/plataforma"; const [auth, setAuth] = useState<AuthState>(defaultAuth); const [loading, setLoading] = useState(true);
   useEffect(() => { api.auth.me().then((result) => setAuth(result)).catch(() => setAuth(defaultAuth)).finally(() => setLoading(false)); }, []);
   const authValue = useMemo(() => ({ auth, refresh: async () => setAuth(await api.auth.me()), logout: async () => { await api.auth.logout(); setAuth(defaultAuth); } }), [auth]);
   if (loading) return <main className="loading-shell"><div className="spinner" /><span>A carregar a plataforma...</span></main>;
