@@ -281,32 +281,73 @@ def send_media(to, media, caption="", mediatype="image", filename="media.png", i
         return False
 
 
+def _webhook_payload(webhook_target_url):
+    """Constrói o payload compatível com Evolution API v2."""
+    return {
+        "webhook": {
+            "url": webhook_target_url,
+            "enabled": True,
+            "byEvents": False,
+            "base64": False,
+            "webhookByEvents": False,
+            "events": [
+                "MESSAGES_UPSERT",
+                "CHATS_UPSERT",
+                "CONNECTION_UPDATE"
+            ],
+            "groupsIgnore": True
+        }
+    }
+
+
 def criar_e_configurar_instancia_automatica(phone_number):
-    """Cria e configura o webhook + definições de instância."""
+    """Garante uma instância configurada sem destruir uma sessão existente.
+
+    O endpoint é chamado por pedidos de QR e por confirmações de pagamento, por
+    isso deve ser idempotente. A sessão só é criada quando a API devolve 404;
+    nunca fazemos logout/delete como parte do fluxo normal do cliente.
+    """
     try:
         client_instance_raw = _limpar_numero(phone_number)
+        if not client_instance_raw:
+            raise ValueError("Número de WhatsApp inválido")
         client_instance = quote(client_instance_raw)
         headers = {"apikey": Config.EVOLUTION_API_KEY, "Content-Type": "application/json"}
-        
+        base_url = Config.EVOLUTION_API_URL
+
+        state_url = f"{base_url}/instance/connectionState/{client_instance}"
         try:
-            requests.delete(f"{Config.EVOLUTION_API_URL}/instance/logout/{client_instance}", headers=headers, timeout=15)
-            requests.delete(f"{Config.EVOLUTION_API_URL}/instance/delete/{client_instance}", headers=headers, timeout=15)
-        except Exception:
-            pass
-        
-        time.sleep(2)
-        
-        url_create = f"{Config.EVOLUTION_API_URL}/instance/create"
-        payload_create = {
-            "instanceName": client_instance_raw, 
-            "qrcode": True, 
-            "integration": "WHATSAPP-BAILEYS"
-        }
-        res_create = requests.post(url_create, headers=headers, json=payload_create, timeout=30)
-        res_create.raise_for_status()
-        
+            state_response = requests.get(state_url, headers=headers, timeout=10)
+            instance_exists = state_response.status_code != 404
+        except requests.RequestException as state_err:
+            logger.warning(f"Não foi possível consultar a instância {client_instance_raw}: {state_err}")
+            instance_exists = False
+
+        webhook_target_url = getattr(Config, "WEBHOOK_URL", None)
+        webhook_payload = _webhook_payload(webhook_target_url) if webhook_target_url else None
+
+        if not instance_exists:
+            payload_create = {
+                "instanceName": client_instance_raw,
+                "qrcode": True,
+                "integration": "WHATSAPP-BAILEYS"
+            }
+            if webhook_payload:
+                # Evolution API v2 exige o wrapper {"webhook": {...}} já no create.
+                payload_create.update(webhook_payload)
+            res_create = requests.post(
+                f"{base_url}/instance/create",
+                headers=headers,
+                json=payload_create,
+                timeout=30,
+            )
+            res_create.raise_for_status()
+            logger.info(f"Instância criada: {client_instance_raw}")
+        else:
+            logger.info(f"Instância existente reutilizada: {client_instance_raw}")
+
         try:
-            url_settings = f"{Config.EVOLUTION_API_URL}/instance/setSettings/{client_instance}"
+            url_settings = f"{base_url}/instance/setSettings/{client_instance}"
             payload_settings = {
                 "reject_call": True,
                 "msg_call": "",
@@ -320,25 +361,10 @@ def criar_e_configurar_instancia_automatica(phone_number):
         except Exception as set_err:
             logger.warning(f"Não foi possível aplicar definições na instância: {set_err}")
 
-        webhook_target_url = getattr(Config, 'WEBHOOK_URL', None)
-        if webhook_target_url:
-            url_webhook = f"{Config.EVOLUTION_API_URL}/webhook/set/{client_instance}"
-            payload_webhook = {
-                "webhook": {
-                    "url": webhook_target_url,
-                    "enabled": True,
-                    "byEvents": False,
-                    "base64": False,
-                    "webhookByEvents": False,
-                    "events": [
-                        "MESSAGES_UPSERT",
-                        "CHATS_UPSERT",
-                        "CONNECTION_UPDATE"
-                    ],
-                    "groupsIgnore": True
-                }
-            }
-            res_wh = requests.post(url_webhook, headers=headers, json=payload_webhook, timeout=30)
+        if webhook_payload:
+            url_webhook = f"{base_url}/webhook/set/{client_instance}"
+            res_wh = requests.post(url_webhook, headers=headers, json=webhook_payload, timeout=30)
+            res_wh.raise_for_status()
             logger.info(f"Webhook configurado para {client_instance}: {res_wh.status_code}")
 
         return True
@@ -350,19 +376,43 @@ def criar_e_configurar_instancia_automatica(phone_number):
 
 
 def obter_qrcode_instancia(phone_number):
-    """Obtém o estado e o QR Code de uma instância de cliente sem enviar mensagem."""
+    """Obtém estado/QR e aguarda a geração assíncrona por alguns segundos."""
     client_instance_raw = _limpar_numero(phone_number)
     if not client_instance_raw:
         raise ValueError("Número de WhatsApp inválido")
     client_instance = quote(client_instance_raw)
     headers = {"apikey": Config.EVOLUTION_API_KEY, "Content-Type": "application/json"}
     url_connect = f"{Config.EVOLUTION_API_URL}/instance/connect/{client_instance}"
-    response_connect = requests.get(url_connect, headers=headers, timeout=35)
-    response_connect.raise_for_status()
-    dados_resposta = response_connect.json() or {}
+    dados_resposta = {}
+    for tentativa in range(6):
+        response_connect = requests.get(url_connect, headers=headers, timeout=20)
+        response_connect.raise_for_status()
+        dados_resposta = response_connect.json() or {}
+        qrcode_data = dados_resposta.get("qrcode") or {}
+        state = dados_resposta.get("instance", {}).get("state") or dados_resposta.get("state") or "connecting"
+        base64_qrcode = (
+            dados_resposta.get("base64")
+            or qrcode_data.get("base64")
+            or qrcode_data.get("base64Code")
+        )
+        if state == "open" or base64_qrcode:
+            break
+        if tentativa < 5:
+            time.sleep(1.5)
+
     state = dados_resposta.get("instance", {}).get("state") or dados_resposta.get("state") or "connecting"
-    base64_qrcode = dados_resposta.get("base64") or (dados_resposta.get("qrcode") or {}).get("base64")
-    return {"state": state, "instance_name": client_instance_raw, "base64": base64_qrcode}
+    qrcode_data = dados_resposta.get("qrcode") or {}
+    base64_qrcode = (
+        dados_resposta.get("base64")
+        or qrcode_data.get("base64")
+        or qrcode_data.get("base64Code")
+    )
+    return {
+        "state": state,
+        "instance_name": client_instance_raw,
+        "base64": base64_qrcode,
+        "qrcode_count": qrcode_data.get("count", 0),
+    }
 
 
 def gerar_e_enviar_qrcode_central(phone_number):

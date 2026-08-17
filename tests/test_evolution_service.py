@@ -12,6 +12,7 @@ from config import Config
 import services.groq_service  # noqa: F401 — garante que o alvo do mock existe antes do patch
 from services.evolution_service import (
     _normalizar_audio_para_whisper,
+    criar_e_configurar_instancia_automatica,
     send_whatsapp,
     transcrever_audio_mensagem,
 )
@@ -57,6 +58,46 @@ class TestEvolutionService(unittest.TestCase):
     def tearDown(self):
         Config.EVOLUTION_API_URL = self.old_url
         Config.EVOLUTION_API_KEY = self.old_key
+
+    @patch("services.evolution_service.time.sleep")
+    @patch("services.evolution_service.requests.post")
+    @patch("services.evolution_service.requests.get")
+    def test_instancia_existente_nao_e_apagada_nem_recriada(self, get, post, sleep):
+        get.return_value = FakeResponse(200, {"instance": {"state": "connecting"}})
+        post.return_value = FakeResponse(200, {"status": "SUCCESS"})
+        old_webhook = getattr(Config, "WEBHOOK_URL", None)
+        Config.WEBHOOK_URL = "https://webhook.test/webhook"
+        try:
+            self.assertTrue(criar_e_configurar_instancia_automatica("258840000000"))
+        finally:
+            Config.WEBHOOK_URL = old_webhook
+        self.assertFalse(any("/instance/create" in call.args[0] for call in post.call_args_list))
+        self.assertFalse(any("/instance/delete" in call.args[0] for call in post.call_args_list))
+        self.assertFalse(any("/instance/logout" in call.args[0] for call in post.call_args_list))
+        webhook_payload = post.call_args_list[-1].kwargs["json"]
+        self.assertIn("webhook", webhook_payload)
+        self.assertTrue(webhook_payload["webhook"]["enabled"])
+
+    @patch("services.evolution_service.time.sleep")
+    @patch("services.evolution_service.requests.post")
+    @patch("services.evolution_service.requests.get")
+    def test_nova_instancia_inclui_webhook_no_create(self, get, post, sleep):
+        get.return_value = FakeResponse(404, {"error": "Not Found"})
+        post.side_effect = [
+            FakeResponse(201, {"status": "SUCCESS"}),
+            FakeResponse(200, {"status": "SUCCESS"}),
+            FakeResponse(200, {"status": "SUCCESS"}),
+        ]
+        old_webhook = getattr(Config, "WEBHOOK_URL", None)
+        Config.WEBHOOK_URL = "https://webhook.test/webhook"
+        try:
+            self.assertTrue(criar_e_configurar_instancia_automatica("258840000000"))
+        finally:
+            Config.WEBHOOK_URL = old_webhook
+        create_payload = post.call_args_list[0].kwargs["json"]
+        self.assertEqual(create_payload["instanceName"], "258840000000")
+        self.assertIn("webhook", create_payload)
+        self.assertEqual(create_payload["webhook"]["url"], "https://webhook.test/webhook")
 
     @patch("services.evolution_service.requests.post")
     def test_send_text_envia_payload_v2(self, post):
