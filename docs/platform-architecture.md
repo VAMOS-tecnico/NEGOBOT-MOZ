@@ -2,7 +2,7 @@
 
 ## Objetivo
 
-O NEGOBOT-MOZ será uma plataforma SaaS multi-tenant sobre o motor atual de WhatsApp, IA, Evolution API e Firestore. O proprietário terá uma área administrativa global; cada cliente terá uma área privada limitada ao seu tenant.
+O NEGOBOT-MOZ será uma plataforma SaaS multi-tenant sobre o motor atual de WhatsApp, IA, Evolution API e Firestore. O proprietário terá uma área administrativa global; cada cliente terá uma área privada limitada ao seu tenant. A especificação consolidada de canais omnichannel, pagamentos dual, orquestração n8n e motor de vídeos está em [`docs/negobot-moz-master-spec.md`](./negobot-moz-master-spec.md).
 
 ## Papéis
 
