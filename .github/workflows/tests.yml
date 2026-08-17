@@ -2,14 +2,7 @@ name: NEGOBOT automated tests
 
 on:
   push:
-    branches:
-      - main
-      - react-platform-preview
-      - fix/boomploy-root-dockerfile-clean
   pull_request:
-    branches:
-      - main
-      - react-platform-preview
 
 permissions:
   contents: read
