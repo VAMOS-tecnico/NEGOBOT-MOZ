@@ -4,6 +4,7 @@ import { Activity, Bot, CheckCircle2, ChevronRight, CircleDollarSign, LayoutDash
 import { api, type AuthState, type ClientPlan, type IntegrationStatus, type Overview, type PlatformUser } from "./lib/api";
 import { AdminPage } from "./pages/AdminPage";
 import { AssistantPage, BillingPage, CampaignsPage, ConversationsPage, TeamPage, WhatsAppPage } from "./pages/ClientPages";
+import { PublicAssistantPage, PublicSite } from "./pages/PublicSite";
 
 type AuthContextValue = { auth: AuthState; refresh: () => Promise<void>; logout: () => Promise<void> };
 const defaultAuth: AuthState = { authenticated: false, user: null };
@@ -32,10 +33,17 @@ function QuickAction({ icon: Icon, title, text, path }: { icon: typeof MessageCi
 function PlatformRouter({ user, onLogout }: { user: PlatformUser; onLogout: () => void }) { return <AppShell user={user} onLogout={onLogout}><Routes><Route index element={<OverviewPage user={user} />} /><Route path="conversas" element={<ConversationsPage />} /><Route path="campanhas" element={<CampaignsPage />} /><Route path="whatsapp" element={<WhatsAppPage />} /><Route path="equipa" element={<TeamPage />} /><Route path="assistente" element={<AssistantPage />} />
 <Route path="plano" element={<BillingPage />} /><Route path="admin" element={(user.role === "owner" || user.role === "admin") ? <AdminPage /> : <Navigate to="/" replace />} /><Route path="*" element={<Navigate to="/" replace />} /></Routes></AppShell>; }
 
-export default function App() {
+function PlatformApp() {
   const appBasePath = window.location.pathname.startsWith("/plataforma-react") ? "/plataforma-react" : "/plataforma"; const [auth, setAuth] = useState<AuthState>(defaultAuth); const [loading, setLoading] = useState(true);
   useEffect(() => { api.auth.me().then((result) => setAuth(result)).catch(() => setAuth(defaultAuth)).finally(() => setLoading(false)); }, []);
   const authValue = useMemo(() => ({ auth, refresh: async () => setAuth(await api.auth.me()), logout: async () => { await api.auth.logout(); setAuth(defaultAuth); } }), [auth]);
   if (loading) return <main className="loading-shell"><div className="spinner" /><span>A carregar a plataforma...</span></main>;
   return <BrowserRouter basename={appBasePath}><Routes><Route path="/login" element={auth.authenticated ? <Navigate to="/" replace /> : <LoginPage onLogin={(user) => setAuth({ authenticated: true, user })} />} /><Route path="/*" element={<ProtectedRoute auth={auth}><PlatformRouter user={authValue.auth.user!} onLogout={() => void authValue.logout()} /></ProtectedRoute>} /></Routes></BrowserRouter>;
+}
+
+export default function App() {
+  const path = window.location.pathname;
+  if (path === "/assistente" || path === "/assistente/") return <PublicAssistantPage />;
+  if (!path.startsWith("/plataforma")) return <PublicSite />;
+  return <PlatformApp />;
 }

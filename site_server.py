@@ -9,7 +9,7 @@ app = Flask(__name__, static_folder=None)
 
 @app.get("/")
 def home():
-    return send_from_directory(SITE_ROOT, "index.html")
+    return _react_index()
 
 
 REACT_DIST = SITE_ROOT / "platform-react" / "dist"
@@ -51,7 +51,12 @@ def platform_react_asset(asset):
 
 @app.get("/assistente")
 def assistant():
-    return send_from_directory(SITE_ROOT, "assistant.html")
+    return _react_index()
+
+
+@app.get("/assets/<path:asset>")
+def public_asset(asset):
+    return send_from_directory(REACT_DIST / "assets", asset)
 
 
 @app.get("/falar-whatsapp")
