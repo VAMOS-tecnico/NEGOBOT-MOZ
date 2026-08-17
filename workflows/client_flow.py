@@ -431,6 +431,16 @@ def process_client_flow(
                 contents.append({"role": role_g, "content": str(txt)})
 
         diretrizes = dados_cliente.get("diretrizes_corporativas") or default_rules
+        socials = dados_cliente.get("redes_sociais") if isinstance(dados_cliente.get("redes_sociais"), dict) else {}
+        profile_lines = [
+            f"Nome da empresa: {dados_cliente.get('empresa_nome', '')}",
+            f"Nicho: {dados_cliente.get('nicho', '')}",
+            f"Email corporativo: {dados_cliente.get('email_corporativo', '')}",
+        ]
+        for social_key, social_label in (("facebook", "Facebook"), ("instagram", "Instagram"), ("twitter_x", "X/Twitter"), ("tiktok", "TikTok"), ("telegram", "Telegram"), ("linkedin", "LinkedIn")):
+            if socials.get(social_key):
+                profile_lines.append(f"{social_label}: {socials[social_key]}")
+        bloco_perfil_empresa = "\n\nPERFIL OFICIAL DA EMPRESA:\n" + "\n".join(profile_lines)
         
         bloco_conhecimento_extra = ""
         if base_conhecimento_docs:
@@ -442,9 +452,11 @@ Português de Moçambique, tom profissional, atencioso e conciso.
 
 DIRETRIZES DA EMPRESA:
 {diretrizes}
+{bloco_perfil_empresa}
 {bloco_conhecimento_extra}
 REGRA DE ATENDIMENTO:
 - Responda às dúvidas do cliente com clareza utilizando os dados oficiais fornecidos acima.
+- Quando perguntarem pelas redes sociais, divulgue apenas os links presentes no PERFIL OFICIAL DA EMPRESA.
 - NUNCA tente transferir o atendimento e NUNCA invente informações que não estejam presentes nos dados da empresa."""
 
         # 10. RESPOSTA DA GROQ COM FALLBACK DE SEGURANÇA

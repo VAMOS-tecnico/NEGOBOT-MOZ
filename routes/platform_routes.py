@@ -407,7 +407,14 @@ def update_client_profile():
     if not changes:
         return jsonify({"error": "Nenhuma alteração de perfil foi enviada."}), 400
     changes["updated_at"] = _now()
-    _db().collection("tenants").document(tenant_id).set(changes, merge=True)
+    tenant_ref = _db().collection("tenants").document(tenant_id)
+    tenant_ref.set(changes, merge=True)
+    current_tenant = tenant_ref.get().to_dict() or {}
+    instance_name = str(current_tenant.get("instance_name") or "").strip()
+    if instance_name:
+        _db().collection("clientes_bot").document(instance_name).set({
+            key: changes[key] for key in ("empresa_nome", "nicho", "email_corporativo", "redes_sociais") if key in changes
+        }, merge=True)
     _audit("client_profile_updated", _identity(), tenant_id, {"fields": sorted(changes)})
     return jsonify({"updated": True, "fields": sorted(changes)})
 
@@ -1208,6 +1215,9 @@ def request_evolution_qr():
         state = data["state"]
         base64_qr = data.get("base64")
         tenant_ref.set({"instance_name": instance_name, "telefone_proprietario": phone, "evolution_state": state, "updated_at": _now()}, merge=True)
+        profile_sync = {key: tenant.get(key) for key in ("empresa_nome", "nicho", "email_corporativo", "redes_sociais") if tenant.get(key) is not None}
+        if profile_sync:
+            _db().collection("clientes_bot").document(instance_name).set(profile_sync, merge=True)
         return jsonify({"state": state, "instance_name": instance_name, "qrcode": base64_qr and (base64_qr if str(base64_qr).startswith("data:") else f"data:image/png;base64,{base64_qr}")})
     except requests.RequestException:
         return jsonify({"error": "A Evolution API não respondeu ao pedido de QR Code."}), 502
