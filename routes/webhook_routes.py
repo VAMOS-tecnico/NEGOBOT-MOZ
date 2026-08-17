@@ -115,6 +115,13 @@ def _mark_trial_connection_open(instance_name: str, data: dict) -> None:
             tenant_refs.extend(list(tenants.where("telefone_proprietario", "==", digits).limit(10).stream()))
         except Exception:
             logger.debug("Não foi possível procurar tenant por telefone", exc_info=True)
+    tenant_data = {}
+    for tenant_snapshot in tenant_refs:
+        try:
+            tenant_data.update(tenant_snapshot.to_dict() or {})
+        except Exception:
+            continue
+    current = {**current, **tenant_data}
     if not current and not tenant_refs:
         logger.info("CONNECTION_UPDATE ignorado para instância desconhecida=%s", instance_name)
         return
