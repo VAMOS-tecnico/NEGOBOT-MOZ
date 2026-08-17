@@ -93,7 +93,27 @@ def processar_geracao_imagem(clean_phone, message_text, central_instance):
 
 
 def processar_teste_gratis(clean_phone, agora, central_instance):
-    """Ativa o período de teste de 2 dias e gera QR Code."""
+    """Ativa uma única demonstração de 2 dias e gera QR Code."""
+    tenant_id = f"cliente_{clean_phone}"
+    trial_ref = extensions.db.collection("clientes_bot").document(tenant_id)
+    trial_doc = trial_ref.get()
+    trial_data = trial_doc.to_dict() if trial_doc.exists else {}
+    current_status = str(trial_data.get("status_plano", trial_data.get("status", ""))).lower()
+    expiry = trial_data.get("data_expiracao")
+    if isinstance(expiry, str):
+        try:
+            expiry = datetime.fromisoformat(expiry.replace("Z", "+00:00"))
+        except ValueError:
+            expiry = None
+    if expiry is not None and getattr(expiry, "tzinfo", None) is None:
+        expiry = expiry.replace(tzinfo=timezone.utc)
+    if expiry and agora >= expiry:
+        send_whatsapp(clean_phone, "⏳ *A sua demonstração de 2 dias terminou.*\n\nPara continuar e gerar um novo QR Code, escolha um plano e faça o pagamento via M-Pesa para **855000929** (Abel Francisco). Depois envie o SMS ou ID da transferência.", instance_name=central_instance)
+        return
+    if current_status in {"trial", "demonstracao", "ativo"} and expiry and agora < expiry:
+        send_whatsapp(clean_phone, "✅ A sua demonstração/plano já está ativo. Se precisar de um novo QR Code, envie #qrcode.", instance_name=central_instance)
+        return
+
     send_whatsapp(clean_phone, "⏳ *A preparar o seu teste grátis de 2 dias do Negobot Moz...* 🚀", instance_name=central_instance)
     
     cliente_doc_ref = extensions.db.collection('clientes').document(clean_phone)
@@ -103,7 +123,6 @@ def processar_teste_gratis(clean_phone, agora, central_instance):
         "status": "trial"
     }, merge=True)
 
-    tenant_id = f"cliente_{clean_phone}"
     extensions.db.collection('clientes_bot').document(tenant_id).set({
         "status_plano": "demonstracao", 
         "data_ativacao": agora, 

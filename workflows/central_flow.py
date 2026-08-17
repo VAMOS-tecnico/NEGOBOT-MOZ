@@ -66,6 +66,31 @@ PALAVRAS_PLANOS_NEGOBOT = {
 }
 
 
+def _data_aware(value):
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+        except ValueError:
+            return None
+    return None
+
+
+def _trial_or_plan_expired(data, agora):
+    expiry = _data_aware((data or {}).get("data_expiracao"))
+    return bool(expiry and agora >= expiry)
+
+
+def _payment_required_message():
+    return (
+        "⏳ *A sua demonstração de 2 dias terminou.*\n\n"
+        "Para continuar a usar o Negobot Moz e gerar um novo QR Code, escolha um plano e faça o pagamento via M-Pesa para **855000929** (Abel Francisco).\n"
+        "Depois envie o SMS ou ID da transferência aqui, ou valide o comprovativo na plataforma."
+    )
+
+
 def normalizar_intencao(texto):
     """Normaliza acentos, pontuação e espaços para classificação determinística."""
     texto = unicodedata.normalize("NFKD", str(texto or ""))
@@ -190,8 +215,13 @@ def process_central_flow(phone_number_or_data=None, message_text: str = "", msg_
         if not cliente_doc.exists:
             cliente_doc_ref.set({"phone_number": clean_phone, "data_registro": agora, "status": "prospect"}, merge=True)
 
-        # Comando #qrcode
+        # Comando #qrcode: uma demonstração expirada não pode criar nova sessão.
         if msg_clean in {"#qrcode", "qrcode", "qr code"}:
+            trial_ref = extensions.db.collection("clientes_bot").document(f"cliente_{clean_phone}").get()
+            trial_data = trial_ref.to_dict() if trial_ref.exists else {}
+            if _trial_or_plan_expired(trial_data, agora):
+                send_whatsapp(clean_phone, _payment_required_message(), instance_name=central_instance)
+                return
             send_whatsapp(clean_phone, "🔄 *A gerar o seu novo QR Code...*\n\nSe o código anterior expirou, aguarda alguns segundos e lê o novo código no WhatsApp.", instance_name=central_instance)
             criar_e_configurar_instancia_automatica(clean_phone)
             time.sleep(2)

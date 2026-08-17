@@ -186,6 +186,16 @@ export type LemonSqueezyCheckout = {
   plan_id: string;
 };
 
+export type BusinessProfile = {
+  email?: string;
+  empresa_nome: string;
+  nicho: string;
+  email_corporativo: string;
+  redes_sociais: { facebook: string; instagram: string; twitter_x: string; tiktok: string; telegram: string; linkedin: string };
+  instance_name?: string | null;
+  status_conexao?: string;
+};
+
 export type AssistantSettings = {
   diretrizes_corporativas: string;
   base_conhecimento_documentos: string;
@@ -298,6 +308,8 @@ export const api = {
     updateTemplate: (id: string, fields: { name?: string; body?: string; status?: "active" | "archived" }) => request<{ updated: true }>(`/api/platform/client/templates/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(fields) }),
     createCampaign: (name: string, message: string, options: { template_id?: string; tags?: string[]; channels?: string[]; language?: string; tone?: string; offer?: string; scheduled_at?: string } = {}) => request<{ created: true; campaign: Campaign }>("/api/platform/client/campaigns", { method: "POST", body: JSON.stringify({ name, message, ...options }) }),
     campaignAction: (id: string, action: "pause" | "resume" | "cancel") => request<{ updated: true; status: string }>(`/api/platform/client/campaigns/${id}/actions/${action}`, { method: "POST" }),
+    profile: () => request<BusinessProfile>("/api/platform/client/profile"),
+    updateProfile: (profile: Partial<BusinessProfile>) => request<{ updated: true; fields: string[] }>("/api/platform/client/profile", { method: "PATCH", body: JSON.stringify(profile) }),
     assistant: () => request<AssistantSettings>("/api/platform/client/assistant"),
     updateAssistant: (settings: Partial<AssistantSettings>) => request<{ updated: true }>("/api/platform/client/assistant", { method: "PATCH", body: JSON.stringify(settings) }),
     verifyPayment: (messageText: string, clientPhone: string) => request<{ processed: true; response: string; state?: string; instance_name?: string | null; qrcode?: string | null }>("/api/platform/client/payments/mpesa/verify", { method: "POST", body: JSON.stringify({ message_text: messageText, client_phone: clientPhone }) }),

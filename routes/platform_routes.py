@@ -60,6 +60,20 @@ def _now():
     return datetime.now(timezone.utc)
 
 
+def _plan_expired(data: dict[str, Any], now: datetime | None = None) -> bool:
+    expiry = data.get("data_expiracao") if isinstance(data, dict) else None
+    if isinstance(expiry, str) and expiry.strip():
+        try:
+            expiry = datetime.fromisoformat(expiry.replace("Z", "+00:00"))
+        except ValueError:
+            return False
+    if not isinstance(expiry, datetime):
+        return False
+    if expiry.tzinfo is None:
+        expiry = expiry.replace(tzinfo=timezone.utc)
+    return (now or _now()) >= expiry
+
+
 def _db():
     if extensions.db is None:
         raise RuntimeError("Base de dados da plataforma indisponível")
@@ -215,6 +229,9 @@ def create_tenant():
     tenant_ref = db.collection("tenants").document(tenant_id)
     tenant_ref.set({
         "name": name,
+        "email": email,
+        "account_email": email,
+        "empresa_nome": name,
         "status": "active",
         "plan": "demonstracao",
         "created_at": now,
@@ -338,6 +355,61 @@ def client_overview():
         "conversations": 0,
         "features": ["contactos", "segmentos", "campanhas", "disparos", "conversas", "assistente", "integração WhatsApp"],
     })
+
+
+_SOCIAL_PROFILE_KEYS = ("facebook", "instagram", "twitter_x", "tiktok", "telegram", "linkedin")
+
+
+@platform_bp.get("/client/profile")
+@_require_roles("client", "operator")
+def get_client_profile():
+    identity = _identity() or {}
+    tenant_id = _tenant_for_identity(identity)
+    tenant = _db().collection("tenants").document(tenant_id).get().to_dict() or {}
+    socials = tenant.get("redes_sociais") if isinstance(tenant.get("redes_sociais"), dict) else {}
+    return jsonify({
+        "email": tenant.get("account_email") or tenant.get("email") or identity.get("email"),
+        "empresa_nome": tenant.get("empresa_nome") or tenant.get("name", ""),
+        "nicho": tenant.get("nicho", ""),
+        "email_corporativo": tenant.get("email_corporativo", ""),
+        "redes_sociais": {key: str(socials.get(key) or "") for key in _SOCIAL_PROFILE_KEYS},
+        "instance_name": tenant.get("instance_name"),
+        "status_conexao": tenant.get("evolution_state", "desconectado"),
+    })
+
+
+@platform_bp.patch("/client/profile")
+@_require_tenant_roles("owner", "operator")
+def update_client_profile():
+    payload = request.get_json(silent=True) or {}
+    tenant_id = _tenant_for_identity(_identity())
+    changes = {}
+    if "empresa_nome" in payload:
+        value = str(payload.get("empresa_nome") or "").strip()[:160]
+        if len(value) < 2:
+            return jsonify({"error": "Indica o nome da empresa."}), 400
+        changes["empresa_nome"] = value
+        changes["name"] = value
+    if "nicho" in payload:
+        changes["nicho"] = str(payload.get("nicho") or "").strip()[:160]
+    if "email_corporativo" in payload:
+        email = str(payload.get("email_corporativo") or "").strip().lower()
+        if email and not _EMAIL_RE.fullmatch(email):
+            return jsonify({"error": "Indica um email corporativo válido."}), 400
+        changes["email_corporativo"] = email
+    if "redes_sociais" in payload:
+        if not isinstance(payload.get("redes_sociais"), dict):
+            return jsonify({"error": "As redes sociais devem ser enviadas como objeto."}), 400
+        changes["redes_sociais"] = {
+            key: str(payload["redes_sociais"].get(key) or "").strip()[:400]
+            for key in _SOCIAL_PROFILE_KEYS
+        }
+    if not changes:
+        return jsonify({"error": "Nenhuma alteração de perfil foi enviada."}), 400
+    changes["updated_at"] = _now()
+    _db().collection("tenants").document(tenant_id).set(changes, merge=True)
+    _audit("client_profile_updated", _identity(), tenant_id, {"fields": sorted(changes)})
+    return jsonify({"updated": True, "fields": sorted(changes)})
 
 
 @platform_bp.get("/client/contacts")
@@ -1122,8 +1194,8 @@ def request_evolution_qr():
     tenant_ref = _db().collection("tenants").document(tenant_id)
     tenant = tenant_ref.get().to_dict() or {}
     status = str(tenant.get("status_plano", tenant.get("status", "demonstracao"))).lower()
-    if status in {"expirado", "suspenso", "cancelado"}:
-        return jsonify({"error": "Ativa ou renova o plano antes de ligar o WhatsApp."}), 402
+    if status in {"expirado", "suspenso", "cancelado"} or _plan_expired(tenant):
+        return jsonify({"error": "A demonstração/plano expirou. Ativa ou renova o plano antes de ligar o WhatsApp ou gerar outro QR Code."}), 402
     phone = re.sub(r"\D", "", str(payload.get("phone") or tenant.get("telefone_proprietario") or tenant.get("phone") or ""))
     if len(phone) < 8:
         return jsonify({"error": "Indica o número de WhatsApp que será automatizado."}), 400
