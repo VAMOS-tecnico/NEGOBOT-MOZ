@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - react-platform-preview
+      - fix/boomploy-root-dockerfile
   pull_request:
     branches:
       - main
