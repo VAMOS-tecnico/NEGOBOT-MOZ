@@ -6,6 +6,18 @@ export type PlatformUser = {
   email?: string;
   role: Role;
   tenant_id?: string | null;
+  tenant_role?: "owner" | "operator" | "viewer";
+};
+
+export type TeamMember = {
+  id: string;
+  name: string;
+  email: string;
+  role: Role;
+  tenant_role: "owner" | "operator" | "viewer";
+  status: "active" | "suspended";
+  created_at?: string;
+  last_login_at?: string | null;
 };
 
 export type AuthState = {
@@ -181,6 +193,9 @@ export const api = {
     plans: () => request<PlansCatalog>("/api/platform/client/plans"),
     plan: () => request<ClientPlan>("/api/platform/client/plan"),
     integrationStatus: () => request<IntegrationStatus>("/api/platform/client/integration/status"),
+    team: () => request<{ users: TeamMember[]; current_role?: string }>("/api/platform/client/team"),
+    createOperator: (name: string, email: string, password: string) => request<{ created: true; user: TeamMember }>("/api/platform/client/team", { method: "POST", body: JSON.stringify({ name, email, password }) }),
+    updateTeamMember: (id: string, fields: { status?: "active" | "suspended"; tenant_role?: "operator" | "viewer" }) => request<{ updated: true }>(`/api/platform/client/team/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(fields) }),
     conversations: () => request<{ conversations: Conversation[] }>("/api/platform/client/conversations"),
     handoff: (phone: string, mode: "bot" | "humano") => request<{ updated: true }>(`/api/platform/client/conversations/${encodeURIComponent(phone)}/handoff`, { method: "POST", body: JSON.stringify({ mode }) }),
     contacts: () => request<{ contacts: Contact[] }>("/api/platform/client/contacts"),

@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { Bot, CheckCircle2, CircleDollarSign, FileUp, Loader2, MessageCircle, Pause, Play, Plus, QrCode, RefreshCw, Send, Smartphone, Users, XCircle } from "lucide-react";
-import { api, type AssistantSettings, type Campaign, type ClientPlan, type Contact, type Conversation, type IntegrationStatus, type Plan } from "../lib/api";
+import { api, type AssistantSettings, type Campaign, type ClientPlan, type Contact, type Conversation, type IntegrationStatus, type Plan, type TeamMember } from "../lib/api";
 
 function ModuleHeader({ eyebrow, title, description, action }: { eyebrow: string; title: string; description: string; action?: ReactNode }) {
   return <div className="module-header"><div><span className="eyebrow">{eyebrow}</span><h1>{title}</h1><p>{description}</p></div>{action}</div>;
@@ -91,4 +91,86 @@ export function AssistantPage() {
   async function save(event: FormEvent) { event.preventDefault(); setSaving(true); setError(""); setNotice(""); try { await api.client.updateAssistant(settings); setNotice("Configuração do assistente guardada."); } catch (reason) { setError(reason instanceof Error ? reason.message : "Não foi possível guardar a configuração."); } finally { setSaving(false); } }
   if (busy) return <div className="content-stack"><LoadingBox /></div>;
   return <div className="content-stack"><ModuleHeader eyebrow="ASSISTENTE NEGOBOT" title="Configura o teu assistente" description="Define as regras de atendimento, a base de conhecimento e quando uma conversa passa para uma pessoa." />{error && <ErrorBox message={error} />}{notice && <SuccessBox message={notice} />}<form className="data-panel stack-form" onSubmit={save}><div className="panel-heading"><div><span className="eyebrow">PERSONALIDADE E REGRAS</span><h3>Diretrizes corporativas</h3></div><Bot size={20} /></div><textarea rows={7} value={settings.diretrizes_corporativas} onChange={(event) => setSettings({ ...settings, diretrizes_corporativas: event.target.value })} placeholder="Ex.: responde em Português de Moçambique, apresenta preços reais e encaminha pagamentos para validação AutoPay." /><label>Base de conhecimento<textarea rows={8} value={settings.base_conhecimento_documentos} onChange={(event) => setSettings({ ...settings, base_conhecimento_documentos: event.target.value })} placeholder="Produtos, horários, localização, perguntas frequentes e informação que o bot deve conhecer." /></label><label>Timeout para atendimento humano (minutos)<input type="number" min={1} max={240} value={settings.timeout_humano_minutos} onChange={(event) => setSettings({ ...settings, timeout_humano_minutos: Number(event.target.value) })} /></label><small className="muted">Modelos ativos: texto {settings.models?.text || "configurado"} · visão {settings.models?.vision || "configurado"}</small><button className="primary-button" disabled={saving} type="submit">{saving ? "A guardar..." : "Guardar configuração"}</button></form></div>;
+}
+
+
+export function TeamPage() {
+  const [members, setMembers] = useState<TeamMember[]>([]);
+  const [currentRole, setCurrentRole] = useState("");
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+
+  async function load() {
+    setBusy(true);
+    setError("");
+    try {
+      const result = await api.client.team();
+      setMembers(result.users || []);
+      setCurrentRole(result.current_role || "");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Não foi possível carregar a equipa.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  useEffect(() => { void load(); }, []);
+
+  async function create(event: FormEvent) {
+    event.preventDefault();
+    setSaving(true);
+    setError("");
+    setNotice("");
+    try {
+      await api.client.createOperator(name, email, password);
+      setName("");
+      setEmail("");
+      setPassword("");
+      setNotice("Operador criado. Pode iniciar sessão com as credenciais definidas.");
+      await load();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Não foi possível criar o operador.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function updateMember(member: TeamMember, fields: { status?: "active" | "suspended"; tenant_role?: "operator" | "viewer" }) {
+    setError("");
+    setNotice("");
+    try {
+      await api.client.updateTeamMember(member.id, fields);
+      setNotice("Permissões da equipa atualizadas.");
+      await load();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Não foi possível atualizar o membro.");
+    }
+  }
+
+  const canManage = currentRole === "owner";
+  return <div className="content-stack">
+    <ModuleHeader eyebrow="EQUIPA E PERMISSÕES" title="A tua equipa" description="Convida operadores e controla quem pode atender conversas dentro deste tenant." action={<button className="secondary-button compact" onClick={() => void load()}><RefreshCw size={16} /> Atualizar</button>} />
+    {error && <ErrorBox message={error} />}
+    {notice && <SuccessBox message={notice} />}
+    <div className="module-grid two">
+      <section className="data-panel">
+        <div className="panel-heading"><div><span className="eyebrow">MEMBROS</span><h3>{members.length} utilizadores</h3></div><Users size={19} /></div>
+        {busy ? <LoadingBox /> : members.length ? <div className="data-list">{members.map((member) => <div className="data-row" key={member.id}>
+          <div className="avatar">{member.name.slice(0, 1).toUpperCase()}</div>
+          <div className="row-main"><strong>{member.name}</strong><small>{member.email} · {member.tenant_role}</small></div>
+          <span className={`status-badge ${member.status}`}>{member.status === "active" ? "ativo" : "suspenso"}</span>
+          {canManage && member.tenant_role !== "owner" && <div className="row-actions"><button title={member.status === "active" ? "Suspender" : "Reativar"} onClick={() => void updateMember(member, { status: member.status === "active" ? "suspended" : "active" })}>{member.status === "active" ? <XCircle size={14} /> : <CheckCircle2 size={14} />}</button><button title={member.tenant_role === "operator" ? "Tornar visualizador" : "Tornar operador"} onClick={() => void updateMember(member, { tenant_role: member.tenant_role === "operator" ? "viewer" : "operator" })}><Users size={14} /></button></div>}
+        </div>)}</div> : <div className="empty-state">Ainda não existem membros nesta equipa.</div>}
+      </section>
+      <section className="data-panel">
+        <div className="panel-heading"><div><span className="eyebrow">CONVIDAR</span><h3>Novo operador</h3></div><Plus size={19} /></div>
+        {canManage ? <form className="stack-form compact-form" onSubmit={create}><label>Nome<input value={name} onChange={(event) => setName(event.target.value)} required /></label><label>Email<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} required /></label><label>Palavra-passe inicial<input type="password" minLength={8} value={password} onChange={(event) => setPassword(event.target.value)} required /></label><button className="primary-button" disabled={saving} type="submit">{saving ? "A criar..." : "Criar operador"}</button></form> : <div className="empty-state">Apenas o proprietário do tenant pode convidar ou alterar membros.</div>}
+      </section>
+    </div>
+  </div>;
 }
