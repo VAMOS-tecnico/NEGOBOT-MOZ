@@ -967,6 +967,21 @@ def request_evolution_qr():
 _PUBLIC_CHAT_RATE: dict[str, list[float]] = {}
 
 
+def _public_plan_answer() -> str:
+    return (
+        "Aqui estão os planos NEGOBOT-MOZ:\n\n"
+        "• Básico — 500 MT/mês: até 1.500 conversas, FAQ, horário e catálogo em texto, 1 número de WhatsApp e suporte básico até 24 horas.\n"
+        "• Médio — 1.000 MT/mês: conversas ilimitadas, fotos, leitura básica de Excel, menu interativo, relatórios e suporte prioritário até 12 horas.\n"
+        "• Premium — 1.500 MT/mês: IA avançada, áudio, PDFs, documentos, artes publicitárias, campanhas e disparos em massa e suporte dedicado.\n\n"
+        "Todos os planos têm validade de 30 dias e começam com demonstração de 2 dias. O pagamento é feito manualmente por M-Pesa para 855000929, em nome de Abel Francisco. Depois da validação pelo AutoPay, a Evolution API prepara o QR Code para ligares o WhatsApp."
+    )
+
+
+def _public_is_plan_question(message: str) -> bool:
+    normalized = message.casefold()
+    return any(term in normalized for term in ("plano", "preço", "preco", "quanto", "custa", "mensal", "mt", "benefício", "beneficio"))
+
+
 @platform_bp.post("/public/assistant/chat")
 def public_assistant_chat():
     payload = request.get_json(silent=True) or {}
@@ -988,9 +1003,14 @@ def public_assistant_chat():
     except Exception:
         pass
     prompt = """És o assistente comercial público do NEGOBOT-MOZ, em Português de Moçambique. Explica com clareza os planos reais: Básico 500 MT/mês com até 1.500 conversas e FAQ/catalogo em texto; Médio 1.000 MT/mês com conversas ilimitadas, fotos, Excel básico, menus e relatórios; Premium 1.500 MT/mês com IA avançada, PDFs, documentos, áudio, artes publicitárias e disparos em massa. Todos têm validade de 30 dias e existe demonstração de 2 dias. O pagamento é manual via M-Pesa para 855000929 em nome de Abel Francisco. Nunca digas que um pagamento foi confirmado sem validação AutoPay. Explica que o cliente deve enviar o SMS ou ID da transferência na plataforma ou ao bot WhatsApp; depois da confirmação, a Evolution API prepara o QR Code. Sê comercial, honesto e breve. Não inventes preços, limites ou integrações."""
-    try:
-        from services.groq_service import chamar_groq_rest
-        answer = chamar_groq_rest([{"role": "user", "content": message}], system_prompt=prompt)
-    except Exception:
-        answer = "Posso explicar os planos NEGOBOT-MOZ. Escolhe um plano ou fala connosco pelo WhatsApp para começar a demonstração de 2 dias."
+    if _public_is_plan_question(message):
+        answer = _public_plan_answer()
+    else:
+        try:
+            from services.groq_service import chamar_groq_rest
+            answer = chamar_groq_rest([{"role": "user", "content": message}], system_prompt=prompt)
+        except Exception:
+            answer = "Posso ajudar com os planos, pagamentos M-Pesa, ligação do WhatsApp e demonstração de 2 dias."
+        if not answer or "processar muitas mensagens" in answer.casefold():
+            answer = "Posso ajudar com os planos, pagamentos M-Pesa, ligação do WhatsApp e demonstração de 2 dias. Escreve 'planos' para veres a tabela completa."
     return jsonify({"answer": answer, "source": source, "next": {"whatsapp": "/falar-whatsapp", "platform": "/plataforma"}})

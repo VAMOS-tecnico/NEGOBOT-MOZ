@@ -96,6 +96,15 @@ class PlatformSecurityTests(unittest.TestCase):
         platform_routes._LOGIN_ATTEMPTS.clear()
         self.client = app.test_client()
 
+    def test_public_plan_question_returns_deterministic_table(self):
+        response = self.client.post("/api/platform/public/assistant/chat", json={"message": "Quais são os preços e benefícios dos planos?", "source": "platform"})
+        self.assertEqual(response.status_code, 200)
+        answer = response.get_json()["answer"]
+        self.assertIn("Básico — 500 MT/mês", answer)
+        self.assertIn("Médio — 1.000 MT/mês", answer)
+        self.assertIn("Premium — 1.500 MT/mês", answer)
+        self.assertIn("855000929", answer)
+
     def test_client_cannot_open_admin_endpoints(self):
         set_identity(self.client, {"id": "user-a", "name": "Cliente A", "role": "client", "tenant_id": "tenant-a", "tenant_role": "owner"})
         response = self.client.get("/api/platform/admin/overview")
