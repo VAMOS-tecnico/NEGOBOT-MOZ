@@ -88,3 +88,12 @@ button:disabled { cursor: wait; opacity: .65; }
 .health-list { display: flex; flex-direction: column; gap: 2px; } .health-item { display: flex; align-items: center; gap: 11px; padding: 13px 0; border-bottom: 1px solid rgba(117, 173, 148, .08); } .health-item:last-child { border-bottom: 0; } .health-item > .status-dot { margin-left: auto; }
 @media (max-width: 920px) { .module-grid.two, .plan-grid { grid-template-columns: 1fr; } }
 @media (max-width: 680px) { .module-header, .current-plan { align-items: flex-start; flex-direction: column; } .module-header .primary-button, .module-header .secondary-button { width: 100%; justify-content: center; } }
+
+.channel-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+.check-card { display: flex; flex-direction: row; align-items: center; gap: 7px; padding: 9px 10px; border: 1px solid rgba(117, 173, 148, .14); border-radius: 8px; color: #a4bcae; background: rgba(5, 15, 12, .42); cursor: pointer; }
+.check-card:has(input:checked) { border-color: rgba(98, 226, 171, .55); color: #d7f5e2; background: rgba(67, 180, 127, .14); }
+.check-card input { width: auto; accent-color: #62e2ab; }
+.form-grid-two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+select { width: 100%; padding: 13px 14px; border: 1px solid rgba(117, 173, 148, .17); border-radius: 9px; outline: none; color: #e6f5eb; background: rgba(5, 15, 12, .65); }
+select:focus { border-color: rgba(98, 226, 171, .7); box-shadow: 0 0 0 3px rgba(98, 226, 171, .1); }
+@media (max-width: 680px) { .channel-grid, .form-grid-two { grid-template-columns: 1fr; } }

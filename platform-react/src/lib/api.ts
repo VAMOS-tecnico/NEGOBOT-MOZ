@@ -107,6 +107,12 @@ export type Campaign = {
   sent?: number;
   failed?: number;
   created_at?: string;
+  channels?: string[];
+  language?: string;
+  tone?: string;
+  offer?: string;
+  scheduled_at?: string | null;
+  orchestration_status?: string;
 };
 
 export type CampaignTemplate = {
@@ -115,6 +121,42 @@ export type CampaignTemplate = {
   body: string;
   variables?: string[];
   status?: "active" | "archived";
+};
+
+export type DeliveryMetrics = { total: number; by_status: Record<string, number>; sent: number; failed: number; delivery_rate: number };
+
+export type TenantMetrics = {
+  contacts: { total: number; opt_in: number; opt_out: number };
+  conversations: number;
+  campaigns: { total: number; by_status: Record<string, number>; recent: Campaign[] };
+  deliveries: DeliveryMetrics;
+};
+
+export type VideoScene = { text: string; duration_seconds?: number; asset_url?: string };
+
+export type VideoJob = { id: string; tenant_id?: string; title: string; scenes?: VideoScene[]; status?: "queued" | "processing" | "completed" | "failed"; progress?: number; output_url?: string; error?: string; created_at?: string };
+
+export type SupportTicket = {
+  id: string;
+  tenant_id?: string;
+  subject: string;
+  message: string;
+  category?: string;
+  priority?: "low" | "normal" | "high" | "urgent";
+  status?: "open" | "in_progress" | "waiting_client" | "resolved" | "closed";
+  last_client_message?: string;
+  last_admin_reply?: string;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type AdminMetrics = {
+  generated_at?: string;
+  tenants: { total: number; active: number };
+  users: { total: number; active: number };
+  campaigns: { total: number; by_status: Record<string, number> };
+  payments: { total: number; confirmed: number };
+  support: { total: number; open: number };
 };
 
 export type PaymentRecord = {
@@ -222,6 +264,9 @@ export const api = {
     createTenant: (name: string, email: string, password: string) => request<{ created: true; tenant: Tenant }>("/api/platform/admin/tenants", { method: "POST", body: JSON.stringify({ name, email, password }) }),
     health: () => request<{ services: Record<string, string>; worker?: string }>("/api/platform/admin/health"),
     audit: () => request<{ events: AuditEvent[] }>("/api/platform/admin/audit"),
+    metrics: () => request<AdminMetrics>("/api/platform/admin/metrics"),
+    supportTickets: () => request<{ tickets: SupportTicket[] }>("/api/platform/admin/support/tickets"),
+    updateSupportTicket: (id: string, fields: { status: SupportTicket["status"]; reply?: string }) => request<{ updated: true }>(`/api/platform/admin/support/tickets/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(fields) }),
     integrations: () => request<{ integrations: Integration[] }>("/api/platform/admin/integrations"),
     updateIntegration: (key: string, fields: { label?: string; public_url?: string; notes?: string }) => request<{ updated: true }>(`/api/platform/admin/integrations/${key}`, { method: "PATCH", body: JSON.stringify(fields) }),
   },
@@ -241,10 +286,17 @@ export const api = {
     archiveContact: (id: string) => request<{ archived: true }>(`/api/platform/client/contacts/${encodeURIComponent(id)}`, { method: "DELETE" }),
     importContacts: (file: File) => { const form = new FormData(); form.append("file", file); return request<{ imported: number; skipped: number; total_rows: number }>("/api/platform/client/contacts/import", { method: "POST", body: form }); },
     campaigns: () => request<{ campaigns: Campaign[] }>("/api/platform/client/campaigns"),
+    metrics: () => request<{ tenant_id?: string; metrics: TenantMetrics }>("/api/platform/client/metrics"),
+    campaignReport: () => request<{ tenant_id?: string; generated_at?: string; campaigns: TenantMetrics["campaigns"]; deliveries: DeliveryMetrics }>("/api/platform/client/reports/campaigns"),
+    supportTickets: () => request<{ tickets: SupportTicket[] }>("/api/platform/client/support/tickets"),
+    createSupportTicket: (fields: { subject: string; message: string; category?: string; priority?: SupportTicket["priority"] }) => request<{ created: true; ticket: SupportTicket }>("/api/platform/client/support/tickets", { method: "POST", body: JSON.stringify(fields) }),
+    updateSupportTicket: (id: string, fields: { message?: string; status?: "open" | "closed" }) => request<{ updated: true }>(`/api/platform/client/support/tickets/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(fields) }),
+    createVideoJob: (payload: { title: string; scenes: VideoScene[]; language?: string; voice?: string; subtitles?: boolean }) => request<{ accepted: true; job: VideoJob }>("/api/platform/client/videos/jobs", { method: "POST", body: JSON.stringify(payload) }),
+    videoJob: (id: string) => request<{ job: VideoJob }>(`/api/platform/client/videos/jobs/${encodeURIComponent(id)}`),
     templates: () => request<{ templates: CampaignTemplate[] }>("/api/platform/client/templates"),
     createTemplate: (name: string, body: string) => request<{ created: true; template: CampaignTemplate }>("/api/platform/client/templates", { method: "POST", body: JSON.stringify({ name, body }) }),
     updateTemplate: (id: string, fields: { name?: string; body?: string; status?: "active" | "archived" }) => request<{ updated: true }>(`/api/platform/client/templates/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(fields) }),
-    createCampaign: (name: string, message: string, options: { template_id?: string; tags?: string[] } = {}) => request<{ created: true; campaign: Campaign }>("/api/platform/client/campaigns", { method: "POST", body: JSON.stringify({ name, message, ...options }) }),
+    createCampaign: (name: string, message: string, options: { template_id?: string; tags?: string[]; channels?: string[]; language?: string; tone?: string; offer?: string; scheduled_at?: string } = {}) => request<{ created: true; campaign: Campaign }>("/api/platform/client/campaigns", { method: "POST", body: JSON.stringify({ name, message, ...options }) }),
     campaignAction: (id: string, action: "pause" | "resume" | "cancel") => request<{ updated: true; status: string }>(`/api/platform/client/campaigns/${id}/actions/${action}`, { method: "POST" }),
     assistant: () => request<AssistantSettings>("/api/platform/client/assistant"),
     updateAssistant: (settings: Partial<AssistantSettings>) => request<{ updated: true }>("/api/platform/client/assistant", { method: "PATCH", body: JSON.stringify(settings) }),

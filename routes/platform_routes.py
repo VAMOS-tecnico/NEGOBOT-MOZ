@@ -562,6 +562,15 @@ def create_campaign():
     payload = request.get_json(silent=True) or {}
     name = str(payload.get("name") or "").strip()
     message = str(payload.get("message") or "").strip()
+    requested_channels = payload.get("channels") or ["whatsapp"]
+    channels = sorted({str(channel).strip().lower() for channel in requested_channels if str(channel).strip()})
+    supported_channels = {"whatsapp", "facebook", "instagram", "tiktok", "x", "linkedin", "telegram", "email"}
+    if not channels or not set(channels).issubset(supported_channels):
+        return jsonify({"error": "Escolhe pelo menos um canal suportado: WhatsApp, Facebook, Instagram, TikTok, X, LinkedIn, Telegram ou email."}), 400
+    language = str(payload.get("language") or "pt-MZ").strip()[:20]
+    tone = str(payload.get("tone") or "profissional").strip()[:60]
+    offer = str(payload.get("offer") or "").strip()[:1000]
+    scheduled_at = str(payload.get("scheduled_at") or "").strip()[:80] or None
     tenant_id = _tenant_for_identity(_identity())
     db = _db()
     template_id = str(payload.get("template_id") or "").strip()
@@ -587,6 +596,12 @@ def create_campaign():
         "template_id": template_id or None,
         "segment_tags": segment_tags,
         "instance_name": str(payload.get("instance_name") or "").strip() or None,
+        "channels": channels,
+        "language": language,
+        "tone": tone,
+        "offer": offer,
+        "scheduled_at": scheduled_at,
+        "orchestration_status": "queued",
         "status": "queued",
         "total": len(contacts),
         "sent": 0,
@@ -612,7 +627,7 @@ def create_campaign():
     except Exception as exc:
         campaign_ref.set({"status": "failed", "error": "Fila indisponível"}, merge=True)
         return jsonify({"error": "Não foi possível iniciar a fila da campanha."}), 503
-    return jsonify({"created": True, "campaign": {"id": campaign_ref.id, "name": name, "status": "queued", "total": len(recipients)}}), 201
+    return jsonify({"created": True, "campaign": {"id": campaign_ref.id, "name": name, "status": "queued", "total": len(recipients), "channels": channels, "scheduled_at": scheduled_at}}), 201
 
 
 @platform_bp.post("/client/campaigns/<campaign_id>/actions/<action>")
@@ -1164,3 +1179,234 @@ def public_assistant_chat():
         if not answer or "processar muitas mensagens" in answer.casefold():
             answer = "Posso ajudar com os planos, pagamentos M-Pesa, ligação do WhatsApp e demonstração de 2 dias. Escreve 'planos' para veres a tabela completa."
     return jsonify({"answer": answer, "source": source, "next": {"whatsapp": "/falar-whatsapp", "platform": "/plataforma"}})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Métricas, relatórios e suporte SaaS
+# ─────────────────────────────────────────────────────────────────────────────
+
+_TICKET_STATUSES = {"open", "in_progress", "waiting_client", "resolved", "closed"}
+_TICKET_PRIORITIES = {"low", "normal", "high", "urgent"}
+
+
+def _tenant_collection_rows(collection: str, tenant_id: str, limit: int = 2000) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for document in _db().collection(collection).where("tenant_id", "==", tenant_id).limit(limit).stream():
+        item = document.to_dict() or {}
+        item["id"] = document.id
+        rows.append(item)
+    return rows
+
+
+def _campaign_metrics_for_tenant(tenant_id: str) -> dict[str, Any]:
+    campaigns = _tenant_collection_rows("campaigns", tenant_id, 500)
+    recipients = _tenant_collection_rows("campaign_recipients", tenant_id, 5000)
+    conversations = list(_db().collection("clientes_bot").document(tenant_id).collection("conversas").limit(500).stream())
+    contacts = _tenant_collection_rows("contacts", tenant_id, 5000)
+    statuses: dict[str, int] = {}
+    for campaign in campaigns:
+        status = str(campaign.get("status") or "unknown")
+        statuses[status] = statuses.get(status, 0) + 1
+    recipient_statuses: dict[str, int] = {}
+    for recipient in recipients:
+        status = str(recipient.get("status") or "unknown")
+        recipient_statuses[status] = recipient_statuses.get(status, 0) + 1
+    sent = recipient_statuses.get("sent", 0) + recipient_statuses.get("delivered", 0)
+    failed = recipient_statuses.get("failed", 0)
+    attempted = sent + failed
+    recent = sorted(campaigns, key=lambda item: str(item.get("created_at") or ""), reverse=True)[:10]
+    return {
+        "contacts": {"total": len(contacts), "opt_in": sum(1 for item in contacts if item.get("opt_in", True)), "opt_out": sum(1 for item in contacts if not item.get("opt_in", True))},
+        "conversations": len(conversations),
+        "campaigns": {"total": len(campaigns), "by_status": statuses, "recent": recent},
+        "deliveries": {"total": len(recipients), "by_status": recipient_statuses, "sent": sent, "failed": failed, "delivery_rate": round((sent / attempted) * 100, 2) if attempted else 0},
+    }
+
+
+@platform_bp.get("/client/metrics")
+@_require_roles("client", "operator")
+def client_metrics():
+    tenant_id = _tenant_for_identity(_identity())
+    return jsonify({"tenant_id": tenant_id, "metrics": _campaign_metrics_for_tenant(tenant_id)})
+
+
+@platform_bp.get("/client/reports/campaigns")
+@_require_roles("client", "operator")
+def client_campaign_report():
+    tenant_id = _tenant_for_identity(_identity())
+    metrics = _campaign_metrics_for_tenant(tenant_id)
+    return jsonify({"tenant_id": tenant_id, "generated_at": _now(), "campaigns": metrics["campaigns"], "deliveries": metrics["deliveries"]})
+
+
+@platform_bp.get("/client/support/tickets")
+@_require_roles("client", "operator")
+def client_support_tickets():
+    tenant_id = _tenant_for_identity(_identity())
+    rows = _tenant_collection_rows("support_tickets", tenant_id, 200)
+    rows.sort(key=lambda item: str(item.get("updated_at") or item.get("created_at") or ""), reverse=True)
+    return jsonify({"tickets": rows})
+
+
+@platform_bp.post("/client/support/tickets")
+@_require_roles("client", "operator")
+def create_support_ticket():
+    payload = request.get_json(silent=True) or {}
+    subject = str(payload.get("subject") or "").strip()
+    message = str(payload.get("message") or "").strip()
+    category = str(payload.get("category") or "general").strip().lower()[:40]
+    priority = str(payload.get("priority") or "normal").strip().lower()
+    if not 4 <= len(subject) <= 160 or not 10 <= len(message) <= 5000:
+        return jsonify({"error": "Indica um assunto e uma descrição válidos."}), 400
+    if priority not in _TICKET_PRIORITIES:
+        priority = "normal"
+    tenant_id = _tenant_for_identity(_identity())
+    reference = _db().collection("support_tickets").document()
+    now = _now()
+    ticket = {"tenant_id": tenant_id, "subject": subject, "message": message, "category": category or "general", "priority": priority, "status": "open", "created_by": (_identity() or {}).get("id"), "created_at": now, "updated_at": now}
+    reference.set(ticket)
+    _audit("support_ticket_created", _identity(), tenant_id, {"ticket_id": reference.id, "priority": priority, "category": category})
+    return jsonify({"created": True, "ticket": {"id": reference.id, **ticket}}), 201
+
+
+@platform_bp.patch("/client/support/tickets/<ticket_id>")
+@_require_roles("client", "operator")
+def update_client_support_ticket(ticket_id: str):
+    tenant_id = _tenant_for_identity(_identity())
+    reference = _db().collection("support_tickets").document(ticket_id)
+    document = reference.get()
+    data = document.to_dict() if document.exists else None
+    if not data or data.get("tenant_id") != tenant_id:
+        return jsonify({"error": "Ticket não encontrado."}), 404
+    payload = request.get_json(silent=True) or {}
+    changes: dict[str, Any] = {}
+    if "message" in payload:
+        message = str(payload.get("message") or "").strip()
+        if not 10 <= len(message) <= 5000:
+            return jsonify({"error": "A mensagem deve ter entre 10 e 5000 caracteres."}), 400
+        changes["last_client_message"] = message
+        changes["last_client_message_at"] = _now()
+        if data.get("status") == "waiting_client":
+            changes["status"] = "open"
+    if "status" in payload and str(payload.get("status")) in {"closed", "open"}:
+        changes["status"] = str(payload["status"])
+    if not changes:
+        return jsonify({"error": "Nenhuma alteração válida foi enviada."}), 400
+    changes["updated_at"] = _now()
+    reference.set(changes, merge=True)
+    _audit("support_ticket_updated", _identity(), tenant_id, {"ticket_id": ticket_id, "fields": sorted(changes)})
+    return jsonify({"updated": True, "ticket_id": ticket_id, "fields": sorted(changes)})
+
+
+@platform_bp.get("/admin/metrics")
+@_require_roles("owner", "admin")
+def admin_metrics():
+    db = _db()
+    tenants = list(db.collection("tenants").limit(5000).stream())
+    users = list(db.collection("platform_users").limit(5000).stream())
+    campaigns = list(db.collection("campaigns").limit(5000).stream())
+    payments = list(db.collection("payment_intents").limit(5000).stream())
+    tickets = list(db.collection("support_tickets").limit(5000).stream())
+    return jsonify({
+        "generated_at": _now(),
+        "tenants": {"total": len(tenants), "active": sum(1 for item in tenants if (item.to_dict() or {}).get("status", "active") in {"active", "ativo"})},
+        "users": {"total": len(users), "active": sum(1 for item in users if (item.to_dict() or {}).get("status", "active") == "active")},
+        "campaigns": {"total": len(campaigns), "by_status": _count_statuses(campaigns)},
+        "payments": {"total": len(payments), "confirmed": sum(1 for item in payments if (item.to_dict() or {}).get("status") in {"confirmed", "active"})},
+        "support": {"total": len(tickets), "open": sum(1 for item in tickets if (item.to_dict() or {}).get("status", "open") in {"open", "in_progress", "waiting_client"})},
+    })
+
+
+def _count_statuses(documents: list[Any]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for document in documents:
+        status = str((document.to_dict() or {}).get("status") or "unknown")
+        counts[status] = counts.get(status, 0) + 1
+    return counts
+
+
+@platform_bp.get("/admin/support/tickets")
+@_require_roles("owner", "admin")
+def admin_support_tickets():
+    rows = []
+    for document in _db().collection("support_tickets").limit(500).stream():
+        item = document.to_dict() or {}
+        item["id"] = document.id
+        rows.append(item)
+    rows.sort(key=lambda item: str(item.get("updated_at") or item.get("created_at") or ""), reverse=True)
+    return jsonify({"tickets": rows})
+
+
+@platform_bp.patch("/admin/support/tickets/<ticket_id>")
+@_require_roles("owner", "admin")
+def admin_update_support_ticket(ticket_id: str):
+    reference = _db().collection("support_tickets").document(ticket_id)
+    document = reference.get()
+    if not document.exists:
+        return jsonify({"error": "Ticket não encontrado."}), 404
+    payload = request.get_json(silent=True) or {}
+    status = str(payload.get("status") or "").strip().lower()
+    if status not in _TICKET_STATUSES:
+        return jsonify({"error": "Estado de ticket inválido."}), 400
+    changes = {"status": status, "updated_at": _now(), "updated_by": (_identity() or {}).get("id")}
+    if "reply" in payload:
+        reply = str(payload.get("reply") or "").strip()
+        if reply:
+            changes["last_admin_reply"] = reply[:5000]
+            changes["last_admin_reply_at"] = _now()
+    reference.set(changes, merge=True)
+    tenant_id = str((document.to_dict() or {}).get("tenant_id") or "") or None
+    _audit("support_ticket_admin_updated", _identity(), tenant_id, {"ticket_id": ticket_id, "status": status})
+    return jsonify({"updated": True, "ticket_id": ticket_id, "status": status})
+
+
+@platform_bp.post("/client/videos/jobs")
+@_require_roles("client", "operator")
+def create_video_job():
+    base_url = str(os.getenv("VIDEO_SERVICE_URL", "")).rstrip("/")
+    service_token = os.getenv("VIDEO_SERVICE_TOKEN", "").strip()
+    if not base_url or not service_token:
+        return jsonify({"error": "O motor de vídeos ainda não está configurado."}), 503
+    payload = request.get_json(silent=True) or {}
+    scenes = payload.get("scenes") or []
+    title = str(payload.get("title") or "").strip()
+    if not 2 <= len(title) <= 160 or not isinstance(scenes, list) or not 1 <= len(scenes) <= 20:
+        return jsonify({"error": "Indica um título e pelo menos uma cena válida."}), 400
+    tenant_id = _tenant_for_identity(_identity())
+    outgoing = {"tenant_id": tenant_id, "title": title, "scenes": scenes, "language": str(payload.get("language") or "pt-MZ"), "voice": payload.get("voice"), "subtitles": bool(payload.get("subtitles", True))}
+    try:
+        response = requests.post(f"{base_url}/api/video/jobs", json=outgoing, headers={"X-Video-Service-Token": service_token}, timeout=20)
+    except requests.RequestException:
+        return jsonify({"error": "O motor de vídeos está temporariamente indisponível."}), 503
+    if not response.ok:
+        return jsonify({"error": "O motor de vídeos rejeitou o job."}), 502
+    data = response.json()
+    job = data.get("job") or {}
+    job_id = str(job.get("id") or "").strip()
+    if not job_id:
+        return jsonify({"error": "O motor de vídeos devolveu uma resposta inválida."}), 502
+    _db().collection("video_jobs").document(job_id).set({"tenant_id": tenant_id, "job_id": job_id, "title": title, "status": "queued", "created_at": _now()}, merge=True)
+    _audit("video_job_created", _identity(), tenant_id, {"job_id": job_id, "scenes": len(scenes)})
+    return jsonify({"accepted": True, "job": job}), 202
+
+
+@platform_bp.get("/client/videos/jobs/<job_id>")
+@_require_roles("client", "operator")
+def get_video_job(job_id: str):
+    base_url = str(os.getenv("VIDEO_SERVICE_URL", "")).rstrip("/")
+    service_token = os.getenv("VIDEO_SERVICE_TOKEN", "").strip()
+    tenant_id = _tenant_for_identity(_identity())
+    document = _db().collection("video_jobs").document(job_id).get()
+    if not document.exists or (document.to_dict() or {}).get("tenant_id") != tenant_id:
+        return jsonify({"error": "Job de vídeo não encontrado."}), 404
+    if not base_url or not service_token:
+        return jsonify({"error": "O motor de vídeos ainda não está configurado."}), 503
+    try:
+        response = requests.get(f"{base_url}/api/video/jobs/{quote(job_id)}", headers={"X-Video-Service-Token": service_token}, timeout=15)
+    except requests.RequestException:
+        return jsonify({"error": "O motor de vídeos está temporariamente indisponível."}), 503
+    if not response.ok:
+        return jsonify({"error": "Não foi possível obter o estado do vídeo."}), 502
+    data = response.json()
+    job = data.get("job") or {}
+    _db().collection("video_jobs").document(job_id).set({"status": job.get("status"), "progress": job.get("progress", 0), "updated_at": _now(), "output_path": job.get("output_path")}, merge=True)
+    return jsonify({"job": job})

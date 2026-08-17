@@ -234,6 +234,27 @@ class PlatformSecurityTests(unittest.TestCase):
         response = self.client.post("/api/platform/client/team", headers={"Origin": "https://evil.example"}, json={"name": "Operador", "email": "evil@example.com", "password": "password-123"})
         self.assertEqual(response.status_code, 403)
 
+    def test_support_ticket_is_scoped_to_tenant(self):
+        set_identity(self.client, {"id": "user-a", "name": "A", "role": "client", "tenant_id": "tenant-a", "tenant_role": "owner"})
+        created = self.client.post("/api/platform/client/support/tickets", json={"subject": "Falha no QR Code", "message": "O QR Code não aparece depois do pagamento.", "priority": "high"})
+        self.assertEqual(created.status_code, 201)
+        ticket_id = created.get_json()["ticket"]["id"]
+        self.assertEqual(self.client.get("/api/platform/client/support/tickets").get_json()["tickets"][0]["tenant_id"], "tenant-a")
+        self.db.collections["support_tickets"][ticket_id].data["tenant_id"] = "tenant-b"
+        cross_tenant = self.client.patch(f"/api/platform/client/support/tickets/{ticket_id}", json={"status": "closed"})
+        self.assertEqual(cross_tenant.status_code, 404)
+
+    def test_admin_metrics_returns_global_counts_only_for_admin(self):
+        self.db.collections["tenants"] = {"tenant-a": FakeSnapshot("tenant-a", {"status": "active"}), "tenant-b": FakeSnapshot("tenant-b", {"status": "suspended"})}
+        self.db.collections["platform_users"] = {"user-a": FakeSnapshot("user-a", {"status": "active"})}
+        self.db.collections["support_tickets"] = {"ticket-a": FakeSnapshot("ticket-a", {"status": "open"})}
+        set_identity(self.client, {"id": "owner", "name": "Owner", "role": "owner", "tenant_id": None})
+        response = self.client.get("/api/platform/admin/metrics")
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["tenants"]["total"], 2)
+        self.assertEqual(payload["support"]["open"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()
