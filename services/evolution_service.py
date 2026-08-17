@@ -1,9 +1,16 @@
 import re
-import time
-import random
-import threading
-import requests
+import base64
+import json
 import logging
+import os
+import random
+import shutil
+import subprocess
+import tempfile
+import threading
+import time
+
+import requests
 from urllib.parse import quote
 from config import Config
 
@@ -85,6 +92,167 @@ def send_whatsapp(to, text, instance_name=None):
         return False
 
 
+MAX_AUDIO_BYTES = 20 * 1024 * 1024
+MAX_AUDIO_DURATION_SECONDS = 300
+
+
+def _normalizar_audio_para_whisper(media_bytes):
+    """Valida e converte áudio para WAV PCM mono 16 kHz sem enviar bytes inválidos ao Groq."""
+    if not isinstance(media_bytes, (bytes, bytearray)):
+        return b""
+    if not media_bytes or len(media_bytes) > MAX_AUDIO_BYTES:
+        logger.warning("Áudio rejeitado antes do FFmpeg: tamanho inválido (%s bytes).", len(media_bytes or b""))
+        return b""
+
+    ffprobe = shutil.which("ffprobe")
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffprobe or not ffmpeg:
+        logger.error("FFmpeg/ffprobe não estão instalados no backend.")
+        return b""
+
+    try:
+        with tempfile.TemporaryDirectory(prefix="negobot-audio-") as temp_dir:
+            source_path = os.path.join(temp_dir, "input.bin")
+            output_path = os.path.join(temp_dir, "output.wav")
+            with open(source_path, "wb") as source_file:
+                source_file.write(media_bytes)
+
+            probe = subprocess.run(
+                [
+                    ffprobe,
+                    "-v", "error",
+                    "-select_streams", "a:0",
+                    "-show_entries", "stream=codec_type,codec_name,sample_rate,channels:format=duration",
+                    "-of", "json",
+                    source_path,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=8,
+                check=False,
+            )
+            if probe.returncode != 0:
+                logger.warning("Áudio rejeitado pelo ffprobe: %s", probe.stderr[:300])
+                return b""
+
+            metadata = json.loads(probe.stdout or "{}")
+            streams = metadata.get("streams") or []
+            if not streams or streams[0].get("codec_type") != "audio":
+                logger.warning("Áudio rejeitado: nenhuma stream de áudio válida foi detetada.")
+                return b""
+
+            duration_raw = (metadata.get("format") or {}).get("duration")
+            if duration_raw not in (None, "N/A") and float(duration_raw) > MAX_AUDIO_DURATION_SECONDS:
+                logger.warning("Áudio rejeitado: duração acima de %s segundos.", MAX_AUDIO_DURATION_SECONDS)
+                return b""
+
+            converted = subprocess.run(
+                [
+                    ffmpeg,
+                    "-nostdin",
+                    "-v", "error",
+                    "-xerror",
+                    "-i", source_path,
+                    "-map", "0:a:0",
+                    "-map_metadata", "-1",
+                    "-ac", "1",
+                    "-ar", "16000",
+                    "-c:a", "pcm_s16le",
+                    "-f", "wav",
+                    output_path,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+            if converted.returncode != 0 or not os.path.exists(output_path):
+                logger.warning("Conversão de áudio falhou: %s", converted.stderr[:300])
+                return b""
+
+            with open(output_path, "rb") as normalized_file:
+                normalized = normalized_file.read()
+            if not normalized or len(normalized) > MAX_AUDIO_BYTES:
+                logger.warning("Áudio normalizado rejeitado: tamanho inválido (%s bytes).", len(normalized))
+                return b""
+            if normalized[:4] != b"RIFF" or normalized[8:12] != b"WAVE":
+                logger.warning("FFmpeg não produziu um WAV válido.")
+                return b""
+            return normalized
+    except (ValueError, OSError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
+        logger.warning("Falha segura na validação/conversão do áudio: %s", exc)
+        return b""
+
+
+def transcrever_audio_mensagem(data_payload, instance_name=None):
+    """Obtém um áudio recebido pela Evolution, normaliza-o e transcreve-o com o Whisper da Groq."""
+    try:
+        from services.groq_service import transcrever_audio_groq
+
+        if not isinstance(data_payload, dict):
+            return ""
+        message = data_payload.get("message") or {}
+        audio = message.get("audioMessage") or {}
+        if not isinstance(audio, dict):
+            return ""
+
+        media_bytes = b""
+        media_url = audio.get("url") or audio.get("mediaUrl")
+        webhook_base64 = audio.get("base64") or message.get("base64") or data_payload.get("base64")
+        headers = {"apikey": Config.EVOLUTION_API_KEY, "Content-Type": "application/json"}
+        clean_instance = _get_clean_instance(instance_name)
+
+        if webhook_base64:
+            encoded = str(webhook_base64)
+            if "," in encoded:
+                encoded = encoded.split(",", 1)[1]
+            media_bytes = base64.b64decode(encoded, validate=False)
+            logger.warning("Áudio obtido diretamente do webhook: bytes=%s", len(media_bytes))
+        elif media_url:
+            response = requests.get(str(media_url), headers=headers, timeout=45)
+            response.raise_for_status()
+            media_bytes = response.content
+        else:
+            message_key = data_payload.get("key") or {}
+            request_payload = {
+                "message": {
+                    "key": {
+                        "id": message_key.get("id")
+                    }
+                },
+                "convertToMp4": True
+            }
+            endpoint = f"{Config.EVOLUTION_API_URL}/chat/getBase64FromMediaMessage/{clean_instance}"
+            response = requests.post(endpoint, headers=headers, json=request_payload, timeout=45)
+            response.raise_for_status()
+            result = response.json() or {}
+            encoded = result.get("base64") or result.get("data", {}).get("base64")
+            if not encoded:
+                logger.error("A Evolution não devolveu base64 para o áudio recebido.")
+                return ""
+            if "," in str(encoded):
+                encoded = str(encoded).split(",", 1)[1]
+            media_bytes = base64.b64decode(encoded, validate=False)
+
+        normalized_audio = _normalizar_audio_para_whisper(media_bytes)
+        if not normalized_audio:
+            logger.warning("Áudio inválido ou não recuperável; não enviado ao Groq.")
+            return ""
+        media_bytes = normalized_audio
+
+        logger.warning("Áudio preparado para Whisper: bytes=%s magic=%s mimetype=%s", len(media_bytes), media_bytes[:12].hex(), "audio/wav")
+        suffix = ".wav"
+        with tempfile.NamedTemporaryFile(prefix="negobot-audio-", suffix=suffix, delete=True) as temporary:
+            temporary.write(media_bytes)
+            temporary.flush()
+            with open(temporary.name, "rb") as audio_file:
+                transcript = transcrever_audio_groq(audio_file)
+        return str(transcript or "").strip()
+    except Exception as exc:
+        logger.error("Erro ao obter/transcrever áudio da Evolution: %s", exc)
+        return ""
+
+
 def send_media(to, media, caption="", mediatype="image", filename="media.png", instance_name=None):
     """Função de atalho compatível para envio de mídias exigida pelo central_flow."""
     try:
@@ -156,17 +324,19 @@ def criar_e_configurar_instancia_automatica(phone_number):
         if webhook_target_url:
             url_webhook = f"{Config.EVOLUTION_API_URL}/webhook/set/{client_instance}"
             payload_webhook = {
-                "url": webhook_target_url,
-                "enabled": True,
-                "byEvents": False,
-                "base64": False,
-                "webhookByEvents": False,
-                "events": [
-                    "MESSAGES_UPSERT",
-                    "CHATS_UPSERT",
-                    "CONNECTION_UPDATE"
-                ],
-                "groupsIgnore": True
+                "webhook": {
+                    "url": webhook_target_url,
+                    "enabled": True,
+                    "byEvents": False,
+                    "base64": False,
+                    "webhookByEvents": False,
+                    "events": [
+                        "MESSAGES_UPSERT",
+                        "CHATS_UPSERT",
+                        "CONNECTION_UPDATE"
+                    ],
+                    "groupsIgnore": True
+                }
             }
             res_wh = requests.post(url_webhook, headers=headers, json=payload_webhook, timeout=30)
             logger.info(f"Webhook configurado para {client_instance}: {res_wh.status_code}")

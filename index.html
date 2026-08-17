@@ -1,1 +1,162 @@
-g
+<!doctype html>
+<html lang="pt-PT">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#07111f">
+  <meta name="description" content="NEGOBOT-MOZ: atendimento inteligente para negócios que querem responder melhor e crescer com WhatsApp e IA.">
+  <title>NEGOBOT-MOZ | Atendimento inteligente para negócios</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root { --ink:#07111f; --ink-soft:#10243b; --paper:#f4f7f8; --white:#fff; --muted:#7890a5; --line:rgba(255,255,255,.12); --cyan:#57e7d4; --lime:#c8f26b; --coral:#ff836f; --ease:cubic-bezier(.23,1,.32,1); }
+    * { box-sizing:border-box; }
+    html { scroll-behavior:smooth; }
+    body { margin:0; color:var(--ink); background:var(--paper); font-family:"DM Sans",system-ui,sans-serif; }
+    a { color:inherit; text-decoration:none; }
+    .container { width:min(1180px, calc(100% - 40px)); margin:auto; }
+    .nav { position:absolute; z-index:5; inset:0 0 auto; padding:22px 0; color:#fff; }
+    .nav-inner { display:flex; align-items:center; justify-content:space-between; }
+    .brand { display:flex; align-items:center; gap:11px; font-family:"Space Grotesk",sans-serif; font-weight:700; letter-spacing:-.04em; }
+    .brand-mark { width:35px; height:35px; display:grid; place-items:center; border-radius:11px; color:var(--ink); background:var(--cyan); box-shadow:0 0 32px rgba(87,231,212,.3); }
+    .brand-mark::after { content:""; width:13px; height:13px; border:3px solid var(--ink); border-top-color:transparent; border-radius:50%; transform:rotate(-35deg); }
+    .nav-links { display:flex; gap:28px; color:#b8ccdc; font-size:14px; }
+    .nav-links a:hover { color:#fff; }
+    .nav-cta { padding:11px 16px; border:1px solid rgba(87,231,212,.5); border-radius:100px; color:#fff; font-size:14px; font-weight:700; transition:transform .18s var(--ease),background .18s; }
+    .nav-cta:hover { background:rgba(87,231,212,.12); transform:translateY(-2px); }
+    .hero { position:relative; overflow:hidden; min-height:720px; color:#fff; background:var(--ink); }
+    .hero::before { content:""; position:absolute; inset:-20% -10% auto auto; width:70%; height:760px; background:radial-gradient(circle at 30% 30%, rgba(87,231,212,.2), transparent 27%), radial-gradient(circle at 70% 48%, rgba(200,242,107,.14), transparent 25%); filter:blur(12px); }
+    .hero::after { content:""; position:absolute; inset:0; opacity:.3; background-image:linear-gradient(rgba(255,255,255,.045) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.045) 1px,transparent 1px); background-size:58px 58px; mask-image:linear-gradient(to bottom,black,transparent 78%); }
+    .hero-grid { position:relative; z-index:1; display:grid; grid-template-columns:1.05fr .95fr; align-items:center; gap:70px; min-height:720px; padding:120px 0 80px; }
+    .eyebrow { display:flex; align-items:center; gap:9px; margin:0 0 24px; color:var(--cyan); font-size:12px; font-weight:700; letter-spacing:.16em; text-transform:uppercase; }
+    .eyebrow::before { content:""; width:28px; height:2px; background:var(--cyan); }
+    h1,h2,h3 { font-family:"Space Grotesk",sans-serif; letter-spacing:-.065em; }
+    h1 { max-width:680px; margin:0; font-size:clamp(47px,6.6vw,86px); line-height:.96; }
+    h1 em { color:var(--cyan); font-style:normal; }
+    .hero-copy { max-width:540px; margin:26px 0 32px; color:#b5c5d3; font-size:18px; line-height:1.65; }
+    .actions { display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
+    .button { display:inline-flex; align-items:center; justify-content:center; gap:10px; min-height:50px; padding:0 19px; border-radius:10px; font-weight:700; transition:transform .18s var(--ease),box-shadow .18s,background .18s; }
+    .button:hover { transform:translateY(-3px); }
+    .button-primary { color:var(--ink); background:var(--cyan); box-shadow:0 12px 28px rgba(87,231,212,.2); }
+    .button-primary:hover { box-shadow:0 15px 36px rgba(87,231,212,.34); }
+    .button-ghost { color:#fff; border:1px solid var(--line); }
+    .button-ghost:hover { background:rgba(255,255,255,.07); }
+    .hero-note { margin-top:20px; color:#7690a4; font-size:12px; }
+    .signal-card { position:relative; min-height:420px; padding:24px; border:1px solid rgba(87,231,212,.22); border-radius:24px; background:linear-gradient(145deg,rgba(22,49,72,.9),rgba(7,17,31,.72)); box-shadow:0 30px 100px rgba(0,0,0,.35); transform:rotate(2deg); }
+    .signal-card::before { content:""; position:absolute; inset:18px; border:1px dashed rgba(87,231,212,.22); border-radius:16px; pointer-events:none; }
+    .card-top { position:relative; display:flex; justify-content:space-between; align-items:center; color:#9ab2c5; font-size:12px; }
+    .live { display:flex; align-items:center; gap:6px; color:var(--lime); font-weight:700; }
+    .live::before { content:""; width:7px; height:7px; border-radius:50%; background:var(--lime); box-shadow:0 0 12px var(--lime); }
+    .chat-window { position:relative; display:grid; gap:12px; margin:52px 26px 0; }
+    .bubble { max-width:82%; padding:14px 16px; border-radius:14px 14px 14px 3px; color:#b8cfde; background:#1a3851; font-size:14px; line-height:1.45; }
+    .bubble.bot { justify-self:end; border-radius:14px 14px 3px 14px; color:var(--ink); background:var(--cyan); }
+    .bubble small { display:block; margin-top:6px; color:#7192a7; font-size:10px; }
+    .bubble.bot small { color:#356c70; }
+    .float-label { position:absolute; right:-25px; bottom:45px; display:flex; align-items:center; gap:10px; padding:13px 16px; border-radius:13px; color:var(--ink); background:var(--lime); font-size:13px; font-weight:700; box-shadow:0 12px 30px rgba(0,0,0,.25); }
+    .float-label span { display:block; width:28px; height:28px; border-radius:9px; background:rgba(7,17,31,.12); }
+    .trust { border-bottom:1px solid #dce6e7; background:#fff; }
+    .trust-inner { display:flex; align-items:center; justify-content:space-between; gap:25px; padding:23px 0; color:#708493; font-size:13px; }
+    .trust-items { display:flex; gap:28px; flex-wrap:wrap; color:#1b3b50; font-family:"Space Grotesk",sans-serif; font-size:13px; font-weight:700; }
+    .section { padding:112px 0; }
+    .section-dark { color:#fff; background:var(--ink); }
+    .section-head { display:flex; align-items:end; justify-content:space-between; gap:40px; margin-bottom:48px; }
+    .section-head h2 { max-width:600px; margin:0; font-size:clamp(36px,4.5vw,60px); line-height:1; }
+    .section-head p { max-width:360px; margin:0; color:#71899c; line-height:1.6; }
+    .section-dark .section-head p { color:#9aafbd; }
+    .features { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; }.public-plans{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}.public-plan{padding:28px;border:1px solid #dce7e8;border-radius:16px;background:#fff}.public-plan.featured{border:2px solid var(--cyan);box-shadow:0 18px 40px rgba(22,60,74,.12)}.public-plan h3{margin:0 0 8px;font-size:25px}.public-price{margin:14px 0;font:700 32px "Space Grotesk",sans-serif;color:#12616b}.public-plan ul{margin:0;padding-left:18px;color:#6e8593;font-size:14px;line-height:1.7}.public-plan .button{margin-top:22px}@media (max-width:850px){.public-plans{grid-template-columns:1fr}}
+    .feature { min-height:270px; padding:27px; border:1px solid #dce7e8; border-radius:16px; background:#fff; transition:transform .22s var(--ease),box-shadow .22s; }
+    .feature:hover { transform:translateY(-7px); box-shadow:0 20px 40px rgba(22,60,74,.1); }
+    .feature-number { color:#9db3be; font-family:"Space Grotesk"; font-size:13px; }
+    .feature-icon { width:45px; height:45px; display:grid; place-items:center; margin:39px 0 20px; border-radius:12px; color:var(--ink); background:var(--cyan); font-family:"Space Grotesk"; font-weight:700; }
+    .feature:nth-child(2) .feature-icon { background:var(--lime); }
+    .feature:nth-child(3) .feature-icon { background:#ffd0a8; }
+    .feature h3 { margin:0 0 10px; font-size:22px; letter-spacing:-.04em; }
+    .feature p { margin:0; color:#6e8593; font-size:14px; line-height:1.6; }
+    .workflow { display:grid; grid-template-columns:.85fr 1.15fr; align-items:center; gap:90px; }
+    .workflow h2 { max-width:500px; margin:0 0 22px; font-size:clamp(36px,4vw,55px); line-height:1.02; }
+    .workflow-copy { max-width:470px; color:#9aafbd; line-height:1.65; }
+    .steps { display:grid; gap:15px; }
+    .step { display:grid; grid-template-columns:48px 1fr; gap:17px; align-items:start; padding:21px; border:1px solid var(--line); border-radius:14px; background:rgba(255,255,255,.035); }
+    .step-num { display:grid; place-items:center; width:34px; height:34px; border-radius:9px; color:var(--ink); background:var(--cyan); font-family:"Space Grotesk"; font-weight:700; }
+    .step:nth-child(2) .step-num { background:var(--lime); }
+    .step:nth-child(3) .step-num { background:var(--coral); }
+    .step h3 { margin:0 0 5px; font-size:18px; letter-spacing:-.035em; }
+    .step p { margin:0; color:#91a8b8; font-size:14px; line-height:1.5; }
+    .cta { position:relative; overflow:hidden; padding:82px 0; background:var(--cyan); }
+    .cta::after { content:""; position:absolute; right:-80px; bottom:-230px; width:500px; height:500px; border:1px solid rgba(7,17,31,.14); border-radius:50%; box-shadow:0 0 0 50px rgba(7,17,31,.04),0 0 0 100px rgba(7,17,31,.035),0 0 0 150px rgba(7,17,31,.03); }
+    .cta-inner { position:relative; z-index:1; display:flex; align-items:center; justify-content:space-between; gap:35px; }
+    .cta h2 { max-width:620px; margin:0; font-size:clamp(36px,4.8vw,62px); line-height:1; }
+    .button-dark { color:#fff; background:var(--ink); }
+    .footer { padding:32px 0; color:#71899c; background:var(--ink); font-size:13px; }
+    .footer-inner { display:flex; justify-content:space-between; gap:20px; }
+    .footer .brand { color:#fff; }
+    @media (max-width:850px) { .nav-links { display:none; } .hero-grid,.workflow { grid-template-columns:1fr; gap:45px; } .hero { min-height:auto; } .hero-grid { min-height:auto; padding-top:145px; } .signal-card { width:min(100%,520px); transform:none; } .section-head,.cta-inner { align-items:flex-start; flex-direction:column; } .features { grid-template-columns:1fr; } .feature { min-height:auto; } .trust-inner { align-items:flex-start; flex-direction:column; } }
+    @media (max-width:520px) { .container { width:min(100% - 28px,1180px); } .nav-cta { padding:10px 12px; } h1 { font-size:48px; } .hero-copy { font-size:16px; } .section { padding:78px 0; } .signal-card { min-height:375px; padding:18px; } .chat-window { margin:45px 6px 0; } .float-label { right:-6px; } .footer-inner { flex-direction:column; } }
+    @media (prefers-reduced-motion:reduce) { * { scroll-behavior:auto !important; transition:none !important; } }
+  </style>
+</head>
+<body>
+  <header class="nav">
+    <div class="container nav-inner">
+      <a class="brand" href="#top" aria-label="NEGOBOT-MOZ início"><span class="brand-mark" aria-hidden="true"></span>NEGOBOT-MOZ</a>
+      <nav class="nav-links" aria-label="Navegação principal"><a href="#capacidades">Capacidades</a><a href="#planos">Planos</a><a href="#como-funciona">Como funciona</a><a href="#contacto">Contacto</a></nav>
+      <a class="nav-cta" href="/assistente">Falar com assistente</a>
+    </div>
+  </header>
+
+  <main id="top">
+    <section class="hero">
+      <div class="container hero-grid">
+        <div>
+          <p class="eyebrow">Inteligência para atendimento</p>
+          <h1>Mais respostas.<br><em>Mais negócio.</em></h1>
+          <p class="hero-copy">O NEGOBOT-MOZ transforma conversas no WhatsApp em atendimento consistente, suporte mais rápido e novas oportunidades para empresas em Moçambique.</p>
+          <div class="actions"><a class="button button-primary" href="/falar-whatsapp">Falar com assistente WhatsApp <span aria-hidden="true">↗</span></a><a class="button button-ghost" href="/assistente">Falar com assistente na plataforma</a></div>
+          <p class="hero-note">Atendimento automatizado com IA, Evolution API e Firebase Firestore.</p>
+        </div>
+        <div class="signal-card" aria-label="Exemplo de conversa com o NEGOBOT-MOZ">
+          <div class="card-top"><span>NEGOBOT / CENTRAL</span><span class="live">ONLINE</span></div>
+          <div class="chat-window">
+            <div class="bubble">Olá. Preciso de ajuda com o meu pedido.<small>10:42</small></div>
+            <div class="bubble bot">Claro. Vou verificar os detalhes e orientar-te já de seguida.<small>10:42 · resposta automática</small></div>
+            <div class="bubble">Também posso enviar um comprovativo?<small>10:43</small></div>
+            <div class="bubble bot">Sim. Envia a imagem aqui. A visão da IA ajuda-nos a extrair os dados relevantes.<small>10:43 · visão computacional</small></div>
+          </div>
+          <div class="float-label"><span></span>Atendimento que não para</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="trust" aria-label="Integrações da plataforma"><div class="container trust-inner"><span>Construído para operações modernas</span><div class="trust-items"><span>WHATSAPP</span><span>GROQ AI</span><span>EVOLUTION API</span><span>FIREBASE</span></div></div></section>
+
+    <section class="section" id="capacidades">
+      <div class="container">
+        <div class="section-head"><h2>Uma camada inteligente para cada conversa.</h2><p>Da primeira mensagem ao acompanhamento humano, o NEGOBOT-MOZ organiza o atendimento sem perder contexto.</p></div>
+        <div class="features">
+          <article class="feature"><span class="feature-number">01 / ATENDER</span><div class="feature-icon">01</div><h3>Resposta imediata</h3><p>Atendimento automatizado via WhatsApp para perguntas frequentes, suporte e orientação comercial.</p></article>
+          <article class="feature"><span class="feature-number">02 / ENTENDER</span><div class="feature-icon">02</div><h3>IA que interpreta</h3><p>Áudio, imagens, comprovativos, PDFs e folhas de cálculo podem entrar no fluxo de atendimento.</p></article>
+          <article class="feature"><span class="feature-number">03 / ESCALAR</span><div class="feature-icon">03</div><h3>Do bot para a equipa</h3><p>Quando a conversa precisa de uma pessoa, o atendimento é encaminhado e o contexto permanece.</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="planos"><div class="container"><div class="section-head"><h2>Um plano para cada fase do teu negócio.</h2><p>Começa com 2 dias de demonstração e escolhe o nível de automação que combina com a tua operação.</p></div><div class="public-plans"><article class="public-plan"><p class="eyebrow" style="color:#12616b">BÁSICO</p><h3>Plano Básico</h3><div class="public-price">500 MT / mês</div><ul><li>Até 1.500 conversas</li><li>FAQ, horário e catálogo em texto</li><li>1 número de WhatsApp</li><li>Suporte básico até 24h</li></ul><a class="button button-ghost" style="color:var(--ink);border-color:#c9d9dc" href="/assistente">Escolher Básico</a></article><article class="public-plan"><p class="eyebrow" style="color:#12616b">CRESCIMENTO</p><h3>Plano Médio</h3><div class="public-price">1.000 MT / mês</div><ul><li>Conversas ilimitadas</li><li>Fotos e leitura básica de Excel</li><li>Menu interativo e relatórios</li><li>Suporte prioritário até 12h</li></ul><a class="button button-ghost" style="color:var(--ink);border-color:#c9d9dc" href="/assistente">Escolher Médio</a></article><article class="public-plan featured"><p class="eyebrow" style="color:#12616b">MAIS COMPLETO</p><h3>Plano Premium</h3><div class="public-price">1.500 MT / mês</div><ul><li>IA avançada e documentos</li><li>Áudio, PDFs e artes publicitárias</li><li>Disparos e campanhas em massa</li><li>Suporte dedicado</li></ul><a class="button button-primary" href="/assistente">Escolher Premium</a></article></div></div></section>
+
+    <section class="section section-dark" id="como-funciona">
+      <div class="container workflow">
+        <div><p class="eyebrow">Como funciona</p><h2>A conversa certa, no momento certo.</h2><p class="workflow-copy">O ecossistema modular do NEGOBOT-MOZ liga WhatsApp, IA, automações e persistência de dados para criar experiências de atendimento mais simples.</p></div>
+        <div class="steps">
+          <article class="step"><span class="step-num">1</span><div><h3>O cliente envia uma mensagem</h3><p>Texto, áudio, imagem ou documento chegam pelo canal de WhatsApp.</p></div></article>
+          <article class="step"><span class="step-num">2</span><div><h3>O NEGOBOT interpreta o contexto</h3><p>Os fluxos modulares combinam regras do negócio e modelos de IA para preparar a resposta.</p></div></article>
+          <article class="step"><span class="step-num">3</span><div><h3>A equipa acompanha quando necessário</h3><p>O atendimento humano assume a conversa sem quebrar a experiência do cliente.</p></div></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="cta" id="contacto"><div class="container cta-inner"><h2>Pronto para atender melhor?</h2><div class="actions"><a class="button button-dark" href="/falar-whatsapp">Falar pelo WhatsApp <span aria-hidden="true">↗</span></a><a class="button button-ghost" href="/assistente">Falar na plataforma</a></div></div></section>
+  </main>
+
+  <footer class="footer"><div class="container footer-inner"><a class="brand" href="#top"><span class="brand-mark" aria-hidden="true"></span>NEGOBOT-MOZ</a><span>Atendimento inteligente para negócios em Moçambique.</span><span>© 2026 NEGOBOT-MOZ</span></div></footer>
+</body>
+</html>

@@ -1,9 +1,11 @@
-FROM python:3.10-slim
+FROM python:3.11-slim
 
 WORKDIR /app
 
 # Instala dependências do sistema se necessário
-RUN apt-get update && apt-get install -y --no-install-recommends gcc && rm -rf /var/lib/apt/lists/*
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends gcc ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
 
 # Copia e instala os requisitos do Python
 COPY requirements.txt .

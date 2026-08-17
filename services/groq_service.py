@@ -112,10 +112,17 @@ def transcrever_audio_groq(audio_file):
     headers = {"Authorization": f"Bearer {api_key}"}
 
     try:
-        files = {'file': audio_file}
-        # Sem parâmetro de linguagem fixo: o Whisper descobre sozinho o idioma falado
-        data = {'model': 'whisper-large-v3'}
+        filename = os.path.basename(getattr(audio_file, "name", "audio.wav")) or "audio.wav"
+        mimetype = "audio/wav" if filename.lower().endswith(".wav") else "audio/ogg"
+        files = {'file': (filename, audio_file, mimetype)}
+        data = {
+            'model': 'whisper-large-v3',
+            'language': 'pt',
+            'response_format': 'json'
+        }
         response = requests.post(url, headers=headers, files=files, data=data, timeout=30)
+        if not response.ok:
+            logger.error("Groq Whisper HTTP %s: %s", response.status_code, response.text[:500])
         response.raise_for_status()
         return response.json().get("text", "").strip()
     except Exception as e:
