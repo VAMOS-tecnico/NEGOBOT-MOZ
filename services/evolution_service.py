@@ -327,14 +327,15 @@ def criar_e_configurar_instancia_automatica(phone_number):
         webhook_payload = _webhook_payload(webhook_target_url) if webhook_target_url else None
 
         if not instance_exists:
+            # Na Evolution v2.3.7, incluir o bloco webhook no POST de criação
+            # pode deixar o endpoint pendurado durante o arranque Baileys.
+            # Criamos com o payload mínimo e configuramos o webhook abaixo,
+            # numa chamada separada e idempotente.
             payload_create = {
                 "instanceName": client_instance_raw,
                 "qrcode": True,
                 "integration": "WHATSAPP-BAILEYS"
             }
-            if webhook_payload:
-                # Evolution API v2 exige o wrapper {"webhook": {...}} já no create.
-                payload_create.update(webhook_payload)
             res_create = requests.post(
                 f"{base_url}/instance/create",
                 headers=headers,

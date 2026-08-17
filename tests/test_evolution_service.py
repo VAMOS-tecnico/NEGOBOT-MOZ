@@ -81,7 +81,7 @@ class TestEvolutionService(unittest.TestCase):
     @patch("services.evolution_service.time.sleep")
     @patch("services.evolution_service.requests.post")
     @patch("services.evolution_service.requests.get")
-    def test_nova_instancia_inclui_webhook_no_create(self, get, post, sleep):
+    def test_nova_instancia_configura_webhook_depois_do_create(self, get, post, sleep):
         get.return_value = FakeResponse(404, {"error": "Not Found"})
         post.side_effect = [
             FakeResponse(201, {"status": "SUCCESS"}),
@@ -96,8 +96,10 @@ class TestEvolutionService(unittest.TestCase):
             Config.WEBHOOK_URL = old_webhook
         create_payload = post.call_args_list[0].kwargs["json"]
         self.assertEqual(create_payload["instanceName"], "258840000000")
-        self.assertIn("webhook", create_payload)
-        self.assertEqual(create_payload["webhook"]["url"], "https://webhook.test/webhook")
+        self.assertNotIn("webhook", create_payload)
+        webhook_payload = post.call_args_list[-1].kwargs["json"]
+        self.assertIn("webhook", webhook_payload)
+        self.assertEqual(webhook_payload["webhook"]["url"], "https://webhook.test/webhook")
 
     @patch("services.evolution_service.requests.post")
     def test_send_text_envia_payload_v2(self, post):
