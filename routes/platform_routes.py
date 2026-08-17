@@ -787,18 +787,23 @@ def verify_mpesa_payment():
     if not message_text:
         return jsonify({"error": "Introduza o código ou SMS do M-Pesa."}), 400
     tenant_id = _tenant_for_identity(_identity())
+    intent_ref = None
+    tx_id = None
     try:
         # A intenção permite ao listener AutoPay associar uma transação nova
         # ao tenant mesmo quando o Android ainda não gravou tenant_id.
+        from services.payment_service import extrair_codigo_mpesa, validar_e_ativar_pagamento_mpesa
+        tx_id = extrair_codigo_mpesa(message_text)
         if client_phone:
-            _db().collection("payment_intents").add({
+            intent_ref = _db().collection("payment_intents").document()
+            intent_ref.set({
                 "tenant_id": tenant_id,
                 "client_phone": re.sub(r"\D", "", client_phone),
+                "transaction_id": tx_id,
                 "status": "pending",
                 "source": "platform_verify",
                 "created_at": _now(),
             })
-        from services.payment_service import validar_e_ativar_pagamento_mpesa
         response = validar_e_ativar_pagamento_mpesa(tenant_id, client_phone, message_text)
         if "PAGAMENTO CONFIRMADO" in str(response):
             paid_doc = _db().collection("clientes_bot").document(tenant_id).get()
@@ -817,10 +822,28 @@ def verify_mpesa_payment():
                 "telefone_proprietario": client_phone or paid.get("telefone_proprietario"),
                 "updated_at": _now(),
             }, merge=True)
-            _audit("mpesa_payment_confirmed", _identity(), tenant_id, {"plan": paid.get("plano"), "mass_broadcast": bool(paid.get("disparo_liberado", False))})
+            if intent_ref is not None:
+                intent_ref.set({"status": "confirmed", "transaction_id": tx_id, "confirmed_at": _now()}, merge=True)
+            _audit("mpesa_payment_confirmed", _identity(), tenant_id, {"plan": paid.get("plano"), "transaction_id": tx_id, "mass_broadcast": bool(paid.get("disparo_liberado", False))})
+        elif intent_ref is not None:
+            intent_ref.set({"status": "pending_validation", "transaction_id": tx_id, "updated_at": _now()}, merge=True)
     except Exception:
         return jsonify({"error": "O serviço de pagamentos está temporariamente indisponível."}), 503
     return jsonify({"processed": True, "response": response})
+
+
+@platform_bp.get("/client/payments/history")
+@_require_roles("client", "operator")
+def payment_history():
+    tenant_id = _tenant_for_identity(_identity())
+    rows = []
+    for document in _db().collection("payment_intents").where("tenant_id", "==", tenant_id).limit(100).stream():
+        item = document.to_dict() or {}
+        item["id"] = document.id
+        item.pop("message_text", None)
+        rows.append(item)
+    rows.sort(key=lambda item: str(item.get("created_at", "")), reverse=True)
+    return jsonify({"payments": rows})
 
 
 

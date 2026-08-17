@@ -174,6 +174,16 @@ class PlatformSecurityTests(unittest.TestCase):
         cross_tenant_update = self.client.patch(f"/api/platform/client/templates/{template_id}", json={"status": "active"})
         self.assertEqual(cross_tenant_update.status_code, 404)
 
+    def test_payment_history_is_tenant_scoped(self):
+        self.db.collections["payment_intents"] = {
+            "payment-a": FakeSnapshot("payment-a", {"tenant_id": "tenant-a", "transaction_id": "TXA123", "status": "pending", "client_phone": "258841111111"}),
+            "payment-b": FakeSnapshot("payment-b", {"tenant_id": "tenant-b", "transaction_id": "TXB456", "status": "confirmed", "client_phone": "258842222222"}),
+        }
+        set_identity(self.client, {"id": "user-a", "name": "A", "role": "client", "tenant_id": "tenant-a", "tenant_role": "owner"})
+        response = self.client.get("/api/platform/client/payments/history")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([item["id"] for item in response.get_json()["payments"]], ["payment-a"])
+
     def test_login_rate_limit_applies_before_credential_lookup(self):
         for _ in range(8):
             response = self.client.post("/api/platform/auth/login", json={"identifier": "admin", "password": "wrong-password"})

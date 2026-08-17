@@ -117,6 +117,15 @@ export type CampaignTemplate = {
   status?: "active" | "archived";
 };
 
+export type PaymentRecord = {
+  id: string;
+  client_phone?: string;
+  transaction_id?: string | null;
+  status?: string;
+  created_at?: string;
+  confirmed_at?: string;
+};
+
 export type AssistantSettings = {
   diretrizes_corporativas: string;
   base_conhecimento_documentos: string;
@@ -222,6 +231,7 @@ export const api = {
     assistant: () => request<AssistantSettings>("/api/platform/client/assistant"),
     updateAssistant: (settings: Partial<AssistantSettings>) => request<{ updated: true }>("/api/platform/client/assistant", { method: "PATCH", body: JSON.stringify(settings) }),
     verifyPayment: (messageText: string, clientPhone: string) => request<{ processed: true; response: string }>("/api/platform/client/payments/mpesa/verify", { method: "POST", body: JSON.stringify({ message_text: messageText, client_phone: clientPhone }) }),
+    paymentHistory: () => request<{ payments: PaymentRecord[] }>("/api/platform/client/payments/history"),
     evolutionQr: (phone: string) => request<{ state: string; instance_name: string; qrcode?: string | null }>("/api/platform/client/evolution/qr", { method: "POST", body: JSON.stringify({ phone }) }),
   },
 };
