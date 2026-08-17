@@ -119,11 +119,29 @@ export type CampaignTemplate = {
 
 export type PaymentRecord = {
   id: string;
+  provider?: "mpesa" | "lemonsqueezy" | string;
+  payment_provider?: string;
+  plan_id?: string;
+  plan_name?: string;
   client_phone?: string;
   transaction_id?: string | null;
+  checkout_url?: string;
   status?: string;
   created_at?: string;
   confirmed_at?: string;
+};
+
+export type LemonSqueezyStatus = {
+  configured: boolean;
+  currency?: string;
+  plans: Record<string, boolean>;
+};
+
+export type LemonSqueezyCheckout = {
+  created: true;
+  payment_intent_id: string;
+  checkout_url: string;
+  plan_id: string;
 };
 
 export type AssistantSettings = {
@@ -232,6 +250,8 @@ export const api = {
     updateAssistant: (settings: Partial<AssistantSettings>) => request<{ updated: true }>("/api/platform/client/assistant", { method: "PATCH", body: JSON.stringify(settings) }),
     verifyPayment: (messageText: string, clientPhone: string) => request<{ processed: true; response: string }>("/api/platform/client/payments/mpesa/verify", { method: "POST", body: JSON.stringify({ message_text: messageText, client_phone: clientPhone }) }),
     paymentHistory: () => request<{ payments: PaymentRecord[] }>("/api/platform/client/payments/history"),
+    lemonSqueezyStatus: () => request<LemonSqueezyStatus>("/api/platform/client/payments/lemonsqueezy/status"),
+    createLemonSqueezyCheckout: (planId: string) => request<LemonSqueezyCheckout>("/api/platform/client/payments/lemonsqueezy/checkout", { method: "POST", body: JSON.stringify({ plan_id: planId }) }),
     evolutionQr: (phone: string) => request<{ state: string; instance_name: string; qrcode?: string | null }>("/api/platform/client/evolution/qr", { method: "POST", body: JSON.stringify({ phone }) }),
   },
 };

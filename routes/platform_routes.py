@@ -644,6 +644,7 @@ _INTEGRATION_DEFAULTS = {
     "firebase": {"label": "Firebase Firestore", "kind": "Dados e histórico", "env": "FIREBASE_CONFIG"},
     "redis": {"label": "Redis Queue", "kind": "Fila de campanhas", "env": "REDIS_URL"},
     "n8n": {"label": "n8n Automations", "kind": "Workflows e automações", "env": "N8N_HOST"},
+    "lemonsqueezy": {"label": "Lemon Squeezy", "kind": "Checkout online e subscrições", "env": "LEMONSQUEEZY_API_KEY"},
 }
 
 
@@ -859,6 +860,155 @@ def _audit(event: str, actor: dict[str, Any] | None, tenant_id: str | None = Non
         })
     except Exception:
         pass
+
+
+def _lemon_plan_from_variant(variant_id: str, requested_plan: str = "") -> str | None:
+    from services.payment_service import TABELA_PLANOS
+    variant_id = str(variant_id or "").strip()
+    requested_plan = str(requested_plan or "").strip().lower()
+    for data in TABELA_PLANOS.values():
+        plan_id = str(data["id"])
+        configured_variant = os.getenv(f"LEMONSQUEEZY_VARIANT_{plan_id.upper()}", "").strip()
+        if configured_variant and configured_variant == variant_id:
+            return plan_id
+    if requested_plan in {str(data["id"]) for data in TABELA_PLANOS.values()} and not variant_id:
+        return requested_plan
+    return None
+
+
+def _apply_lemon_plan(tenant_id: str, plan_id: str, attributes: dict[str, Any], intent_ref, event: dict[str, Any]):
+    from services.payment_service import TABELA_PLANOS
+    plan = next((item for item in TABELA_PLANOS.values() if item["id"] == plan_id), None)
+    if not plan:
+        raise ValueError("Plano Lemon Squeezy não encontrado.")
+    now = _now()
+    expires_at = __import__("services.lemonsqueezy_service", fromlist=["expiry_for_event"]).expiry_for_event(attributes, now)
+    lemon_fields = {
+        "provider": "lemonsqueezy",
+        "payment_provider": "lemonsqueezy",
+        "plan_id": plan_id,
+        "plan": plan_id,
+        "plan_name": plan["nome"],
+        "nome_plano": plan["nome"],
+        "status": "active",
+        "status_plano": "ativo",
+        "mass_broadcast": bool(plan["disparo_liberado"]),
+        "disparo_liberado": bool(plan["disparo_liberado"]),
+        "limite_conversas": plan["limite_conversas"],
+        "data_ativacao": now,
+        "data_expiracao": expires_at,
+        "metodo_pagamento": "Lemon Squeezy",
+        "lemon_subscription_id": event["object_id"] if event["object_type"] == "subscriptions" else attributes.get("subscription_id"),
+        "lemon_order_id": attributes.get("order_id"),
+        "lemon_customer_id": attributes.get("customer_id"),
+        "lemon_variant_id": event["variant_id"],
+        "lemon_status": attributes.get("status") or "active",
+        "updated_at": now,
+    }
+    _db().collection("tenants").document(tenant_id).set(lemon_fields, merge=True)
+    _db().collection("clientes_bot").document(tenant_id).set(lemon_fields, merge=True)
+    intent_ref.set({**lemon_fields, "status": "confirmed", "provider_status": "active", "confirmed_at": now, "activated_at": now}, merge=True)
+
+
+@platform_bp.get("/client/payments/lemonsqueezy/status")
+@_require_roles("client", "operator")
+def lemonsqueezy_status():
+    from services.lemonsqueezy_service import configured
+    from services.payment_service import TABELA_PLANOS
+    plans = {data["id"]: bool(os.getenv(f"LEMONSQUEEZY_VARIANT_{str(data['id']).upper()}", "").strip()) for data in TABELA_PLANOS.values()}
+    return jsonify({"configured": configured(), "currency": os.getenv("LEMONSQUEEZY_CURRENCY", "USD"), "plans": plans})
+
+
+@platform_bp.post("/client/payments/lemonsqueezy/checkout")
+@_require_roles("client", "operator")
+def create_lemonsqueezy_checkout():
+    from services.lemonsqueezy_service import create_checkout
+    payload = request.get_json(silent=True) or {}
+    plan_id = str(payload.get("plan_id") or "").strip().lower()
+    from services.payment_service import TABELA_PLANOS
+    plan = next((item for item in TABELA_PLANOS.values() if item["id"] == plan_id), None)
+    if not plan:
+        return jsonify({"error": "Plano não encontrado."}), 400
+    tenant_id = _tenant_for_identity(_identity())
+    if not tenant_id:
+        return jsonify({"error": "Tenant não encontrado na sessão."}), 400
+    intent_ref = _db().collection("payment_intents").document()
+    intent_ref.set({
+        "tenant_id": tenant_id,
+        "provider": "lemonsqueezy",
+        "payment_provider": "lemonsqueezy",
+        "plan_id": plan_id,
+        "plan_name": plan["nome"],
+        "status": "pending_checkout",
+        "created_at": _now(),
+    })
+    identity = _identity() or {}
+    tenant_doc = _db().collection("tenants").document(tenant_id).get()
+    tenant = tenant_doc.to_dict() or {}
+    try:
+        checkout = create_checkout(
+            plan_id=plan_id,
+            tenant_id=tenant_id,
+            payment_intent_id=intent_ref.id,
+            email=str(identity.get("email") or tenant.get("email") or "").strip() or None,
+            name=str(identity.get("name") or tenant.get("name") or "").strip() or None,
+        )
+    except (RuntimeError, ValueError, requests.RequestException) as exc:
+        intent_ref.set({"status": "checkout_failed", "error": str(exc), "updated_at": _now()}, merge=True)
+        return jsonify({"error": "O checkout Lemon Squeezy ainda não está disponível. Usa M-Pesa ou tenta novamente mais tarde."}), 503
+    intent_ref.set({"status": "pending", "checkout_url": checkout["url"], "variant_id": checkout["variant_id"], "updated_at": _now()}, merge=True)
+    _audit("lemonsqueezy_checkout_created", _identity(), tenant_id, {"payment_intent_id": intent_ref.id, "plan_id": plan_id})
+    return jsonify({"created": True, "payment_intent_id": intent_ref.id, "checkout_url": checkout["url"], "plan_id": plan_id}), 201
+
+
+@platform_bp.post("/webhooks/lemonsqueezy")
+def lemonsqueezy_webhook():
+    from services.lemonsqueezy_service import event_key, extract_event, verify_signature
+    raw_body = request.get_data(cache=True)
+    if not verify_signature(raw_body, request.headers.get("X-Signature")):
+        return jsonify({"error": "Assinatura Lemon Squeezy inválida."}), 401
+    payload = request.get_json(silent=True) or {}
+    event = extract_event(payload)
+    key = event_key(payload)
+    event_ref = _db().collection("lemonsqueezy_webhook_events").document(key)
+    if event_ref.get().exists:
+        return jsonify({"received": True, "duplicate": True})
+    event_ref.set({"event_key": key, "event_name": event["event_name"], "object_id": event["object_id"], "received_at": _now(), "payload": payload})
+    custom = event["custom_data"]
+    tenant_id = str(custom.get("tenant_id") or "").strip()
+    intent_id = str(custom.get("payment_intent_id") or "").strip()
+    if not tenant_id or not intent_id:
+        event_ref.set({"status": "unlinked"}, merge=True)
+        return jsonify({"received": True, "linked": False})
+    intent_ref = _db().collection("payment_intents").document(intent_id)
+    intent_doc = intent_ref.get()
+    intent = intent_doc.to_dict() or {}
+    if not intent_doc.exists or str(intent.get("tenant_id") or "") != tenant_id:
+        event_ref.set({"status": "tenant_mismatch"}, merge=True)
+        return jsonify({"received": True, "linked": False})
+    plan_id = _lemon_plan_from_variant(event["variant_id"], str(custom.get("plan_id") or intent.get("plan_id") or ""))
+    if not plan_id:
+        intent_ref.set({"status": "manual_review", "provider_event": event["event_name"], "updated_at": _now()}, merge=True)
+        event_ref.set({"status": "manual_review", "tenant_id": tenant_id, "payment_intent_id": intent_id}, merge=True)
+        return jsonify({"received": True, "linked": True, "status": "manual_review"})
+    event_name = event["event_name"]
+    attributes = event["attributes"]
+    if event_name in {"subscription_created", "subscription_payment_success", "subscription_payment_recovered"} or (event_name == "subscription_updated" and str(attributes.get("status") or "").lower() == "active"):
+        _apply_lemon_plan(tenant_id, plan_id, attributes, intent_ref, event)
+        result_status = "confirmed"
+    elif event_name in {"subscription_payment_failed"}:
+        intent_ref.set({"status": "payment_failed", "provider_event": event_name, "updated_at": _now()}, merge=True)
+        result_status = "payment_failed"
+    elif event_name in {"subscription_cancelled", "subscription_expired", "order_refunded"}:
+        intent_ref.set({"status": "cancelled" if "cancel" in event_name else "expired", "provider_event": event_name, "updated_at": _now()}, merge=True)
+        _db().collection("tenants").document(tenant_id).set({"status_plano": "cancelado" if "cancel" in event_name else "expirado", "status": "cancelado" if "cancel" in event_name else "expirado", "updated_at": _now()}, merge=True)
+        result_status = "cancelled" if "cancel" in event_name else "expired"
+    else:
+        intent_ref.set({"status": "received", "provider_event": event_name, "updated_at": _now()}, merge=True)
+        result_status = "received"
+    event_ref.set({"status": result_status, "tenant_id": tenant_id, "payment_intent_id": intent_id, "processed_at": _now()}, merge=True)
+    _audit(f"lemonsqueezy_{result_status}", None, tenant_id, {"event_name": event_name, "payment_intent_id": intent_id, "object_id": event["object_id"]})
+    return jsonify({"received": True, "linked": True, "status": result_status})
 
 
 @platform_bp.get("/admin/audit")

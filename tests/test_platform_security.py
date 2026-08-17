@@ -1,3 +1,6 @@
+import hashlib
+import hmac
+import json
 import os
 import sys
 import types
@@ -95,6 +98,32 @@ class PlatformSecurityTests(unittest.TestCase):
         extensions.db = self.db
         platform_routes._LOGIN_ATTEMPTS.clear()
         self.client = app.test_client()
+
+    def test_lemonsqueezy_webhook_rejects_invalid_signature(self):
+        os.environ["LEMONSQUEEZY_WEBHOOK_SECRET"] = "lemon-test-secret"
+        response = self.client.post("/api/platform/webhooks/lemonsqueezy", data=b"{}", content_type="application/json", headers={"X-Signature": "invalid"})
+        self.assertEqual(response.status_code, 401)
+
+    def test_lemonsqueezy_webhook_activates_tenant_idempotently(self):
+        os.environ["LEMONSQUEEZY_WEBHOOK_SECRET"] = "lemon-test-secret"
+        os.environ["LEMONSQUEEZY_VARIANT_PREMIUM"] = "333"
+        self.db.collections["payment_intents"] = {
+            "intent-1": FakeSnapshot("intent-1", {"tenant_id": "tenant-a", "plan_id": "premium", "status": "pending"})
+        }
+        payload = {
+            "meta": {"event_name": "subscription_payment_success", "custom_data": {"tenant_id": "tenant-a", "payment_intent_id": "intent-1", "plan_id": "premium"}},
+            "data": {"type": "subscriptions", "id": "sub-1", "attributes": {"variant_id": 333, "status": "active", "renews_at": "2026-09-17T00:00:00Z"}},
+        }
+        raw = json.dumps(payload, separators=(",", ":")).encode()
+        signature = hmac.new(b"lemon-test-secret", raw, hashlib.sha256).hexdigest()
+        response = self.client.post("/api/platform/webhooks/lemonsqueezy", data=raw, content_type="application/json", headers={"X-Signature": signature})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["status"], "confirmed")
+        self.assertEqual(self.db.collections["payment_intents"]["intent-1"].data["status"], "confirmed")
+        self.assertEqual(self.db.collections["tenants"]["tenant-a"].data["plan"], "premium")
+        duplicate = self.client.post("/api/platform/webhooks/lemonsqueezy", data=raw, content_type="application/json", headers={"X-Signature": signature})
+        self.assertEqual(duplicate.status_code, 200)
+        self.assertTrue(duplicate.get_json()["duplicate"])
 
     def test_public_plan_question_returns_deterministic_table(self):
         response = self.client.post("/api/platform/public/assistant/chat", json={"message": "Quais são os preços e benefícios dos planos?", "source": "platform"})
