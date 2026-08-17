@@ -6,6 +6,8 @@ import logging
 import os
 import time
 
+import extensions
+
 try:
     import redis
 except ImportError:  # instalado no container pelo requirements.txt
@@ -17,6 +19,16 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(na
 logger = logging.getLogger("negobot-incoming-worker")
 QUEUE_NAME = os.getenv("WHATSAPP_INCOMING_QUEUE", "whatsapp_incoming_queue")
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/1")
+
+
+def _ensure_firestore() -> None:
+    """Inicializa o Firestore no processo persistente antes de tratar mensagens."""
+    if extensions.db is None:
+        initialized_db = extensions.init_extensions()
+        if extensions.db is None and initialized_db is not None:
+            extensions.db = initialized_db
+    if extensions.db is None:
+        raise RuntimeError("Firestore não foi inicializado no worker")
 
 
 def process_queue_item(item) -> bool:
@@ -40,6 +52,7 @@ def process_queue_item(item) -> bool:
 def main() -> None:
     if redis is None:
         raise RuntimeError("Biblioteca redis não instalada")
+    _ensure_firestore()
     client = redis.from_url(REDIS_URL, decode_responses=True)
     client.ping()
     logger.info("Consumidor online queue=%s", QUEUE_NAME)

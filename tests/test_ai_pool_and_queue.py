@@ -106,6 +106,13 @@ class IncomingQueueTests(unittest.TestCase):
         self.assertEqual(processed_payload["data"]["key"]["id"], "msg-2")
         self.assertEqual(processed_payload["_negobot_queue_enqueued_at"], 1.0)
 
+    def test_worker_initializes_firestore_before_consuming(self):
+        with patch.object(incoming_worker.extensions, "db", None), patch.object(
+            incoming_worker.extensions, "init_extensions", return_value=object()
+        ) as init_extensions:
+            incoming_worker._ensure_firestore()
+        init_extensions.assert_called_once_with()
+
 
 if __name__ == "__main__":
     unittest.main()
