@@ -845,7 +845,23 @@ def verify_mpesa_payment():
             intent_ref.set({"status": "pending_validation", "transaction_id": tx_id, "updated_at": _now()}, merge=True)
     except Exception:
         return jsonify({"error": "O serviço de pagamentos está temporariamente indisponível."}), 503
-    return jsonify({"processed": True, "response": response})
+    qr_payload = {"state": "not_requested", "qrcode": None, "instance_name": None}
+    if "PAGAMENTO CONFIRMADO" in str(response):
+        try:
+            owner_phone = re.sub(r"\D", "", str(client_phone or ""))
+            if owner_phone:
+                from services.evolution_service import criar_e_configurar_instancia_automatica, obter_qrcode_instancia
+                if criar_e_configurar_instancia_automatica(owner_phone):
+                    qr_data = obter_qrcode_instancia(owner_phone)
+                    base64_qr = qr_data.get("base64")
+                    qr_payload = {
+                        "state": qr_data.get("state", "connecting"),
+                        "instance_name": qr_data.get("instance_name"),
+                        "qrcode": base64_qr and (base64_qr if str(base64_qr).startswith("data:") else f"data:image/png;base64,{base64_qr}"),
+                    }
+        except Exception:
+            qr_payload["state"] = "pending"
+    return jsonify({"processed": True, "response": response, **qr_payload})
 
 
 @platform_bp.get("/client/payments/history")
@@ -1112,15 +1128,13 @@ def request_evolution_qr():
     if len(phone) < 8:
         return jsonify({"error": "Indica o número de WhatsApp que será automatizado."}), 400
     try:
-        from services.evolution_service import criar_e_configurar_instancia_automatica
+        from services.evolution_service import criar_e_configurar_instancia_automatica, obter_qrcode_instancia
         if not criar_e_configurar_instancia_automatica(phone):
             return jsonify({"error": "Não foi possível preparar a instância Evolution."}), 502
-        instance_name = phone
-        response = requests.get(f"{str(os.getenv('EVOLUTION_API_URL', '')).rstrip('/')}/instance/connect/{quote(instance_name)}", headers={"apikey": os.getenv("EVOLUTION_API_KEY", "")}, timeout=35)
-        response.raise_for_status()
-        data = response.json() or {}
-        state = data.get("instance", {}).get("state") or data.get("state") or "connecting"
-        base64_qr = data.get("base64") or (data.get("qrcode") or {}).get("base64")
+        data = obter_qrcode_instancia(phone)
+        instance_name = data["instance_name"]
+        state = data["state"]
+        base64_qr = data.get("base64")
         tenant_ref.set({"instance_name": instance_name, "telefone_proprietario": phone, "evolution_state": state, "updated_at": _now()}, merge=True)
         return jsonify({"state": state, "instance_name": instance_name, "qrcode": base64_qr and (base64_qr if str(base64_qr).startswith("data:") else f"data:image/png;base64,{base64_qr}")})
     except requests.RequestException:

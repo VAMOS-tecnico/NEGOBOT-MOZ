@@ -49,6 +49,14 @@ def processar_pagamento(clean_phone, message_text, central_instance):
     )
     if any(termo in resposta_pagamento for termo in ["PAGAMENTO CONFIRMADO", "Aguarde", "Insuficiente", "Já Utilizado", "Não Identificado"]):
         send_whatsapp(clean_phone, resposta_pagamento, instance_name=central_instance)
+        if "PAGAMENTO CONFIRMADO" in resposta_pagamento:
+            try:
+                if criar_e_configurar_instancia_automatica(clean_phone):
+                    time.sleep(2)
+                    gerar_e_enviar_qrcode_central(clean_phone)
+            except Exception as exc:
+                logger.exception("Pagamento confirmado, mas não foi possível preparar o QR Code para %s: %s", clean_phone, exc)
+                send_whatsapp(clean_phone, "✅ O pagamento foi confirmado. A ligação do WhatsApp está a ser preparada; envia #qrcode daqui a pouco para receber um novo QR Code.", instance_name=central_instance)
         return True
     return False
 

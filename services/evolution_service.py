@@ -349,23 +349,32 @@ def criar_e_configurar_instancia_automatica(phone_number):
         return False
 
 
+def obter_qrcode_instancia(phone_number):
+    """Obtém o estado e o QR Code de uma instância de cliente sem enviar mensagem."""
+    client_instance_raw = _limpar_numero(phone_number)
+    if not client_instance_raw:
+        raise ValueError("Número de WhatsApp inválido")
+    client_instance = quote(client_instance_raw)
+    headers = {"apikey": Config.EVOLUTION_API_KEY, "Content-Type": "application/json"}
+    url_connect = f"{Config.EVOLUTION_API_URL}/instance/connect/{client_instance}"
+    response_connect = requests.get(url_connect, headers=headers, timeout=35)
+    response_connect.raise_for_status()
+    dados_resposta = response_connect.json() or {}
+    state = dados_resposta.get("instance", {}).get("state") or dados_resposta.get("state") or "connecting"
+    base64_qrcode = dados_resposta.get("base64") or (dados_resposta.get("qrcode") or {}).get("base64")
+    return {"state": state, "instance_name": client_instance_raw, "base64": base64_qrcode}
+
+
 def gerar_e_enviar_qrcode_central(phone_number):
     """Solicita a ligação da instância e envia o QR Code ao utilizador."""
     try:
-        client_instance_raw = _limpar_numero(phone_number)
-        client_instance = quote(client_instance_raw)
-        headers = {"apikey": Config.EVOLUTION_API_KEY, "Content-Type": "application/json"}
-        
-        url_connect = f"{Config.EVOLUTION_API_URL}/instance/connect/{client_instance}"
-        response_connect = requests.get(url_connect, headers=headers, timeout=35)
-        response_connect.raise_for_status()
-        
-        dados_resposta = response_connect.json()
-        if dados_resposta.get("instance", {}).get("state") == "open":
+        dados_resposta = obter_qrcode_instancia(phone_number)
+        client_instance_raw = dados_resposta["instance_name"]
+        if dados_resposta["state"] == "open":
             send_whatsapp(phone_number, "✅ O seu assistente virtual já se encontra ativo e operacional!")
             return True
-            
-        base64_qrcode = dados_resposta.get("base64") or dados_resposta.get("qrcode", {}).get("base64")
+
+        base64_qrcode = dados_resposta.get("base64")
         if not base64_qrcode:
             logger.error(f"Nenhum QR Code retornado para a instância {client_instance_raw}")
             return False
@@ -377,7 +386,6 @@ def gerar_e_enviar_qrcode_central(phone_number):
             "3️⃣ Aponte a câmara e escaneie *imediatamente* este QR Code.\n\n"
             "Se expirar, digite *#qrcode* aqui para gerar um novo!"
         )
-        
         send_media(
             to=phone_number,
             media=base64_qrcode,
