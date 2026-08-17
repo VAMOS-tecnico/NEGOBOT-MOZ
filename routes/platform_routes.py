@@ -344,12 +344,26 @@ def client_overview():
 @_require_roles("client", "operator")
 def list_contacts():
     tenant_id = _tenant_for_identity(_identity())
+    search = str(request.args.get("search") or "").strip().lower()[:120]
+    tag = str(request.args.get("tag") or "").strip().lower()[:80]
+    opt_in_filter = str(request.args.get("opt_in") or "").strip().lower()
+    query = _db().collection("contacts").where("tenant_id", "==", tenant_id)
+    if tag:
+        query = query.where("tags", "array_contains", tag)
+    if opt_in_filter in {"true", "false"}:
+        query = query.where("opt_in", "==", opt_in_filter == "true")
     rows = []
-    for document in _db().collection("contacts").where("tenant_id", "==", tenant_id).limit(500).stream():
+    for document in query.limit(1000).stream():
         item = document.to_dict() or {}
         item["id"] = document.id
+        item.setdefault("tags", [])
+        if search and search not in f"{item.get('name', '')} {item.get('phone', '')}".lower():
+            continue
+        if item.get("status", "active") == "archived":
+            continue
         rows.append(item)
-    return jsonify({"contacts": rows})
+    rows.sort(key=lambda item: str(item.get("name") or "").lower())
+    return jsonify({"contacts": rows, "count": len(rows), "filters": {"search": search, "tag": tag, "opt_in": opt_in_filter or None}})
 
 
 @platform_bp.post("/client/contacts")
@@ -361,9 +375,60 @@ def create_contact():
     if len(name) < 2 or len(phone) < 8:
         return jsonify({"error": "Nome e número de telefone válidos são obrigatórios."}), 400
     tenant_id = _tenant_for_identity(_identity())
+    tags = sorted({str(item).strip().lower() for item in (payload.get("tags") or []) if str(item).strip()})[:20]
     ref = _db().collection("contacts").document()
-    ref.set({"tenant_id": tenant_id, "name": name, "phone": phone, "opt_in": bool(payload.get("opt_in", True)), "tags": [], "created_at": _now()})
-    return jsonify({"created": True, "contact": {"id": ref.id, "name": name, "phone": phone}}), 201
+    ref.set({"tenant_id": tenant_id, "name": name, "phone": phone, "opt_in": bool(payload.get("opt_in", True)), "tags": tags, "status": "active", "created_at": _now(), "updated_at": _now()})
+    _audit("contact_created", _identity(), tenant_id, {"contact_id": ref.id})
+    return jsonify({"created": True, "contact": {"id": ref.id, "name": name, "phone": phone, "opt_in": bool(payload.get("opt_in", True)), "tags": tags}}), 201
+
+
+@platform_bp.patch("/client/contacts/<contact_id>")
+@_require_roles("client", "operator")
+def update_contact(contact_id: str):
+    tenant_id = _tenant_for_identity(_identity())
+    reference = _db().collection("contacts").document(contact_id)
+    document = reference.get()
+    data = document.to_dict() if document.exists else None
+    if not data or data.get("tenant_id") != tenant_id or data.get("status", "active") == "archived":
+        return jsonify({"error": "Contacto não encontrado neste tenant."}), 404
+    payload = request.get_json(silent=True) or {}
+    changes = {}
+    if "name" in payload:
+        name = str(payload.get("name") or "").strip()
+        if len(name) < 2:
+            return jsonify({"error": "Nome de contacto inválido."}), 400
+        changes["name"] = name
+    if "phone" in payload:
+        phone = re.sub(r"\D", "", str(payload.get("phone") or ""))
+        if len(phone) < 8:
+            return jsonify({"error": "Número de contacto inválido."}), 400
+        changes["phone"] = phone
+    if "opt_in" in payload:
+        changes["opt_in"] = bool(payload.get("opt_in"))
+    if "tags" in payload:
+        if not isinstance(payload.get("tags"), list):
+            return jsonify({"error": "As etiquetas devem ser uma lista."}), 400
+        changes["tags"] = sorted({str(item).strip().lower() for item in payload["tags"] if str(item).strip()})[:20]
+    if not changes:
+        return jsonify({"error": "Nenhuma alteração válida foi enviada."}), 400
+    changes["updated_at"] = _now()
+    reference.set(changes, merge=True)
+    _audit("contact_updated", _identity(), tenant_id, {"contact_id": contact_id, "fields": sorted(changes)})
+    return jsonify({"updated": True, "contact_id": contact_id, "fields": sorted(changes)})
+
+
+@platform_bp.delete("/client/contacts/<contact_id>")
+@_require_roles("client", "operator")
+def archive_contact(contact_id: str):
+    tenant_id = _tenant_for_identity(_identity())
+    reference = _db().collection("contacts").document(contact_id)
+    document = reference.get()
+    data = document.to_dict() if document.exists else None
+    if not data or data.get("tenant_id") != tenant_id:
+        return jsonify({"error": "Contacto não encontrado neste tenant."}), 404
+    reference.set({"status": "archived", "opt_in": False, "updated_at": _now()}, merge=True)
+    _audit("contact_archived", _identity(), tenant_id, {"contact_id": contact_id})
+    return jsonify({"archived": True, "contact_id": contact_id})
 
 
 @platform_bp.get("/client/campaigns")
