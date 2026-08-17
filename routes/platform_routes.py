@@ -61,12 +61,22 @@ def _now():
 
 
 def _plan_expired(data: dict[str, Any], now: datetime | None = None) -> bool:
-    expiry = data.get("data_expiracao") if isinstance(data, dict) else None
+    data = data if isinstance(data, dict) else {}
+    expiry = data.get("data_expiracao")
     if isinstance(expiry, str) and expiry.strip():
         try:
             expiry = datetime.fromisoformat(expiry.replace("Z", "+00:00"))
         except ValueError:
-            return False
+            expiry = None
+    if not isinstance(expiry, datetime) and str(data.get("status_plano", data.get("status", ""))).lower() in {"demonstracao", "trial"}:
+        anchor = data.get("data_ativacao") or data.get("created_at")
+        if isinstance(anchor, str) and anchor.strip():
+            try:
+                anchor = datetime.fromisoformat(anchor.replace("Z", "+00:00"))
+            except ValueError:
+                anchor = None
+        if isinstance(anchor, datetime):
+            expiry = anchor + timedelta(days=2)
     if not isinstance(expiry, datetime):
         return False
     if expiry.tzinfo is None:
