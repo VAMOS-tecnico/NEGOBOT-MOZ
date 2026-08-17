@@ -1,10 +1,20 @@
 import base64
 import io
+import sys
+import types
 import unittest
-from unittest.mock import Mock, patch
+import wave
+from unittest.mock import patch
+
+sys.modules.setdefault("edge_tts", types.ModuleType("edge_tts"))
 
 from config import Config
-from services.evolution_service import send_whatsapp, transcrever_audio_mensagem
+import services.groq_service  # noqa: F401 — garante que o alvo do mock existe antes do patch
+from services.evolution_service import (
+    _normalizar_audio_para_whisper,
+    send_whatsapp,
+    transcrever_audio_mensagem,
+)
 
 
 class FakeResponse:
@@ -23,6 +33,18 @@ class FakeResponse:
     def raise_for_status(self):
         if not self.ok:
             raise RuntimeError(f"HTTP {self.status_code}")
+
+
+def _valid_wav_bytes(duration_seconds=0.1):
+    output = io.BytesIO()
+    sample_rate = 16000
+    frames = b"\x00\x00" * int(sample_rate * duration_seconds)
+    with wave.open(output, "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(sample_rate)
+        wav_file.writeframes(frames)
+    return output.getvalue()
 
 
 class TestEvolutionService(unittest.TestCase):
@@ -59,15 +81,23 @@ class TestEvolutionService(unittest.TestCase):
         post.return_value = FakeResponse(500, text="server error")
         self.assertFalse(send_whatsapp("258840000000", "Olá", instance_name="assistente_negobot"))
 
+    def test_normaliza_wav_valido(self):
+        normalized = _normalizar_audio_para_whisper(_valid_wav_bytes())
+        self.assertTrue(normalized.startswith(b"RIFF"))
+        self.assertEqual(normalized[8:12], b"WAVE")
+
+    def test_rejeita_bytes_ogg_invalidos(self):
+        invalid_ogg = b"OggS" + b"audio-test"
+        self.assertEqual(_normalizar_audio_para_whisper(invalid_ogg), b"")
+
     @patch("services.groq_service.transcrever_audio_groq", return_value="Olá transcrito")
     @patch("services.evolution_service.requests.post")
-    def test_recupera_midia_por_id_e_transcreve(self, post, transcribe):
-        fake_ogg = b"OggS" + b"audio-test"
-        encoded = base64.b64encode(fake_ogg).decode()
+    def test_recupera_midia_por_id_normaliza_e_transcreve(self, post, transcribe):
+        encoded = base64.b64encode(_valid_wav_bytes()).decode()
         post.return_value = FakeResponse(200, {"base64": encoded})
         payload = {
             "key": {"id": "msg-audio-001", "remoteJid": "258840000000@s.whatsapp.net"},
-            "message": {"audioMessage": {"mimetype": "audio/ogg; codecs=opus"}},
+            "message": {"audioMessage": {"mimetype": "audio/wav"}},
             "messageType": "audioMessage",
         }
         result = transcrever_audio_mensagem(payload, instance_name="assistente_negobot")
@@ -76,6 +106,21 @@ class TestEvolutionService(unittest.TestCase):
         self.assertEqual(request_payload["message"]["key"]["id"], "msg-audio-001")
         self.assertTrue(request_payload["convertToMp4"])
         transcribe.assert_called_once()
+        transcribed_file = transcribe.call_args.args[0]
+        self.assertEqual(transcribed_file.name.endswith(".wav"), True)
+
+    @patch("services.groq_service.transcrever_audio_groq")
+    @patch("services.evolution_service.requests.post")
+    def test_nao_envia_audio_invalido_ao_groq(self, post, transcribe):
+        invalid_ogg = b"OggS" + b"audio-test"
+        encoded = base64.b64encode(invalid_ogg).decode()
+        post.return_value = FakeResponse(200, {"base64": encoded})
+        payload = {
+            "key": {"id": "msg-audio-invalid"},
+            "message": {"audioMessage": {"mimetype": "audio/ogg; codecs=opus"}},
+        }
+        self.assertEqual(transcrever_audio_mensagem(payload), "")
+        transcribe.assert_not_called()
 
 
 if __name__ == "__main__":

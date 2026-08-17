@@ -1,12 +1,16 @@
 import re
 import base64
-import os
-import tempfile
-import time
-import random
-import threading
-import requests
+import json
 import logging
+import os
+import random
+import shutil
+import subprocess
+import tempfile
+import threading
+import time
+
+import requests
 from urllib.parse import quote
 from config import Config
 
@@ -88,8 +92,100 @@ def send_whatsapp(to, text, instance_name=None):
         return False
 
 
+MAX_AUDIO_BYTES = 20 * 1024 * 1024
+MAX_AUDIO_DURATION_SECONDS = 300
+
+
+def _normalizar_audio_para_whisper(media_bytes):
+    """Valida e converte áudio para WAV PCM mono 16 kHz sem enviar bytes inválidos ao Groq."""
+    if not isinstance(media_bytes, (bytes, bytearray)):
+        return b""
+    if not media_bytes or len(media_bytes) > MAX_AUDIO_BYTES:
+        logger.warning("Áudio rejeitado antes do FFmpeg: tamanho inválido (%s bytes).", len(media_bytes or b""))
+        return b""
+
+    ffprobe = shutil.which("ffprobe")
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffprobe or not ffmpeg:
+        logger.error("FFmpeg/ffprobe não estão instalados no backend.")
+        return b""
+
+    try:
+        with tempfile.TemporaryDirectory(prefix="negobot-audio-") as temp_dir:
+            source_path = os.path.join(temp_dir, "input.bin")
+            output_path = os.path.join(temp_dir, "output.wav")
+            with open(source_path, "wb") as source_file:
+                source_file.write(media_bytes)
+
+            probe = subprocess.run(
+                [
+                    ffprobe,
+                    "-v", "error",
+                    "-select_streams", "a:0",
+                    "-show_entries", "stream=codec_type,codec_name,sample_rate,channels:format=duration",
+                    "-of", "json",
+                    source_path,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=8,
+                check=False,
+            )
+            if probe.returncode != 0:
+                logger.warning("Áudio rejeitado pelo ffprobe: %s", probe.stderr[:300])
+                return b""
+
+            metadata = json.loads(probe.stdout or "{}")
+            streams = metadata.get("streams") or []
+            if not streams or streams[0].get("codec_type") != "audio":
+                logger.warning("Áudio rejeitado: nenhuma stream de áudio válida foi detetada.")
+                return b""
+
+            duration_raw = (metadata.get("format") or {}).get("duration")
+            if duration_raw not in (None, "N/A") and float(duration_raw) > MAX_AUDIO_DURATION_SECONDS:
+                logger.warning("Áudio rejeitado: duração acima de %s segundos.", MAX_AUDIO_DURATION_SECONDS)
+                return b""
+
+            converted = subprocess.run(
+                [
+                    ffmpeg,
+                    "-nostdin",
+                    "-v", "error",
+                    "-xerror",
+                    "-i", source_path,
+                    "-map", "0:a:0",
+                    "-map_metadata", "-1",
+                    "-ac", "1",
+                    "-ar", "16000",
+                    "-c:a", "pcm_s16le",
+                    "-f", "wav",
+                    output_path,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+            if converted.returncode != 0 or not os.path.exists(output_path):
+                logger.warning("Conversão de áudio falhou: %s", converted.stderr[:300])
+                return b""
+
+            with open(output_path, "rb") as normalized_file:
+                normalized = normalized_file.read()
+            if not normalized or len(normalized) > MAX_AUDIO_BYTES:
+                logger.warning("Áudio normalizado rejeitado: tamanho inválido (%s bytes).", len(normalized))
+                return b""
+            if normalized[:4] != b"RIFF" or normalized[8:12] != b"WAVE":
+                logger.warning("FFmpeg não produziu um WAV válido.")
+                return b""
+            return normalized
+    except (ValueError, OSError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
+        logger.warning("Falha segura na validação/conversão do áudio: %s", exc)
+        return b""
+
+
 def transcrever_audio_mensagem(data_payload, instance_name=None):
-    """Obtém um áudio recebido pela Evolution e transcreve-o com o Whisper da Groq."""
+    """Obtém um áudio recebido pela Evolution, normaliza-o e transcreve-o com o Whisper da Groq."""
     try:
         from services.groq_service import transcrever_audio_groq
 
@@ -138,12 +234,14 @@ def transcrever_audio_mensagem(data_payload, instance_name=None):
                 encoded = str(encoded).split(",", 1)[1]
             media_bytes = base64.b64decode(encoded, validate=False)
 
-        if not media_bytes or len(media_bytes) > 20 * 1024 * 1024:
-            logger.error("Áudio inválido ou acima do limite de 20 MB.")
+        normalized_audio = _normalizar_audio_para_whisper(media_bytes)
+        if not normalized_audio:
+            logger.warning("Áudio inválido ou não recuperável; não enviado ao Groq.")
             return ""
+        media_bytes = normalized_audio
 
-        logger.warning("Áudio preparado para Whisper: bytes=%s magic=%s mimetype=%s", len(media_bytes), media_bytes[:12].hex(), audio.get("mimetype", "unknown"))
-        suffix = ".ogg" if "ogg" in str(audio.get("mimetype", "")) else ".bin"
+        logger.warning("Áudio preparado para Whisper: bytes=%s magic=%s mimetype=%s", len(media_bytes), media_bytes[:12].hex(), "audio/wav")
+        suffix = ".wav"
         with tempfile.NamedTemporaryFile(prefix="negobot-audio-", suffix=suffix, delete=True) as temporary:
             temporary.write(media_bytes)
             temporary.flush()

@@ -112,8 +112,9 @@ def transcrever_audio_groq(audio_file):
     headers = {"Authorization": f"Bearer {api_key}"}
 
     try:
-        filename = os.path.basename(getattr(audio_file, "name", "audio.ogg")) or "audio.ogg"
-        files = {'file': (filename, audio_file, 'audio/ogg')}
+        filename = os.path.basename(getattr(audio_file, "name", "audio.wav")) or "audio.wav"
+        mimetype = "audio/wav" if filename.lower().endswith(".wav") else "audio/ogg"
+        files = {'file': (filename, audio_file, mimetype)}
         data = {
             'model': 'whisper-large-v3',
             'language': 'pt',
