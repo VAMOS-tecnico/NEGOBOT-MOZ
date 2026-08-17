@@ -1,7 +1,8 @@
 import os
 from pathlib import Path
 
-from flask import Flask, jsonify, redirect, send_from_directory
+import requests
+from flask import Flask, Response, jsonify, redirect, request, send_from_directory
 
 SITE_ROOT = Path(__file__).resolve().parent
 app = Flask(__name__, static_folder=None)
@@ -57,6 +58,18 @@ def assistant():
 @app.get("/assets/<path:asset>")
 def public_asset(asset):
     return send_from_directory(REACT_DIST / "assets", asset)
+
+
+@app.post("/api/platform/public/assistant/chat")
+def public_assistant_chat_proxy():
+    payload = request.get_json(silent=True) or {}
+    upstream_url = os.getenv("PLATFORM_API_URL", "https://negobot-api.duckdns.org").rstrip("/") + "/api/platform/public/assistant/chat"
+    try:
+        upstream = requests.post(upstream_url, json=payload, timeout=45)
+    except requests.RequestException:
+        return jsonify({"error": "O assistente está temporariamente indisponível. Tenta novamente ou fala connosco pelo WhatsApp."}), 502
+    content_type = upstream.headers.get("Content-Type", "application/json").split(";", 1)[0]
+    return Response(upstream.content, status=upstream.status_code, content_type=content_type)
 
 
 @app.get("/falar-whatsapp")

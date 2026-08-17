@@ -10,7 +10,7 @@ RUN cd platform-react && pnpm build
 FROM python:3.11-slim
 
 WORKDIR /app
-RUN pip install --no-cache-dir Flask gunicorn
+RUN pip install --no-cache-dir Flask gunicorn requests
 
 COPY index.html platform.html assistant.html site_server.py ./
 COPY --from=frontend-build /build/platform-react/dist ./platform-react/dist
