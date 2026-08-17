@@ -1,9 +1,11 @@
 import threading
 import logging
+import time
 from datetime import datetime, timezone
 from flask import Blueprint, request
 from config import Config
 from services.evolution_service import notificar_erro_admin, send_whatsapp, transcrever_audio_mensagem
+from services.incoming_queue import enqueue_incoming_event
 from workflows.central_flow import process_central_flow
 from workflows.client_flow import process_client_flow
 
@@ -55,18 +57,26 @@ def extrair_texto_mensagem(data_payload):
 @webhook_bp.route('/webhook-cliente', methods=['POST'])
 @webhook_bp.route('/webhook', methods=['POST'])
 def universal_webhook():
-    data = request.json
-    if data:
-        logger.warning("Webhook recebido: event=%s instance=%s", data.get("event"), data.get("instance"))
+    data = request.get_json(silent=True)
     if not data:
         return 'OK', 200
-
-    # Processa em background sem travar o retorno do webhook
-    threading.Thread(target=processar_webhook_background, args=(data,)).start()
+    logger.info("Webhook recebido: event=%s instance=%s", data.get("event"), data.get("instance"))
+    try:
+        result = enqueue_incoming_event(data)
+        logger.info("Webhook enfileirado event_id=%s queue=%s", result["event_id"], result["queue"])
+    except Exception:
+        # Compatibilidade de disponibilidade: se o Redis estiver temporariamente
+        # indisponível, não bloqueamos a Evolution; o processamento legado em
+        # thread evita perda imediata até o worker/Redis recuperar.
+        logger.exception("Redis indisponível; fallback temporário para thread")
+        threading.Thread(target=processar_webhook_background, args=(data,), daemon=True).start()
     return 'OK', 200
 
 def processar_webhook_background(data):
     try:
+        queued_at = data.get("_negobot_queue_enqueued_at") if isinstance(data, dict) else None
+        if queued_at:
+            logger.info("Mensagem iniciou processamento wait_ms=%d", int((time.time() - float(queued_at)) * 1000))
         limpar_historico_processados()
 
         event_name = data.get('event', '').lower()

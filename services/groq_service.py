@@ -4,7 +4,10 @@ import base64
 import requests
 import logging
 import asyncio
-import edge_tts
+try:
+    import edge_tts
+except ImportError:  # instalado no container pela requirements.txt
+    edge_tts = None
 from config import Config
 
 logger = logging.getLogger(__name__)
@@ -41,62 +44,11 @@ def _detectar_idioma_simples(texto):
     return "pt"  # Idioma padrão
 
 def chamar_groq_rest(historico_mensagens, system_prompt=None):
-    """
-    Envia as mensagens para a API da Groq.
-    Garante que o bot deteta e responde rigorosamente no idioma do utilizador.
-    """
-    api_key = getattr(Config, 'GROQ_API_KEY', None) or os.getenv('GROQ_API_KEY')
-    if not api_key:
-        logger.error("GROQ_API_KEY não configurada no ambiente.")
-        return "Olá! Sou o assistente oficial do Negobot Moz. Como posso ajudar a automatizar o seu WhatsApp hoje?"
+    """Compatibilidade histórica para os fluxos; usa agora o pool multi-provedor."""
+    from services.ai_pool_service import generate_text
 
-    url = "https://api.groq.com/openai/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    }
-
-    # Instrução explícita de multilinguagem
-    instrucao_multilingue = "Detect the language used by the user and ALWAYS respond in that exact same language (e.g. English, French, Portuguese, Spanish, etc.)."
-    prompt_final = f"{system_prompt}\n\n[INSTRUÇÃO DE IDIOMA]: {instrucao_multilingue}" if system_prompt else instrucao_multilingue
-
-    payload_messages = [{"role": "system", "content": prompt_final}]
-
-    if isinstance(historico_mensagens, list) and historico_mensagens:
-        historico_recente = historico_mensagens[-6:]
-        for msg in historico_recente:
-            if isinstance(msg, dict) and "role" in msg and "content" in msg:
-                role = "assistant" if msg["role"] in ["assistant", "model", "atendente"] else "user"
-                payload_messages.append({
-                    "role": role,
-                    "content": str(msg["content"])
-                })
-
-    payload = {
-        "model": "llama-3.3-70b-versatile",
-        "messages": payload_messages,
-        "temperature": 0.2,
-        "max_tokens": 400
-    }
-
-    try:
-        response = requests.post(url, headers=headers, json=payload, timeout=25)
-        
-        # Fallback de limite de taxa para o modelo 8B
-        if response.status_code == 429:
-            logger.warning("Limite do modelo 70B atingido. A alternar para modelo rápido (8B)...")
-            payload["model"] = "llama-3.1-8b-instant"
-            response = requests.post(url, headers=headers, json=payload, timeout=25)
-
-        response.raise_for_status()
-        data = response.json()
-        
-        resposta_raw = data["choices"][0]["message"]["content"]
-        return _limpar_texto_saida(resposta_raw)
-
-    except Exception as e:
-        logger.error(f"Erro ao chamar a API da Groq: {e}")
-        return "O nosso sistema está a processar muitas mensagens no momento. Por favor, tente novamente em instantes."
+    result = generate_text(historico_mensagens, system_prompt=system_prompt)
+    return _limpar_texto_saida(result.get("text") or "")
 
 def transcrever_audio_groq(audio_file):
     """
@@ -191,6 +143,9 @@ def gerar_audio_resposta(texto, caminho_saida="resposta_voz.mp3", idioma=None):
     ao idioma detetado da resposta.
     """
     try:
+        if edge_tts is None:
+            logger.error("edge_tts não está instalado para gerar áudio")
+            return None
         texto_limpo = _limpar_texto_saida(texto)
         if not texto_limpo:
             return None
