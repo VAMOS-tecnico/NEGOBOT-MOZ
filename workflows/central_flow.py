@@ -1,6 +1,7 @@
 import re
 import logging
 import time
+import unicodedata
 from datetime import datetime, timezone
 
 from config import Config
@@ -21,6 +22,75 @@ from services.flow_handlers import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+RESPOSTA_SAUDACAO_NEGOBOT = (
+    "Olá! Estou bem, obrigado por perguntar. Eu sou o assistente do Negobot Moz, "
+    "uma plataforma de automação de WhatsApp com Inteligência Artificial para negócios "
+    "em Moçambique. Ajudamos empresas e empreendedores a atender clientes 24/7 de "
+    "forma eficiente e personalizada. Escreva TESTE para experimentar a plataforma "
+    "grátis durante 2 dias."
+)
+
+RESPOSTA_PLANOS_NEGOBOT = (
+    "📋 *Planos e benefícios do Negobot Moz:*\\n\\n"
+    "1. *Plano Básico — 500 MT/mês*\\n"
+    "• Respostas automáticas iniciais para FAQ, horário, localização e catálogo em texto.\\n"
+    "• Até 1.500 conversas por mês.\\n"
+    "• 1 número de WhatsApp.\\n"
+    "• Suporte técnico básico até 24h.\\n"
+    "• Não inclui PDF/Excel, fotos, áudios nem disparos em massa.\\n\\n"
+    "2. *Plano Médio — 1.000 MT/mês*\\n"
+    "• Tudo do Básico e conversas ilimitadas.\\n"
+    "• Processamento de fotos e leitura básica de tabelas Excel.\\n"
+    "• Menu interativo e relatórios mensais de utilização.\\n"
+    "• Suporte prioritário até 12h.\\n\\n"
+    "3. *Plano Premium — 1.500 MT/mês*\\n"
+    "• Tudo do Médio e automação avançada com IA.\\n"
+    "• Leitura de PDFs e documentos extensos.\\n"
+    "• Interpretação de áudios e geração de artes com #imagem.\\n"
+    "• Campanhas e disparos em massa para a base de contactos, com utilização responsável.\\n"
+    "• Suporte dedicado e acompanhamento inicial.\\n\\n"
+    "Não paga nada agora: pode testar qualquer plano durante 2 dias sem compromisso. "
+    "Escreva TESTE para começar."
+)
+
+SAUDACOES_NEGOBOT = {
+    "ola", "oi", "oy", "bom dia", "boa tarde", "boa noite", "hello", "hey",
+    "como esta", "como estas", "tudo bem", "estao bem", "está bem", "estás bem"
+}
+
+PALAVRAS_PLANOS_NEGOBOT = {
+    "preco", "precos", "plano", "planos", "valor", "valores", "custo", "custos",
+    "quanto custa", "quanto pago", "beneficio", "beneficios", "limite", "mensalidade"
+}
+
+
+def normalizar_intencao(texto):
+    """Normaliza acentos, pontuação e espaços para classificação determinística."""
+    texto = unicodedata.normalize("NFKD", str(texto or ""))
+    texto = "".join(char for char in texto if not unicodedata.combining(char))
+    texto = texto.lower().strip()
+    texto = re.sub(r"[^\w\s#]", " ", texto, flags=re.UNICODE)
+    return re.sub(r"\s+", " ", texto).strip()
+
+
+def classificar_intencao_deterministica(message_text):
+    """Retorna saudacao, planos ou None sem depender da IA."""
+    texto = normalizar_intencao(message_text)
+    if texto in {normalizar_intencao(item) for item in SAUDACOES_NEGOBOT}:
+        return "saudacao"
+    if any(palavra in texto for palavra in PALAVRAS_PLANOS_NEGOBOT):
+        return "planos"
+    return None
+
+
+def enviar_resposta_deterministica(clean_phone, message_text, response_text, instance_name):
+    """Regista e envia uma resposta fixa do roteiro."""
+    from database.chat_repo import save_chat_history
+    save_chat_history(clean_phone, "user", message_text)
+    save_chat_history(clean_phone, "assistant", response_text)
+    return send_whatsapp(clean_phone, response_text, instance_name=instance_name)
 
 
 def process_central_flow(phone_number_or_data=None, message_text: str = "", msg_clean: str = "", is_from_me: bool = False, agora: datetime = None, data: dict = None, **kwargs):
@@ -64,6 +134,15 @@ def process_central_flow(phone_number_or_data=None, message_text: str = "", msg_
             message_text = msg_obj.get('conversation') or msg_obj.get('extendedTextMessage', {}).get('text') or ""
 
         msg_clean = (msg_clean if msg_clean else message_text).lower().strip()
+
+        # Handlers determinísticos: o roteiro não depende da obediência da IA.
+        intencao_fixa = classificar_intencao_deterministica(message_text)
+        if intencao_fixa == "saudacao":
+            enviar_resposta_deterministica(clean_phone, message_text, RESPOSTA_SAUDACAO_NEGOBOT, central_instance)
+            return
+        if intencao_fixa == "planos":
+            enviar_resposta_deterministica(clean_phone, message_text, RESPOSTA_PLANOS_NEGOBOT, central_instance)
+            return
 
         # ⚠️ Atendente humano via interface
         if is_from_me:
