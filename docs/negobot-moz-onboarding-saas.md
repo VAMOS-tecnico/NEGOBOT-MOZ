@@ -72,19 +72,27 @@ O cliente pode editar o perfil empresarial e os links sociais, mas não pode alt
 
 ## 4. Demonstração de dois dias
 
-A demonstração é concedida uma única vez por cliente. Uma conta nova criada pelo painel recebe `status_plano=demonstracao`, `data_ativacao` igual ao momento de criação e `data_expiracao` igual à data de criação mais dois dias. Clientes antigos que não possuam `data_expiracao` têm a validade calculada a partir de `data_ativacao` ou `created_at` mais dois dias.
+A demonstração é concedida uma única vez por cliente e dura exactamente **2 dias**. A criação da conta ou o envio do primeiro `TESTE` não inicia o contador. Esses eventos colocam a conta em `trial_pending_connection`, preparam a instância e podem disponibilizar o QR Code. O contador só começa quando a Evolution confirma a primeira transição `CONNECTION_UPDATE=open`, que grava `trial_connected_at` e calcula `trial_expires_at = trial_connected_at + 2 dias`.
+
+Uma conta pendente de ligação não está expirada, mesmo que existam campos antigos `data_ativacao` ou `data_expiracao` sem prova de ligação real. A demonstração é única: voltar a enviar `TESTE` não reinicia o prazo, e uma reconexão posterior não prolonga a data original.
 
 O comportamento obrigatório é o seguinte:
 
 | Situação | Resultado |
 |---|---|
-| Primeiro pedido `TESTE` | Cria a demonstração e prepara a instância/QR Code |
-| Novo `TESTE` durante a demonstração | Não reinicia o prazo; informa que o período já está ativo |
-| `TESTE` depois da expiração | Bloqueia a operação e pede pagamento |
-| `#qrcode` durante a demonstração válida | Pode gerar/renovar o QR Code |
+| Conta criada ou primeiro pedido `TESTE` | Estado pendente; prepara a instância/QR Code, mas não começa os 2 dias |
+| QR enviado, mas WhatsApp ainda não está `open` | O cliente pode fazer perguntas sobre o Negobot Moz; não recebe mensagem de expiração |
+| Primeira transição `CONNECTION_UPDATE=open` | Inicia uma única demonstração de 2 dias e grava a hora de ligação |
+| Novo `TESTE` durante a demonstração | Não reinicia o prazo; informa que o período já está activo |
+| `TESTE` antes de o WhatsApp estar ligado | Mantém a demonstração pendente; não cria outra instância |
+| `TESTE` depois da expiração | Bloqueia a automação e pede pagamento, mas o assistente continua a responder perguntas comerciais |
+| `#qrcode` enquanto pendente ou activo | Pode preparar/renovar o QR conforme a regra de ligação |
 | `#qrcode` depois da expiração | Bloqueia e pede pagamento |
+| Pedido de QR Code no site antes da primeira ligação | Permite preparação e devolve estado pendente, sem expirar a demonstração |
 | Pedido de QR Code no site depois da expiração | HTTP 402 e nenhuma criação/renovação de instância |
-| Pagamento confirmado | Ativa o plano e permite novo QR Code |
+| Pagamento confirmado | Activa o plano pago e permite novo QR Code |
+
+> A mensagem “a sua demonstração terminou” só pode ser enviada quando existe `trial_connected_at` e a hora actual é igual ou posterior a `trial_expires_at`. Perguntas sobre preços, benefícios, pagamento, suporte e funcionamento do Negobot Moz continuam a ser respondidas pelo assistente central, inclusive antes da ligação e depois da expiração.
 
 > A expiração deve ser avaliada pelo servidor. O frontend nunca deve ser a única camada de bloqueio.
 
@@ -254,7 +262,7 @@ A rotação Docker está configurada com `max-size=10m` e `max-file=3`. O disco 
 
 ## 15. Critérios de aceitação do onboarding
 
-A implementação é considerada correta quando um cliente novo é criado com email, demonstração de dois dias e perfil empresarial inicial; consegue preencher redes sociais; consegue ligar o WhatsApp durante a demonstração; não consegue reiniciar a demonstração depois da expiração; não consegue obter QR Code novo sem pagamento; consegue enviar comprovativo M-Pesa pelo WhatsApp ou plataforma; recebe QR Code após confirmação; e o assistente utiliza apenas os dados oficiais do seu tenant.
+A implementação é considerada correcta quando um cliente novo é criado com email, estado pendente e perfil empresarial inicial; consegue preencher redes sociais; recebe/prepara o QR Code sem iniciar o contador; o WhatsApp ligado em `open` inicia exactamente dois dias; não consegue reiniciar a demonstração depois da expiração; não consegue obter QR Code novo sem pagamento após expirar; consegue enviar comprovativo M-Pesa pelo WhatsApp ou plataforma; recebe QR Code após confirmação; e o assistente continua a responder perguntas sobre o Negobot Moz antes da ligação e depois da expiração.
 
 Para clientes internacionais, o checkout Lemon Squeezy deve aparecer apenas quando estiver configurado com credenciais e variantes válidas. Webhooks inválidos devem ser rejeitados e cancelamentos/refundos devem bloquear o plano. Todos os dados devem permanecer isolados e todas as filas devem continuar a funcionar sem o navegador aberto.
 
