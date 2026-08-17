@@ -431,6 +431,69 @@ def archive_contact(contact_id: str):
     return jsonify({"archived": True, "contact_id": contact_id})
 
 
+@platform_bp.get("/client/templates")
+@_require_roles("client", "operator")
+def list_campaign_templates():
+    tenant_id = _tenant_for_identity(_identity())
+    rows = []
+    for document in _db().collection("campaign_templates").where("tenant_id", "==", tenant_id).limit(100).stream():
+        item = document.to_dict() or {}
+        item["id"] = document.id
+        rows.append(item)
+    rows.sort(key=lambda item: str(item.get("name") or "").lower())
+    return jsonify({"templates": rows})
+
+
+@platform_bp.post("/client/templates")
+@_require_roles("client", "operator")
+def create_campaign_template():
+    payload = request.get_json(silent=True) or {}
+    name = str(payload.get("name") or "").strip()
+    body = str(payload.get("body") or payload.get("message") or "").strip()
+    if not 2 <= len(name) <= 100 or not 1 <= len(body) <= 4000:
+        return jsonify({"error": "O nome deve ter 2–100 caracteres e a mensagem 1–4000 caracteres."}), 400
+    variables = sorted({str(item).strip().lower() for item in (payload.get("variables") or []) if str(item).strip()})[:30]
+    tenant_id = _tenant_for_identity(_identity())
+    reference = _db().collection("campaign_templates").document()
+    reference.set({"tenant_id": tenant_id, "name": name, "body": body, "variables": variables, "status": "active", "created_at": _now(), "updated_at": _now()})
+    _audit("campaign_template_created", _identity(), tenant_id, {"template_id": reference.id})
+    return jsonify({"created": True, "template": {"id": reference.id, "name": name, "body": body, "variables": variables, "status": "active"}}), 201
+
+
+@platform_bp.patch("/client/templates/<template_id>")
+@_require_roles("client", "operator")
+def update_campaign_template(template_id: str):
+    tenant_id = _tenant_for_identity(_identity())
+    reference = _db().collection("campaign_templates").document(template_id)
+    document = reference.get()
+    data = document.to_dict() if document.exists else None
+    if not data or data.get("tenant_id") != tenant_id:
+        return jsonify({"error": "Template não encontrado."}), 404
+    payload = request.get_json(silent=True) or {}
+    changes = {}
+    if "name" in payload:
+        name = str(payload.get("name") or "").strip()
+        if not 2 <= len(name) <= 100:
+            return jsonify({"error": "Nome de template inválido."}), 400
+        changes["name"] = name
+    if "body" in payload:
+        body = str(payload.get("body") or "").strip()
+        if not 1 <= len(body) <= 4000:
+            return jsonify({"error": "Mensagem de template inválida."}), 400
+        changes["body"] = body
+    if "status" in payload:
+        status = str(payload.get("status") or "").lower()
+        if status not in {"active", "archived"}:
+            return jsonify({"error": "Estado de template inválido."}), 400
+        changes["status"] = status
+    if not changes:
+        return jsonify({"error": "Nenhuma alteração válida foi enviada."}), 400
+    changes["updated_at"] = _now()
+    reference.set(changes, merge=True)
+    _audit("campaign_template_updated", _identity(), tenant_id, {"template_id": template_id, "fields": sorted(changes)})
+    return jsonify({"updated": True, "template_id": template_id, "fields": sorted(changes)})
+
+
 @platform_bp.get("/client/campaigns")
 @_require_roles("client", "operator")
 def list_campaigns():
@@ -499,11 +562,21 @@ def create_campaign():
     payload = request.get_json(silent=True) or {}
     name = str(payload.get("name") or "").strip()
     message = str(payload.get("message") or "").strip()
-    if len(name) < 2 or not message:
-        return jsonify({"error": "Nome e mensagem são obrigatórios."}), 400
     tenant_id = _tenant_for_identity(_identity())
     db = _db()
+    template_id = str(payload.get("template_id") or "").strip()
+    if template_id:
+        template_document = db.collection("campaign_templates").document(template_id).get()
+        template = template_document.to_dict() if template_document.exists else None
+        if not template or template.get("tenant_id") != tenant_id or template.get("status", "active") != "active":
+            return jsonify({"error": "Template não encontrado ou arquivado."}), 404
+        message = str(template.get("body") or "").strip()
+    if len(name) < 2 or not message or len(message) > 4000:
+        return jsonify({"error": "Nome e mensagem são obrigatórios e a mensagem não pode exceder 4000 caracteres."}), 400
+    segment_tags = sorted({str(item).strip().lower() for item in (payload.get("tags") or payload.get("segment_tags") or []) if str(item).strip()})[:20]
     contacts = list(db.collection("contacts").where("tenant_id", "==", tenant_id).where("opt_in", "==", True).limit(1000).stream())
+    if segment_tags:
+        contacts = [contact for contact in contacts if set(segment_tags).issubset(set((contact.to_dict() or {}).get("tags") or []))]
     if not contacts:
         return jsonify({"error": "Adicione primeiro contactos com consentimento para receber mensagens."}), 400
     campaign_ref = db.collection("campaigns").document()
@@ -511,6 +584,8 @@ def create_campaign():
         "tenant_id": tenant_id,
         "name": name,
         "message": message,
+        "template_id": template_id or None,
+        "segment_tags": segment_tags,
         "instance_name": str(payload.get("instance_name") or "").strip() or None,
         "status": "queued",
         "total": len(contacts),
