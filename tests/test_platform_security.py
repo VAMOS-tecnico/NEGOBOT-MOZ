@@ -132,6 +132,32 @@ class PlatformSecurityTests(unittest.TestCase):
         self.assertEqual(response.status_code, 404)
         self.assertEqual(self.db.collections["platform_users"]["user-b"].data["status"], "active")
 
+    def test_contact_search_is_scoped_to_tenant(self):
+        self.db.collections["contacts"] = {
+            "contact-a": FakeSnapshot("contact-a", {"tenant_id": "tenant-a", "name": "Ana", "phone": "258841111111", "tags": ["vip"], "opt_in": True}),
+            "contact-b": FakeSnapshot("contact-b", {"tenant_id": "tenant-b", "name": "Ana", "phone": "258842222222", "tags": ["vip"], "opt_in": True}),
+        }
+        set_identity(self.client, {"id": "user-a", "name": "A", "role": "client", "tenant_id": "tenant-a", "tenant_role": "owner"})
+        response = self.client.get("/api/platform/client/contacts?search=ana")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([item["id"] for item in response.get_json()["contacts"]], ["contact-a"])
+
+    def test_contact_update_and_archive_remain_in_tenant(self):
+        self.db.collections["contacts"] = {
+            "contact-a": FakeSnapshot("contact-a", {"tenant_id": "tenant-a", "name": "Ana", "phone": "258841111111", "tags": [], "opt_in": True}),
+            "contact-b": FakeSnapshot("contact-b", {"tenant_id": "tenant-b", "name": "Bruno", "phone": "258842222222", "tags": [], "opt_in": True}),
+        }
+        set_identity(self.client, {"id": "user-a", "name": "A", "role": "client", "tenant_id": "tenant-a", "tenant_role": "owner"})
+        update = self.client.patch("/api/platform/client/contacts/contact-a", json={"tags": ["VIP", "cliente"], "opt_in": False})
+        self.assertEqual(update.status_code, 200)
+        self.assertEqual(self.db.collections["contacts"]["contact-a"].data["tags"], ["cliente", "vip"])
+        archive = self.client.delete("/api/platform/client/contacts/contact-a")
+        self.assertEqual(archive.status_code, 200)
+        self.assertEqual(self.db.collections["contacts"]["contact-a"].data["status"], "archived")
+        cross_tenant = self.client.patch("/api/platform/client/contacts/contact-b", json={"opt_in": False})
+        self.assertEqual(cross_tenant.status_code, 404)
+        self.assertTrue(self.db.collections["contacts"]["contact-b"].data["opt_in"])
+
     def test_login_rate_limit_applies_before_credential_lookup(self):
         for _ in range(8):
             response = self.client.post("/api/platform/auth/login", json={"identifier": "admin", "password": "wrong-password"})
