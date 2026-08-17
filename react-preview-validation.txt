@@ -1,0 +1,8 @@
+Atualização da validação em 2026-08-16:
+A base Vite foi corrigida para /plataforma-react/. Após rebuild e recriação exclusiva do contentor negobot-site, a URL /plataforma-react/ carrega os assets corretos e redireciona para /plataforma-react/login. O formulário React aparece com email/identificador, palavra-passe e botão Entrar na plataforma. Os demais contentores mantiveram os estados operacionais observados no deploy.
+Validação final após promoção em 2026-08-16:
+- /plataforma/ no subdomínio app-negobotmoz.duckdns.org mostra o login React.
+- /plataforma/login e os assets relativos respondem HTTP 200.
+- /plataforma-react/ continua disponível como alias.
+- negobotmoz.duckdns.org redireciona /plataforma e /plataforma-react para o site público.
+- Todos os 10 contentores verificados estão running com restart=0.

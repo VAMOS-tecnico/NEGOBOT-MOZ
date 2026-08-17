@@ -1,28 +1,31 @@
-import { useEffect, useState } from "react";
-import type { FormEvent, ReactNode } from "react";
-import { CircleDollarSign, Loader2, MessageCircle, Pause, Play, Plus, Send, Users, XCircle } from "lucide-react";
-import { api, type Campaign, type ClientPlan, type Contact, type Conversation } from "../lib/api";
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { Bot, CheckCircle2, CircleDollarSign, FileUp, Loader2, MessageCircle, Pause, Play, Plus, QrCode, RefreshCw, Send, Smartphone, Users, XCircle } from "lucide-react";
+import { api, type AssistantSettings, type Campaign, type CampaignTemplate, type ClientPlan, type Contact, type Conversation, type IntegrationStatus, type PaymentRecord, type Plan, type TeamMember } from "../lib/api";
 
 function ModuleHeader({ eyebrow, title, description, action }: { eyebrow: string; title: string; description: string; action?: ReactNode }) {
   return <div className="module-header"><div><span className="eyebrow">{eyebrow}</span><h1>{title}</h1><p>{description}</p></div>{action}</div>;
 }
-
 function LoadingBox() { return <div className="loading-box"><Loader2 size={18} className="spin" /> A carregar informação...</div>; }
 function ErrorBox({ message }: { message: string }) { return <div className="alert error"><XCircle size={16} />{message}</div>; }
+function SuccessBox({ message }: { message: string }) { return <div className="alert success"><CheckCircle2 size={16} />{message}</div>; }
 
 export function ConversationsPage() {
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
+  const [search, setSearch] = useState("");
+  const [tag, setTag] = useState("");
   const [busy, setBusy] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [importing, setImporting] = useState(false);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
 
-  async function load() {
+  async function load(filters: { search?: string; tag?: string } = {}) {
     setBusy(true); setError("");
     try {
-      const [contactResult, conversationResult] = await Promise.all([api.client.contacts(), api.client.conversations()]);
+      const [contactResult, conversationResult] = await Promise.all([api.client.contacts({ search: filters.search ?? search, tag: filters.tag ?? tag }), api.client.conversations()]);
       setContacts(contactResult.contacts || []); setConversations(conversationResult.conversations || []);
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Não foi possível carregar as conversas."); }
     finally { setBusy(false); }
@@ -30,41 +33,148 @@ export function ConversationsPage() {
   useEffect(() => { void load(); }, []);
 
   async function addContact(event: FormEvent) {
-    event.preventDefault(); setSaving(true); setError("");
-    try { await api.client.createContact(name, phone); setName(""); setPhone(""); await load(); }
+    event.preventDefault(); setSaving(true); setError(""); setNotice("");
+    try { await api.client.createContact(name, phone); setName(""); setPhone(""); setNotice("Contacto guardado com sucesso."); await load(); }
     catch (reason) { setError(reason instanceof Error ? reason.message : "Não foi possível guardar o contacto."); }
     finally { setSaving(false); }
   }
+  async function importFile(file?: File) {
+    if (!file) return;
+    setImporting(true); setError(""); setNotice("");
+    try { const result = await api.client.importContacts(file); setNotice(`${result.imported} contactos importados; ${result.skipped} ignorados.`); await load(); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : "Não foi possível importar o ficheiro."); }
+    finally { setImporting(false); }
+  }
+  async function handoff(item: Conversation, mode: "bot" | "humano") {
+    if (!item.phone) return;
+    try { await api.client.handoff(item.phone, mode); setNotice(`Atendimento de ${item.phone} entregue ao ${mode}.`); await load(); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : "Não foi possível alterar o atendimento."); }
+  }
 
-  return <div className="content-stack"><ModuleHeader eyebrow="CONTACTOS E CONVERSAS" title="Central de conversas" description="Mantém os teus contactos organizados e acompanha as interações do assistente." action={<button className="primary-button compact" onClick={() => document.getElementById("new-contact")?.scrollIntoView({ behavior: "smooth" })}><Plus size={16} /> Novo contacto</button>} />
-    {error && <ErrorBox message={error} />}
-    <div className="module-grid two"><section className="data-panel"><div className="panel-heading"><div><span className="eyebrow">CONTACTOS</span><h3>{contacts.length} contactos</h3></div><Users size={19} /></div>{busy ? <LoadingBox /> : contacts.length ? <div className="data-list">{contacts.slice(0, 100).map((contact) => <div className="data-row" key={contact.id}><div className="avatar">{contact.name.slice(0, 1).toUpperCase()}</div><div className="row-main"><strong>{contact.name}</strong><small>{contact.phone}</small></div><span className="tag">{contact.opt_in === false ? "Sem opt-in" : "Opt-in"}</span></div>)}</div> : <div className="empty-state">Ainda não existem contactos.</div>}</section>
-      <section className="data-panel" id="new-contact"><div className="panel-heading"><div><span className="eyebrow">ADICIONAR</span><h3>Novo contacto</h3></div><Plus size={19} /></div><form className="stack-form compact-form" onSubmit={addContact}><label>Nome<input value={name} onChange={(event) => setName(event.target.value)} placeholder="Nome do contacto" required /></label><label>WhatsApp<input value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="2588..." required /></label><button className="primary-button" disabled={saving} type="submit">{saving ? "A guardar..." : "Guardar contacto"}</button></form></section></div>
-    <section className="data-panel"><div className="panel-heading"><div><span className="eyebrow">ATIVIDADE</span><h3>Conversas recentes</h3></div><MessageCircle size={19} /></div>{conversations.length ? <div className="data-list">{conversations.map((conversation) => <div className="data-row" key={conversation.id || conversation.phone}><div className="quick-icon"><MessageCircle size={17} /></div><div className="row-main"><strong>{conversation.name || conversation.phone || "Contacto"}</strong><small>{conversation.last_message || "Sem mensagem recente"}</small></div><small className="muted">{conversation.status || "ativa"}</small></div>)}</div> : <div className="empty-state">As conversas recebidas pelo webhook aparecerão aqui.</div>}</section>
+  return <div className="content-stack"><ModuleHeader eyebrow="CONTACTOS E CONVERSAS" title="Central de conversas" description="Mantém os teus contactos organizados e acompanha as interações do assistente." action={<button className="secondary-button compact" onClick={() => void load()}><RefreshCw size={16} /> Atualizar</button>} />
+    {error && <ErrorBox message={error} />}{notice && <SuccessBox message={notice} />}
+    <div className="module-grid two"><section className="data-panel"><div className="panel-heading"><div><span className="eyebrow">CONTACTOS</span><h3>{contacts.length} contactos</h3></div><Users size={19} /></div><form className="filter-row" onSubmit={(event) => { event.preventDefault(); void load({ search, tag }); }}><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Pesquisar nome ou telefone" /><input value={tag} onChange={(event) => setTag(event.target.value)} placeholder="Etiqueta" /><button className="secondary-button compact" type="submit">Filtrar</button></form>{busy ? <LoadingBox /> : contacts.length ? <div className="data-list">{contacts.slice(0, 100).map((contact) => <div className="data-row" key={contact.id}><div className="avatar">{contact.name.slice(0, 1).toUpperCase()}</div><div className="row-main"><strong>{contact.name}</strong><small>{contact.phone}{contact.tags?.length ? ` · ${contact.tags.join(", ")}` : ""}</small></div><span className="tag">{contact.opt_in === false ? "Sem opt-in" : "Opt-in"}</span></div>)}</div> : <div className="empty-state">Ainda não existem contactos.</div>}</section>
+      <section className="data-panel" id="new-contact"><div className="panel-heading"><div><span className="eyebrow">ADICIONAR</span><h3>Novo contacto</h3></div><Plus size={19} /></div><form className="stack-form compact-form" onSubmit={addContact}><label>Nome<input value={name} onChange={(event) => setName(event.target.value)} placeholder="Nome do contacto" required /></label><label>WhatsApp<input value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="2588..." required /></label><button className="primary-button" disabled={saving} type="submit">{saving ? "A guardar..." : "Guardar contacto"}</button></form><label className="upload-field"><span><FileUp size={16} /> Importar CSV ou XLSX</span><input type="file" accept=".csv,.xlsx" disabled={importing} onChange={(event) => { void importFile(event.target.files?.[0]); event.currentTarget.value = ""; }} />{importing && <small>A importar contactos...</small>}</label></section></div>
+    <section className="data-panel"><div className="panel-heading"><div><span className="eyebrow">ATIVIDADE</span><h3>Conversas recentes</h3></div><MessageCircle size={19} /></div>{conversations.length ? <div className="data-list">{conversations.map((conversation) => <div className="data-row" key={conversation.id || conversation.phone}><div className="quick-icon"><MessageCircle size={17} /></div><div className="row-main"><strong>{conversation.name || conversation.phone || "Contacto"}</strong><small>{conversation.last_message || "Sem mensagem recente"}</small></div><span className="tag">{conversation.status_atendimento || conversation.status || "bot"}</span><div className="row-actions"><button title="Entregar ao bot" onClick={() => void handoff(conversation, "bot")}><Bot size={14} /></button><button title="Entregar a humano" onClick={() => void handoff(conversation, "humano")}><Users size={14} /></button></div></div>)}</div> : <div className="empty-state">As conversas recebidas pelo webhook aparecerão aqui.</div>}</section>
   </div>;
 }
 
 export function CampaignsPage() {
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
-  const [name, setName] = useState("");
-  const [message, setMessage] = useState("");
-  const [busy, setBusy] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-  async function load() { setBusy(true); try { setCampaigns((await api.client.campaigns()).campaigns || []); } catch (reason) { setError(reason instanceof Error ? reason.message : "Não foi possível carregar campanhas."); } finally { setBusy(false); } }
+  const [templates, setTemplates] = useState<CampaignTemplate[]>([]);
+  const [name, setName] = useState(""); const [message, setMessage] = useState(""); const [templateId, setTemplateId] = useState(""); const [segmentTags, setSegmentTags] = useState(""); const [busy, setBusy] = useState(true); const [saving, setSaving] = useState(false); const [error, setError] = useState(""); const [notice, setNotice] = useState("");
+  async function load() { setBusy(true); try { const [campaignResult, templateResult] = await Promise.all([api.client.campaigns(), api.client.templates()]); setCampaigns(campaignResult.campaigns || []); setTemplates(templateResult.templates || []); } catch (reason) { setError(reason instanceof Error ? reason.message : "Não foi possível carregar campanhas."); } finally { setBusy(false); } }
   useEffect(() => { void load(); }, []);
-  async function create(event: FormEvent) { event.preventDefault(); setSaving(true); setError(""); try { await api.client.createCampaign(name, message); setName(""); setMessage(""); await load(); } catch (reason) { setError(reason instanceof Error ? reason.message : "Não foi possível criar a campanha."); } finally { setSaving(false); } }
+  async function create(event: FormEvent) { event.preventDefault(); setSaving(true); setError(""); setNotice(""); try { const tags = segmentTags.split(",").map((item) => item.trim()).filter(Boolean); await api.client.createCampaign(name, message, { ...(templateId ? { template_id: templateId } : {}), ...(tags.length ? { tags } : {}) }); setName(""); setMessage(""); setTemplateId(""); setSegmentTags(""); setNotice("Campanha colocada na fila persistente."); await load(); } catch (reason) { setError(reason instanceof Error ? reason.message : "Não foi possível criar a campanha."); } finally { setSaving(false); } }
   async function action(id: string, value: "pause" | "resume" | "cancel") { try { await api.client.campaignAction(id, value); await load(); } catch (reason) { setError(reason instanceof Error ? reason.message : "Não foi possível atualizar a campanha."); } }
-  return <div className="content-stack"><ModuleHeader eyebrow="DISPAROS SEGMENTADOS" title="Campanhas" description="Cria campanhas e acompanha o estado da fila persistente do NEGOBOT." action={<div className="live-pill"><span className="status-dot" /> Redis queue</div>} />{error && <ErrorBox message={error} />}<div className="module-grid two"><section className="data-panel"><div className="panel-heading"><div><span className="eyebrow">NOVA CAMPANHA</span><h3>Preparar disparo</h3></div><Send size={19} /></div><form className="stack-form compact-form" onSubmit={create}><label>Nome da campanha<input value={name} onChange={(event) => setName(event.target.value)} placeholder="Promoção de agosto" required /></label><label>Mensagem<textarea value={message} onChange={(event) => setMessage(event.target.value)} placeholder="Escreve a mensagem da campanha" rows={5} required /></label><button className="primary-button" disabled={saving} type="submit">{saving ? "A preparar..." : "Colocar na fila"}</button></form></section><section className="data-panel"><div className="panel-heading"><div><span className="eyebrow">HISTÓRICO</span><h3>{campaigns.length} campanhas</h3></div><ActivityIcon /></div>{busy ? <LoadingBox /> : campaigns.length ? <div className="data-list">{campaigns.map((campaign) => <div className="data-row" key={campaign.id}><div className="quick-icon"><Send size={16} /></div><div className="row-main"><strong>{campaign.name}</strong><small>{campaign.total || 0} destinatários · {campaign.sent || 0} enviados</small></div><span className={`status-badge ${campaign.status || "queued"}`}>{campaign.status || "queued"}</span><div className="row-actions">{campaign.status === "paused" ? <button title="Retomar" onClick={() => void action(campaign.id, "resume")}><Play size={14} /></button> : <button title="Pausar" onClick={() => void action(campaign.id, "pause")}><Pause size={14} /></button>}<button title="Cancelar" onClick={() => void action(campaign.id, "cancel")}><XCircle size={14} /></button></div></div>)}</div> : <div className="empty-state">Ainda não criaste nenhuma campanha.</div>}</section></div></div>;
+  return <div className="content-stack"><ModuleHeader eyebrow="DISPAROS SEGMENTADOS" title="Campanhas" description="Cria templates, seleciona etiquetas e acompanha a fila persistente do NEGOBOT." action={<div className="live-pill"><span className="status-dot" /> Redis queue</div>} />{error && <ErrorBox message={error} />}{notice && <SuccessBox message={notice} />}<div className="module-grid two"><section className="data-panel"><div className="panel-heading"><div><span className="eyebrow">NOVA CAMPANHA</span><h3>Preparar disparo</h3></div><Send size={19} /></div><form className="stack-form compact-form" onSubmit={create}><label>Nome da campanha<input value={name} onChange={(event) => setName(event.target.value)} placeholder="Promoção de agosto" required /></label><label>Template opcional<select value={templateId} onChange={(event) => { const value = event.target.value; setTemplateId(value); const selected = templates.find((item) => item.id === value); if (selected) setMessage(selected.body); }}><option value="">Escrever mensagem</option>{templates.filter((item) => item.status !== "archived").map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label>Mensagem<textarea value={message} onChange={(event) => setMessage(event.target.value)} placeholder="Escreve a mensagem da campanha ou seleciona um template" rows={5} required={!templateId} /></label><label>Etiquetas do segmento<small className="muted">Separadas por vírgulas; vazio envia para todos com opt-in.</small><input value={segmentTags} onChange={(event) => setSegmentTags(event.target.value)} placeholder="vip, cliente" /></label><button className="primary-button" disabled={saving} type="submit">{saving ? "A preparar..." : "Colocar na fila"}</button></form></section><section className="data-panel"><div className="panel-heading"><div><span className="eyebrow">HISTÓRICO</span><h3>{campaigns.length} campanhas</h3></div><ActivityIcon /></div>{busy ? <LoadingBox /> : campaigns.length ? <div className="data-list">{campaigns.map((campaign) => <div className="data-row" key={campaign.id}><div className="quick-icon"><Send size={16} /></div><div className="row-main"><strong>{campaign.name}</strong><small>{campaign.total || 0} destinatários · {campaign.sent || 0} enviados</small></div><span className={`status-badge ${campaign.status || "queued"}`}>{campaign.status || "queued"}</span><div className="row-actions">{campaign.status === "paused" ? <button title="Retomar" onClick={() => void action(campaign.id, "resume")}><Play size={14} /></button> : <button title="Pausar" onClick={() => void action(campaign.id, "pause")}><Pause size={14} /></button>}<button title="Cancelar" onClick={() => void action(campaign.id, "cancel")}><XCircle size={14} /></button></div></div>)}</div> : <div className="empty-state">Ainda não criaste nenhuma campanha.</div>}</section></div></div>;
 }
-
 function ActivityIcon() { return <Send size={19} />; }
 
 export function BillingPage() {
-  const [plan, setPlan] = useState<ClientPlan | null>(null);
-  const [plans, setPlans] = useState<Array<{ id: string; name: string; price: number; duration_days: number; benefits: string[] }>>([]);
-  const [error, setError] = useState("");
-  useEffect(() => { Promise.all([api.client.plan(), api.client.plans()]).then(([current, catalog]) => { setPlan(current); setPlans(catalog.plans || []); }).catch((reason) => setError(reason instanceof Error ? reason.message : "Não foi possível carregar os planos.")); }, []);
-  return <div className="content-stack"><ModuleHeader eyebrow="PLANO E PAGAMENTOS" title="Escolhe o teu próximo nível" description="Consulta os benefícios, confirma o teu plano e ativa a automação WhatsApp." />{error && <ErrorBox message={error} />}<section className="current-plan"><div><span className="eyebrow">PLANO ATUAL</span><h3>{plan?.plan_name || "Demonstração"}</h3><p>{plan?.status || "A aguardar ativação"}{plan?.expires_at ? ` · expira em ${plan.expires_at}` : ""}</p></div><div className="plan-status"><CircleDollarSign size={20} />{plan?.mass_broadcast ? "Disparos ativos" : "Modo demonstração"}</div></section><section className="plan-grid">{plans.map((item) => <article className={`plan-card ${item.id === plan?.plan ? "selected" : ""}`} key={item.id}><span className="eyebrow">{item.name}</span><strong>{item.price} MT</strong><small>{item.duration_days} dias</small><div className="benefits">{item.benefits.map((benefit) => <span key={benefit}><CheckIcon />{benefit}</span>)}</div><button className="primary-button" onClick={() => window.alert("O fluxo M-Pesa será ligado nesta etapa.")}>{item.id === plan?.plan ? "Plano atual" : "Escolher plano"}</button></article>)}</section></div>;
+  const [plan, setPlan] = useState<ClientPlan | null>(null); const [plans, setPlans] = useState<Plan[]>([]); const [payments, setPayments] = useState<PaymentRecord[]>([]); const [mpesaNumber, setMpesaNumber] = useState("855000929");
+ const [mpesaName, setMpesaName] = useState("Abel Francisco"); const [messageText, setMessageText] = useState(""); const [clientPhone, setClientPhone] = useState(""); const [busy, setBusy] = useState(true); const [verifying, setVerifying] = useState(false); const [error, setError] = useState(""); const [notice, setNotice] = useState("");
+  async function load() { setBusy(true); try { const [current, catalog, history] = await Promise.all([api.client.plan(), api.client.plans(), api.client.paymentHistory()]); setPlan(current); setPlans(catalog.plans || []); setPayments(history.payments || []); if (catalog.mpesa_number) setMpesaNumber(catalog.mpesa_number); if (catalog.mpesa_name) setMpesaName(catalog.mpesa_name); } catch (reason) { setError(reason instanceof Error ? reason.message : "Não foi possível carregar os planos."); } finally { setBusy(false); } }
+  useEffect(() => { void load(); }, []);
+  async function verify(event: FormEvent) { event.preventDefault(); setVerifying(true); setError(""); setNotice(""); try { const result = await api.client.verifyPayment(messageText, clientPhone); setNotice(result.response); setMessageText(""); await load(); } catch (reason) { setError(reason instanceof Error ? reason.message : "Não foi possível validar o pagamento."); } finally { setVerifying(false); } }
+  return <div className="content-stack"><ModuleHeader eyebrow="PLANO E PAGAMENTOS" title="Escolhe o teu próximo nível" description="Consulta os benefícios, paga manualmente por M-Pesa e envia o SMS para validação AutoPay." />{error && <ErrorBox message={error} />}{notice && <SuccessBox message={notice} />}<section className="current-plan"><div><span className="eyebrow">PLANO ATUAL</span><h3>{plan?.plan_name || "Demonstração"}</h3><p>{plan?.status || "A aguardar ativação"}{plan?.expires_at ? ` · expira em ${plan.expires_at}` : ""}</p></div><div className="plan-status"><CircleDollarSign size={20} />{plan?.mass_broadcast ? "Disparos ativos" : "Modo demonstração"}</div></section><section className="payment-instruction"><div className="quick-icon"><Smartphone size={20} /></div><div><strong>Pagamento manual por M-Pesa</strong><p>Transfere para <b>{mpesaNumber}</b>, em nome de <b>{mpesaName}</b>. Depois cola abaixo o SMS completo ou o ID da transação. O AutoPay compara a transação recebida antes de ativar o plano.</p></div></section><section className="data-panel"><div className="panel-heading"><div><span className="eyebrow">VALIDAÇÃO AUTOPAY</span><h3>Enviar comprovativo</h3></div><CheckCircle2 size={19} /></div><form className="stack-form compact-form" onSubmit={verify}><label>Número que fez a transferência<input value={clientPhone} onChange={(event) => setClientPhone(event.target.value)} placeholder="2588..." required /></label><label>SMS ou ID da transferência<textarea value={messageText} onChange={(event) => setMessageText(event.target.value)} placeholder="Cole aqui o SMS recebido do M-Pesa" rows={4} required /></label><button className="primary-button" disabled={verifying} type="submit">{verifying ? "A validar..." : "Validar pagamento"}</button></form></section><section className="data-panel"><div className="panel-heading"><div><span className="eyebrow">HISTÓRICO DE PAGAMENTOS</span><h3>{payments.length} submissões</h3></div><RefreshCw size={19} /></div>{payments.length ? <div className="data-list">{payments.map((payment) => <div className="data-row" key={payment.id}><div className="quick-icon"><CircleDollarSign size={16} /></div><div className="row-main"><strong>{payment.transaction_id || "Código ainda não identificado"}</strong><small>{payment.client_phone || "Número não indicado"} · {payment.created_at ? new Date(payment.created_at).toLocaleString("pt-PT") : "agora"}</small></div><span className={`status-badge ${payment.status || "pending"}`}>{payment.status || "pendente"}</span></div>)}</div> : <div className="empty-state">As submissões de pagamento aparecerão aqui.</div>}</section><section className="plan-grid">{busy ? <LoadingBox /> : plans.map((item) => <article className={`plan-card ${item.id === plan?.plan ? "selected" : ""}`} key={item.id}><span className="eyebrow">{item.name}</span><strong>{item.price_mt} MT</strong><small>{item.validity_days} dias</small><div className="benefits">{item.benefits.map((benefit) => <span key={benefit}><CheckIcon />{benefit}</span>)}</div><button className="secondary-button" type="button" onClick={() => setNotice(item.id === plan?.plan ? "Este é o teu plano atual." : `Plano ${item.name} selecionado. Faz a transferência de ${item.price_mt} MT e envia o SMS acima.`)}>{item.id === plan?.plan ? "Plano atual" : "Escolher plano"}</button></article>)}</section></div>;
 }
 function CheckIcon() { return <span className="check-icon">✓</span>; }
+
+export function WhatsAppPage() {
+  const [status, setStatus] = useState<IntegrationStatus | null>(null); const [phone, setPhone] = useState(""); const [qr, setQr] = useState<string | null>(null); const [busy, setBusy] = useState(true); const [generating, setGenerating] = useState(false); const [error, setError] = useState("");
+  async function load() { setBusy(true); try { setStatus(await api.client.integrationStatus()); } catch (reason) { setError(reason instanceof Error ? reason.message : "Não foi possível consultar a Evolution API."); } finally { setBusy(false); } }
+  useEffect(() => { void load(); }, []);
+  async function generate(event: FormEvent) { event.preventDefault(); setGenerating(true); setError(""); setQr(null); try { const result = await api.client.evolutionQr(phone); setQr(result.qrcode || null); setStatus({ instance_name: result.instance_name, state: result.state, configured: true }); if (!result.qrcode && result.state === "open") setError("Este WhatsApp já está ligado; não é necessário ler um novo QR Code."); } catch (reason) { setError(reason instanceof Error ? reason.message : "Não foi possível gerar o QR Code."); } finally { setGenerating(false); } }
+  return <div className="content-stack"><ModuleHeader eyebrow="INTEGRAÇÃO WHATSAPP" title="Liga o teu número" description="Prepara a instância Evolution API e lê o QR Code com o WhatsApp que será automatizado." action={<button className="secondary-button compact" onClick={() => void load()}><RefreshCw size={16} /> Atualizar estado</button>} />{error && <ErrorBox message={error} />}<div className="module-grid two"><section className="data-panel"><div className="panel-heading"><div><span className="eyebrow">ESTADO DA INSTÂNCIA</span><h3>{busy ? "A consultar..." : status?.state || "não configurada"}</h3></div><Smartphone size={20} /></div><div className="health-list"><div className="health-item"><span className="status-dot" /><div className="row-main"><strong>Evolution API</strong><small>{status?.configured ? "Configurada" : "A aguardar configuração"}</small></div></div><div className="health-item"><span className="status-dot" /><div className="row-main"><strong>Instância</strong><small>{status?.instance_name || "Será criada com o número"}</small></div></div></div><form className="stack-form compact-form" onSubmit={generate}><label>Número de WhatsApp<input value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="2588..." required /></label><button className="primary-button" disabled={generating} type="submit">{generating ? "A preparar QR Code..." : "Gerar QR Code"}</button></form></section><section className="data-panel qr-panel"><div className="panel-heading"><div><span className="eyebrow">LIGAÇÃO SEGURA</span><h3>{qr ? "Lê o código com o WhatsApp" : "QR Code"}</h3></div><QrCode size={20} /></div>{qr ? <img className="qr-image" src={qr} alt="QR Code para ligar o WhatsApp" /> : <div className="empty-state">Depois de gerar o código, ele aparecerá aqui. Mantém o WhatsApp aberto em Dispositivos associados.</div>}</section></div></div>;
+}
+
+export function AssistantPage() {
+  const [settings, setSettings] = useState<AssistantSettings>({ diretrizes_corporativas: "", base_conhecimento_documentos: "", timeout_humano_minutos: 15 }); const [busy, setBusy] = useState(true); const [saving, setSaving] = useState(false); const [error, setError] = useState(""); const [notice, setNotice] = useState("");
+  useEffect(() => { api.client.assistant().then(setSettings).catch((reason) => setError(reason instanceof Error ? reason.message : "Não foi possível carregar o assistente.")).finally(() => setBusy(false)); }, []);
+  async function save(event: FormEvent) { event.preventDefault(); setSaving(true); setError(""); setNotice(""); try { await api.client.updateAssistant(settings); setNotice("Configuração do assistente guardada."); } catch (reason) { setError(reason instanceof Error ? reason.message : "Não foi possível guardar a configuração."); } finally { setSaving(false); } }
+  if (busy) return <div className="content-stack"><LoadingBox /></div>;
+  return <div className="content-stack"><ModuleHeader eyebrow="ASSISTENTE NEGOBOT" title="Configura o teu assistente" description="Define as regras de atendimento, a base de conhecimento e quando uma conversa passa para uma pessoa." />{error && <ErrorBox message={error} />}{notice && <SuccessBox message={notice} />}<form className="data-panel stack-form" onSubmit={save}><div className="panel-heading"><div><span className="eyebrow">PERSONALIDADE E REGRAS</span><h3>Diretrizes corporativas</h3></div><Bot size={20} /></div><textarea rows={7} value={settings.diretrizes_corporativas} onChange={(event) => setSettings({ ...settings, diretrizes_corporativas: event.target.value })} placeholder="Ex.: responde em Português de Moçambique, apresenta preços reais e encaminha pagamentos para validação AutoPay." /><label>Base de conhecimento<textarea rows={8} value={settings.base_conhecimento_documentos} onChange={(event) => setSettings({ ...settings, base_conhecimento_documentos: event.target.value })} placeholder="Produtos, horários, localização, perguntas frequentes e informação que o bot deve conhecer." /></label><label>Timeout para atendimento humano (minutos)<input type="number" min={1} max={240} value={settings.timeout_humano_minutos} onChange={(event) => setSettings({ ...settings, timeout_humano_minutos: Number(event.target.value) })} /></label><small className="muted">Modelos ativos: texto {settings.models?.text || "configurado"} · visão {settings.models?.vision || "configurado"}</small><button className="primary-button" disabled={saving} type="submit">{saving ? "A guardar..." : "Guardar configuração"}</button></form></div>;
+}
+
+
+export function TeamPage() {
+  const [members, setMembers] = useState<TeamMember[]>([]);
+  const [currentRole, setCurrentRole] = useState("");
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+
+  async function load() {
+    setBusy(true);
+    setError("");
+    try {
+      const result = await api.client.team();
+      setMembers(result.users || []);
+      setCurrentRole(result.current_role || "");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Não foi possível carregar a equipa.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  useEffect(() => { void load(); }, []);
+
+  async function create(event: FormEvent) {
+    event.preventDefault();
+    setSaving(true);
+    setError("");
+    setNotice("");
+    try {
+      await api.client.createOperator(name, email, password);
+      setName("");
+      setEmail("");
+      setPassword("");
+      setNotice("Operador criado. Pode iniciar sessão com as credenciais definidas.");
+      await load();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Não foi possível criar o operador.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function updateMember(member: TeamMember, fields: { status?: "active" | "suspended"; tenant_role?: "operator" | "viewer" }) {
+    setError("");
+    setNotice("");
+    try {
+      await api.client.updateTeamMember(member.id, fields);
+      setNotice("Permissões da equipa atualizadas.");
+      await load();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Não foi possível atualizar o membro.");
+    }
+  }
+
+  const canManage = currentRole === "owner";
+  return <div className="content-stack">
+    <ModuleHeader eyebrow="EQUIPA E PERMISSÕES" title="A tua equipa" description="Convida operadores e controla quem pode atender conversas dentro deste tenant." action={<button className="secondary-button compact" onClick={() => void load()}><RefreshCw size={16} /> Atualizar</button>} />
+    {error && <ErrorBox message={error} />}
+    {notice && <SuccessBox message={notice} />}
+    <div className="module-grid two">
+      <section className="data-panel">
+        <div className="panel-heading"><div><span className="eyebrow">MEMBROS</span><h3>{members.length} utilizadores</h3></div><Users size={19} /></div>
+        {busy ? <LoadingBox /> : members.length ? <div className="data-list">{members.map((member) => <div className="data-row" key={member.id}>
+          <div className="avatar">{member.name.slice(0, 1).toUpperCase()}</div>
+          <div className="row-main"><strong>{member.name}</strong><small>{member.email} · {member.tenant_role}</small></div>
+          <span className={`status-badge ${member.status}`}>{member.status === "active" ? "ativo" : "suspenso"}</span>
+          {canManage && member.tenant_role !== "owner" && <div className="row-actions"><button title={member.status === "active" ? "Suspender" : "Reativar"} onClick={() => void updateMember(member, { status: member.status === "active" ? "suspended" : "active" })}>{member.status === "active" ? <XCircle size={14} /> : <CheckCircle2 size={14} />}</button><button title={member.tenant_role === "operator" ? "Tornar visualizador" : "Tornar operador"} onClick={() => void updateMember(member, { tenant_role: member.tenant_role === "operator" ? "viewer" : "operator" })}><Users size={14} /></button></div>}
+        </div>)}</div> : <div className="empty-state">Ainda não existem membros nesta equipa.</div>}
+      </section>
+      <section className="data-panel">
+        <div className="panel-heading"><div><span className="eyebrow">CONVIDAR</span><h3>Novo operador</h3></div><Plus size={19} /></div>
+        {canManage ? <form className="stack-form compact-form" onSubmit={create}><label>Nome<input value={name} onChange={(event) => setName(event.target.value)} required /></label><label>Email<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} required /></label><label>Palavra-passe inicial<input type="password" minLength={8} value={password} onChange={(event) => setPassword(event.target.value)} required /></label><button className="primary-button" disabled={saving} type="submit">{saving ? "A criar..." : "Criar operador"}</button></form> : <div className="empty-state">Apenas o proprietário do tenant pode convidar ou alterar membros.</div>}
+      </section>
+    </div>
+  </div>;
+}

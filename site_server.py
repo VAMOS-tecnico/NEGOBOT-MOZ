@@ -12,25 +12,41 @@ def home():
     return send_from_directory(SITE_ROOT, "index.html")
 
 
-@app.get("/plataforma")
-def platform():
-    return send_from_directory(SITE_ROOT, "platform.html")
-
-
 REACT_DIST = SITE_ROOT / "platform-react" / "dist"
+
+
+def _react_index():
+    return send_from_directory(REACT_DIST, "index.html")
+
+
+def _react_asset(asset: str):
+    if "." not in Path(asset).name:
+        return _react_index()
+    return send_from_directory(REACT_DIST, asset)
+
+
+# A rota principal usa React; a versão antiga fica preservada no ficheiro platform.html
+# e pode ser restaurada rapidamente se for necessário fazer rollback.
+@app.get("/plataforma")
+@app.get("/plataforma/")
+def platform():
+    return _react_index()
+
+
+@app.get("/plataforma/<path:asset>")
+def platform_asset(asset):
+    return _react_asset(asset)
 
 
 @app.get("/plataforma-react")
 @app.get("/plataforma-react/")
 def platform_react():
-    return send_from_directory(REACT_DIST, "index.html")
+    return _react_index()
 
 
 @app.get("/plataforma-react/<path:asset>")
 def platform_react_asset(asset):
-    if "." not in Path(asset).name:
-        return send_from_directory(REACT_DIST, "index.html")
-    return send_from_directory(REACT_DIST, asset)
+    return _react_asset(asset)
 
 
 @app.get("/assistente")

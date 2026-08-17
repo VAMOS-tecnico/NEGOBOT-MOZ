@@ -1,183 +1,41 @@
-import { useEffect, useMemo, useState } from "react";
-import type { FormEvent, ReactNode } from "react";
+import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
-import {
-  Activity,
-  Bot,
-  CheckCircle2,
-  ChevronRight,
-  CircleDollarSign,
-  LayoutDashboard,
-  LogOut,
-  MessageCircle,
-  Send,
-  Settings2,
-  Users,
-  Wifi,
-  X,
-} from "lucide-react";
+import { Activity, Bot, CheckCircle2, ChevronRight, CircleDollarSign, LayoutDashboard, LogOut, MessageCircle, QrCode, Send, Settings2, Smartphone, Users, Wifi, X } from "lucide-react";
 import { api, type AuthState, type ClientPlan, type IntegrationStatus, type Overview, type PlatformUser } from "./lib/api";
 import { AdminPage } from "./pages/AdminPage";
-import { BillingPage, CampaignsPage, ConversationsPage } from "./pages/ClientPages";
+import { AssistantPage, BillingPage, CampaignsPage, ConversationsPage, TeamPage, WhatsAppPage } from "./pages/ClientPages";
 
-type AuthContextValue = {
-  auth: AuthState;
-  refresh: () => Promise<void>;
-  logout: () => Promise<void>;
-};
-
+type AuthContextValue = { auth: AuthState; refresh: () => Promise<void>; logout: () => Promise<void> };
 const defaultAuth: AuthState = { authenticated: false, user: null };
 
 function LoginPage({ onLogin }: { onLogin: (user: PlatformUser) => void }) {
-  const [identifier, setIdentifier] = useState("");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    setError("");
-    setBusy(true);
-    try {
-      const result = await api.auth.login(identifier, password);
-      onLogin(result.user);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Não foi possível iniciar a sessão.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <main className="auth-shell">
-      <section className="auth-card">
-        <div className="brand-mark">N</div>
-        <span className="eyebrow">NEGOBOT-MOZ</span>
-        <h1>Centro de automação WhatsApp</h1>
-        <p className="muted">Acede ao teu espaço de gestão com segurança.</p>
-        <form onSubmit={submit} className="stack-form">
-          <label>
-            Email ou identificador
-            <input value={identifier} onChange={(event) => setIdentifier(event.target.value)} placeholder="email@empresa.co.mz" autoComplete="username" />
-          </label>
-          <label>
-            Palavra-passe
-            <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Introduz a palavra-passe" autoComplete="current-password" />
-          </label>
-          {error && <div className="alert error"><X size={16} />{error}</div>}
-          <button className="primary-button" disabled={busy} type="submit">{busy ? "A autenticar..." : "Entrar na plataforma"}</button>
-        </form>
-        <p className="auth-footnote">Os dados de cada cliente são isolados por tenant.</p>
-      </section>
-    </main>
-  );
+  const [identifier, setIdentifier] = useState(""); const [password, setPassword] = useState(""); const [error, setError] = useState(""); const [busy, setBusy] = useState(false);
+  async function submit(event: FormEvent) { event.preventDefault(); setError(""); setBusy(true); try { const result = await api.auth.login(identifier, password); onLogin(result.user); } catch (reason) { setError(reason instanceof Error ? reason.message : "Não foi possível iniciar a sessão."); } finally { setBusy(false); } }
+  return <main className="auth-shell"><section className="auth-card"><div className="brand-mark">N</div><span className="eyebrow">NEGOBOT-MOZ</span><h1>Centro de automação WhatsApp</h1><p className="muted">Acede ao teu espaço de gestão com segurança.</p><form onSubmit={submit} className="stack-form"><label>Email ou identificador<input value={identifier} onChange={(event) => setIdentifier(event.target.value)} placeholder="email@empresa.co.mz ou admin" autoComplete="username" /></label><label>Palavra-passe<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Introduz a palavra-passe" autoComplete="current-password" /></label>{error && <div className="alert error"><X size={16} />{error}</div>}<button className="primary-button" disabled={busy} type="submit">{busy ? "A autenticar..." : "Entrar na plataforma"}</button></form><p className="auth-footnote">Os dados de cada cliente são isolados por tenant.</p></section></main>;
 }
-
-function ProtectedRoute({ auth, children }: { auth: AuthState; children: ReactNode }) {
-  if (!auth.authenticated) return <Navigate to="/login" replace />;
-  return <>{children}</>;
-}
+function ProtectedRoute({ auth, children }: { auth: AuthState; children: ReactNode }) { if (!auth.authenticated) return <Navigate to="/login" replace />; return <>{children}</>; }
 
 function AppShell({ user, onLogout, children }: { user: PlatformUser; onLogout: () => void; children: ReactNode }) {
-  const location = useLocation();
-  const navigate = useNavigate();
-  const isAdmin = user.role === "owner" || user.role === "admin";
-  const navigation = [
-    { label: "Visão geral", path: "/", icon: LayoutDashboard },
-    { label: "Conversas", path: "/conversas", icon: MessageCircle },
-    { label: "Campanhas", path: "/campanhas", icon: Send },
-    { label: "Plano e pagamentos", path: "/plano", icon: CircleDollarSign },
-    ...(isAdmin ? [{ label: "Administração", path: "/admin", icon: Settings2 }] : []),
-  ];
-
-  return (
-    <div className="app-frame">
-      <aside className="sidebar">
-        <button className="brand-lockup" onClick={() => navigate("/")}><span className="brand-mark small">N</span><span><strong>NEGOBOT</strong><small>MOZ PLATFORM</small></span></button>
-        <div className="workspace-card"><span className="status-dot" />{isAdmin ? "Visão do administrador" : "Espaço do cliente"}</div>
-        <nav className="sidebar-nav">
-          <span className="nav-heading">Plataforma</span>
-          {navigation.map(({ label, path, icon: Icon }) => <button key={path} className={`nav-item ${location.pathname === `/plataforma${path}` || (path === "/" && location.pathname === "/plataforma") ? "active" : ""}`} onClick={() => navigate(path)}><Icon size={18} /><span>{label}</span><ChevronRight size={14} className="nav-chevron" /></button>)}
-        </nav>
-        <div className="sidebar-bottom">
-          <div className="user-mini"><div className="avatar">{(user.name || "N").slice(0, 1).toUpperCase()}</div><div><strong>{user.name}</strong><small>{user.role}</small></div></div>
-          <button className="nav-item logout" onClick={onLogout}><LogOut size={18} /><span>Sair</span></button>
-        </div>
-      </aside>
-      <div className="main-column">
-        <header className="topbar"><div><span className="eyebrow">ESPAÇO DE GESTÃO</span><h2>Olá, {user.name.split(" ")[0]}</h2></div><div className="topbar-actions"><div className="live-pill"><span className="status-dot" /> Sistema operacional</div><div className="avatar large">{(user.name || "N").slice(0, 1).toUpperCase()}</div></div></header>
-        <main className="page-content">{children}</main>
-      </div>
-    </div>
-  );
+  const location = useLocation(); const navigate = useNavigate(); const isAdmin = user.role === "owner" || user.role === "admin";
+  const navigation = [{ label: "Visão geral", path: "/", icon: LayoutDashboard }, { label: "Conversas", path: "/conversas", icon: MessageCircle }, { label: "Campanhas", path: "/campanhas", icon: Send }, { label: "WhatsApp", path: "/whatsapp", icon: QrCode }, { label: "Equipa", path: "/equipa", icon: Users }, { label: "Assistente", path: "/assistente", icon: Bot },
+ { label: "Plano e pagamentos", path: "/plano", icon: CircleDollarSign }, ...(isAdmin ? [{ label: "Administração", path: "/admin", icon: Settings2 }] : [])];
+  return <div className="app-frame"><aside className="sidebar"><button className="brand-lockup" onClick={() => navigate("/")}><span className="brand-mark small">N</span><span><strong>NEGOBOT</strong><small>MOZ PLATFORM</small></span></button><div className="workspace-card"><span className="status-dot" />{isAdmin ? "Visão do administrador" : "Espaço do cliente"}</div><nav className="sidebar-nav"><span className="nav-heading">Plataforma</span>{navigation.map(({ label, path, icon: Icon }) => <button key={path} className={`nav-item ${location.pathname === path ? "active" : ""}`} onClick={() => navigate(path)}><Icon size={18} /><span>{label}</span><ChevronRight size={14} className="nav-chevron" /></button>)}</nav><div className="sidebar-bottom"><div className="user-mini"><div className="avatar">{(user.name || "N").slice(0, 1).toUpperCase()}</div><div><strong>{user.name}</strong><small>{user.role}</small></div></div><button className="nav-item logout" onClick={onLogout}><LogOut size={18} /><span>Sair</span></button></div></aside><div className="main-column"><header className="topbar"><div><span className="eyebrow">ESPAÇO DE GESTÃO</span><h2>Olá, {user.name.split(" ")[0]}</h2></div><div className="topbar-actions"><div className="live-pill"><span className="status-dot" /> Sistema operacional</div><div className="avatar large">{(user.name || "N").slice(0, 1).toUpperCase()}</div></div></header><main className="page-content">{children}</main></div></div>;
 }
-
-function StatCard({ label, value, caption, icon: Icon, tone = "green" }: { label: string; value: string; caption: string; icon: typeof Activity; tone?: string }) {
-  return <article className={`stat-card ${tone}`}><div className="stat-top"><span>{label}</span><span className="icon-chip"><Icon size={17} /></span></div><strong>{value}</strong><small>{caption}</small></article>;
-}
-
+function StatCard({ label, value, caption, icon: Icon, tone = "green" }: { label: string; value: string; caption: string; icon: typeof Activity; tone?: string }) { return <article className={`stat-card ${tone}`}><div className="stat-top"><span>{label}</span><span className="icon-chip"><Icon size={17} /></span></div><strong>{value}</strong><small>{caption}</small></article>; }
 function OverviewPage({ user }: { user: PlatformUser }) {
-  const [overview, setOverview] = useState<Overview>({});
-  const [plan, setPlan] = useState<ClientPlan | null>(null);
-  const [integration, setIntegration] = useState<IntegrationStatus | null>(null);
-  const [loading, setLoading] = useState(true);
-  const isAdmin = user.role === "owner" || user.role === "admin";
-
-  useEffect(() => {
-    let cancelled = false;
-    async function load() {
-      try {
-        if (isAdmin) {
-          const result = await api.admin.overview();
-          if (!cancelled) setOverview(result);
-        } else {
-          const [planResult, integrationResult] = await Promise.all([api.client.plan(), api.client.integrationStatus()]);
-          if (!cancelled) { setPlan(planResult); setIntegration(integrationResult); }
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    }
-    void load();
-    return () => { cancelled = true; };
-  }, [isAdmin]);
-
+  const [overview, setOverview] = useState<Overview>({}); const [plan, setPlan] = useState<ClientPlan | null>(null); const [integration, setIntegration] = useState<IntegrationStatus | null>(null); const [loading, setLoading] = useState(true); const isAdmin = user.role === "owner" || user.role === "admin";
+  useEffect(() => { let cancelled = false; async function load() { try { if (isAdmin) { const result = await api.admin.overview(); if (!cancelled) setOverview(result); } else { const [overviewResult, planResult, integrationResult] = await Promise.all([api.client.overview(), api.client.plan(), api.client.integrationStatus()]); if (!cancelled) { setOverview(overviewResult); setPlan(planResult); setIntegration(integrationResult); } } } finally { if (!cancelled) setLoading(false); } } void load(); return () => { cancelled = true; }; }, [isAdmin]);
   const status = integration?.state || "desconectado";
-  return <div className="content-stack">
-    <section className="hero-panel"><div><span className="eyebrow">PAINEL PRINCIPAL</span><h1>{isAdmin ? "Controlo central da plataforma" : "A tua automação num só lugar"}</h1><p>{isAdmin ? "Acompanha clientes, integrações e operação sem sair deste centro." : "Gere contactos, campanhas e o teu assistente WhatsApp com uma experiência simples."}</p></div><div className="hero-orb"><Bot size={54} /></div></section>
-    <section className="stat-grid">
-      {isAdmin ? <><StatCard label="Clientes" value={loading ? "—" : String(overview.tenants || 0)} caption="Tenants registados" icon={Users} /><StatCard label="Utilizadores" value={loading ? "—" : String(overview.users || 0)} caption="Contas da plataforma" icon={Activity} tone="blue" /><StatCard label="Ativos" value={loading ? "—" : String(overview.active_tenants || 0)} caption="Clientes em operação" icon={CheckCircle2} tone="violet" /></> : <><StatCard label="Plano atual" value={plan?.plan_name || "Demonstração"} caption={plan?.status || "A carregar estado"} icon={CircleDollarSign} /><StatCard label="WhatsApp" value={status === "open" ? "Ligado" : "Não ligado"} caption={integration?.instance_name || "Configura a tua instância"} icon={Wifi} tone={status === "open" ? "blue" : "amber"} /><StatCard label="Disparos" value={plan?.mass_broadcast ? "Ativos" : "Bloqueados"} caption="Disponibilidade do plano" icon={Send} tone="violet" /></>}
-    </section>
-    <section className="section-heading"><div><span className="eyebrow">ACESSO RÁPIDO</span><h3>Continua o teu trabalho</h3></div></section>
-    <section className="quick-grid"><QuickAction icon={MessageCircle} title="Conversas" text="Acompanha e responde aos teus contactos." path="/conversas" /><QuickAction icon={Send} title="Campanhas" text="Prepara os próximos disparos segmentados." path="/campanhas" /><QuickAction icon={CircleDollarSign} title="Plano e pagamentos" text="Consulta benefícios e ativa o teu plano." path="/plano" /></section>
-  </div>;
+  return <div className="content-stack"><section className="hero-panel"><div><span className="eyebrow">PAINEL PRINCIPAL</span><h1>{isAdmin ? "Controlo central da plataforma" : "A tua automação num só lugar"}</h1><p>{isAdmin ? "Acompanha clientes, integrações e operação sem sair deste centro." : "Gere contactos, campanhas e o teu assistente WhatsApp com uma experiência simples."}</p></div><div className="hero-orb"><Bot size={54} /></div></section><section className="stat-grid">{isAdmin ? <><StatCard label="Clientes" value={loading ? "—" : String(overview.tenants || 0)} caption="Tenants registados" icon={Users} /><StatCard label="Utilizadores" value={loading ? "—" : String(overview.users || 0)} caption="Contas da plataforma" icon={Activity} tone="blue" /><StatCard label="Ativos" value={loading ? "—" : String(overview.active_tenants || 0)} caption="Clientes em operação" icon={CheckCircle2} tone="violet" /></> : <><StatCard label="Plano atual" value={plan?.plan_name || "Demonstração"} caption={plan?.status || "A carregar estado"} icon={CircleDollarSign} /><StatCard label="Contactos" value={loading ? "—" : String(overview.contacts || 0)} caption="Contactos com opt-in" icon={Users} tone="blue" /><StatCard label="WhatsApp" value={status === "open" ? "Ligado" : "Não ligado"} caption={integration?.instance_name || "Liga o teu número"} icon={Wifi} tone={status === "open" ? "blue" : "amber"} /></>}</section><section className="section-heading"><div><span className="eyebrow">ACESSO RÁPIDO</span><h3>Continua o teu trabalho</h3></div></section><section className="quick-grid"><QuickAction icon={MessageCircle} title="Conversas" text="Acompanha e responde aos teus contactos." path="/conversas" /><QuickAction icon={QrCode} title="Ligar WhatsApp" text="Gera o QR Code da tua instância." path="/whatsapp" /><QuickAction icon={CircleDollarSign} title="Plano e pagamentos" text="Consulta benefícios e valida M-Pesa." path="/plano" /></section></div>;
 }
-
-function QuickAction({ icon: Icon, title, text, path }: { icon: typeof MessageCircle; title: string; text: string; path: string }) {
-  const navigate = useNavigate();
-  return <button className="quick-card" onClick={() => navigate(path)}><span className="quick-icon"><Icon size={22} /></span><span><strong>{title}</strong><small>{text}</small></span><ChevronRight size={17} /></button>;
-}
-
-function PlatformRouter({ user, onLogout }: { user: PlatformUser; onLogout: () => void }) {
-  return <AppShell user={user} onLogout={onLogout}><Routes><Route index element={<OverviewPage user={user} />} /><Route path="conversas" element={<ConversationsPage />} /><Route path="campanhas" element={<CampaignsPage />} /><Route path="plano" element={<BillingPage />} /><Route path="admin" element={(user.role === "owner" || user.role === "admin") ? <AdminPage /> : <Navigate to="/" replace />} /><Route path="*" element={<Navigate to="/" replace />} /></Routes></AppShell>;
-}
+function QuickAction({ icon: Icon, title, text, path }: { icon: typeof MessageCircle; title: string; text: string; path: string }) { const navigate = useNavigate(); return <button className="quick-card" onClick={() => navigate(path)}><span className="quick-icon"><Icon size={22} /></span><span><strong>{title}</strong><small>{text}</small></span><ChevronRight size={17} /></button>; }
+function PlatformRouter({ user, onLogout }: { user: PlatformUser; onLogout: () => void }) { return <AppShell user={user} onLogout={onLogout}><Routes><Route index element={<OverviewPage user={user} />} /><Route path="conversas" element={<ConversationsPage />} /><Route path="campanhas" element={<CampaignsPage />} /><Route path="whatsapp" element={<WhatsAppPage />} /><Route path="equipa" element={<TeamPage />} /><Route path="assistente" element={<AssistantPage />} />
+<Route path="plano" element={<BillingPage />} /><Route path="admin" element={(user.role === "owner" || user.role === "admin") ? <AdminPage /> : <Navigate to="/" replace />} /><Route path="*" element={<Navigate to="/" replace />} /></Routes></AppShell>; }
 
 export default function App() {
-  const appBasePath = import.meta.env.BASE_URL.replace(/\/$/, "");
-  const [auth, setAuth] = useState<AuthState>(defaultAuth);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    api.auth.me().then((result) => setAuth(result)).catch(() => setAuth(defaultAuth)).finally(() => setLoading(false));
-  }, []);
-
-  const authValue = useMemo<AuthContextValue>(() => ({
-    auth,
-    refresh: async () => setAuth(await api.auth.me()),
-    logout: async () => { await api.auth.logout(); setAuth(defaultAuth); },
-  }), [auth]);
-
+  const appBasePath = window.location.pathname.startsWith("/plataforma-react") ? "/plataforma-react" : "/plataforma"; const [auth, setAuth] = useState<AuthState>(defaultAuth); const [loading, setLoading] = useState(true);
+  useEffect(() => { api.auth.me().then((result) => setAuth(result)).catch(() => setAuth(defaultAuth)).finally(() => setLoading(false)); }, []);
+  const authValue = useMemo(() => ({ auth, refresh: async () => setAuth(await api.auth.me()), logout: async () => { await api.auth.logout(); setAuth(defaultAuth); } }), [auth]);
   if (loading) return <main className="loading-shell"><div className="spinner" /><span>A carregar a plataforma...</span></main>;
-
   return <BrowserRouter basename={appBasePath}><Routes><Route path="/login" element={auth.authenticated ? <Navigate to="/" replace /> : <LoginPage onLogin={(user) => setAuth({ authenticated: true, user })} />} /><Route path="/*" element={<ProtectedRoute auth={auth}><PlatformRouter user={authValue.auth.user!} onLogout={() => void authValue.logout()} /></ProtectedRoute>} /></Routes></BrowserRouter>;
 }

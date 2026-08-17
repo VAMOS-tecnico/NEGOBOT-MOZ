@@ -1,0 +1,7 @@
+Fonte oficial consultada: https://evolutionapi-evolution-api-90.mintlify.app/concepts/webhooks
+Fonte oficial consultada: https://evolutionapi-evolution-api-90.mintlify.app/events/webhooks
+
+Conclusões relevantes para a Evolution API v2:
+O endpoint de configuração por instância é POST /webhook/set/{instance} e exige um corpo com a propriedade de topo webhook. Dentro dela ficam enabled, url, byEvents, base64 e events. O evento de mensagem é MESSAGES_UPSERT em algumas páginas/documentações e messages.upsert no payload recebido em outras versões; o backend local aceita ambos após normalização para minúsculas.
+A configuração validada no VPS foi aceita com HTTP 201 usando {"webhook":{"url":"https://negobot-api.duckdns.org/webhook","enabled":true,"byEvents":false,"base64":false,"webhookByEvents":false,"events":["MESSAGES_UPSERT","CHATS_UPSERT","CONNECTION_UPDATE"]}}.
+A documentação indica que WEBHOOK_GLOBAL_ENABLED=true e WEBHOOK_GLOBAL_URL são opções globais, mas o VPS tinha o global a apontar para o n8n; a instância assistente_negobot foi configurada separadamente para o backend NEGOBOT.
