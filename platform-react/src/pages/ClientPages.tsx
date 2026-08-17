@@ -14,16 +14,18 @@ export function ConversationsPage() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
+  const [search, setSearch] = useState("");
+  const [tag, setTag] = useState("");
   const [busy, setBusy] = useState(true);
   const [saving, setSaving] = useState(false);
   const [importing, setImporting] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
-  async function load() {
+  async function load(filters: { search?: string; tag?: string } = {}) {
     setBusy(true); setError("");
     try {
-      const [contactResult, conversationResult] = await Promise.all([api.client.contacts(), api.client.conversations()]);
+      const [contactResult, conversationResult] = await Promise.all([api.client.contacts({ search: filters.search ?? search, tag: filters.tag ?? tag }), api.client.conversations()]);
       setContacts(contactResult.contacts || []); setConversations(conversationResult.conversations || []);
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Não foi possível carregar as conversas."); }
     finally { setBusy(false); }
@@ -51,7 +53,7 @@ export function ConversationsPage() {
 
   return <div className="content-stack"><ModuleHeader eyebrow="CONTACTOS E CONVERSAS" title="Central de conversas" description="Mantém os teus contactos organizados e acompanha as interações do assistente." action={<button className="secondary-button compact" onClick={() => void load()}><RefreshCw size={16} /> Atualizar</button>} />
     {error && <ErrorBox message={error} />}{notice && <SuccessBox message={notice} />}
-    <div className="module-grid two"><section className="data-panel"><div className="panel-heading"><div><span className="eyebrow">CONTACTOS</span><h3>{contacts.length} contactos</h3></div><Users size={19} /></div>{busy ? <LoadingBox /> : contacts.length ? <div className="data-list">{contacts.slice(0, 100).map((contact) => <div className="data-row" key={contact.id}><div className="avatar">{contact.name.slice(0, 1).toUpperCase()}</div><div className="row-main"><strong>{contact.name}</strong><small>{contact.phone}</small></div><span className="tag">{contact.opt_in === false ? "Sem opt-in" : "Opt-in"}</span></div>)}</div> : <div className="empty-state">Ainda não existem contactos.</div>}</section>
+    <div className="module-grid two"><section className="data-panel"><div className="panel-heading"><div><span className="eyebrow">CONTACTOS</span><h3>{contacts.length} contactos</h3></div><Users size={19} /></div><form className="filter-row" onSubmit={(event) => { event.preventDefault(); void load({ search, tag }); }}><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Pesquisar nome ou telefone" /><input value={tag} onChange={(event) => setTag(event.target.value)} placeholder="Etiqueta" /><button className="secondary-button compact" type="submit">Filtrar</button></form>{busy ? <LoadingBox /> : contacts.length ? <div className="data-list">{contacts.slice(0, 100).map((contact) => <div className="data-row" key={contact.id}><div className="avatar">{contact.name.slice(0, 1).toUpperCase()}</div><div className="row-main"><strong>{contact.name}</strong><small>{contact.phone}{contact.tags?.length ? ` · ${contact.tags.join(", ")}` : ""}</small></div><span className="tag">{contact.opt_in === false ? "Sem opt-in" : "Opt-in"}</span></div>)}</div> : <div className="empty-state">Ainda não existem contactos.</div>}</section>
       <section className="data-panel" id="new-contact"><div className="panel-heading"><div><span className="eyebrow">ADICIONAR</span><h3>Novo contacto</h3></div><Plus size={19} /></div><form className="stack-form compact-form" onSubmit={addContact}><label>Nome<input value={name} onChange={(event) => setName(event.target.value)} placeholder="Nome do contacto" required /></label><label>WhatsApp<input value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="2588..." required /></label><button className="primary-button" disabled={saving} type="submit">{saving ? "A guardar..." : "Guardar contacto"}</button></form><label className="upload-field"><span><FileUp size={16} /> Importar CSV ou XLSX</span><input type="file" accept=".csv,.xlsx" disabled={importing} onChange={(event) => { void importFile(event.target.files?.[0]); event.currentTarget.value = ""; }} />{importing && <small>A importar contactos...</small>}</label></section></div>
     <section className="data-panel"><div className="panel-heading"><div><span className="eyebrow">ATIVIDADE</span><h3>Conversas recentes</h3></div><MessageCircle size={19} /></div>{conversations.length ? <div className="data-list">{conversations.map((conversation) => <div className="data-row" key={conversation.id || conversation.phone}><div className="quick-icon"><MessageCircle size={17} /></div><div className="row-main"><strong>{conversation.name || conversation.phone || "Contacto"}</strong><small>{conversation.last_message || "Sem mensagem recente"}</small></div><span className="tag">{conversation.status_atendimento || conversation.status || "bot"}</span><div className="row-actions"><button title="Entregar ao bot" onClick={() => void handoff(conversation, "bot")}><Bot size={14} /></button><button title="Entregar a humano" onClick={() => void handoff(conversation, "humano")}><Users size={14} /></button></div></div>)}</div> : <div className="empty-state">As conversas recebidas pelo webhook aparecerão aqui.</div>}</section>
   </div>;
