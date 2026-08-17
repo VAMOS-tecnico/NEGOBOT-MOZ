@@ -100,11 +100,21 @@ export type Campaign = {
   id: string;
   name: string;
   message?: string;
+  template_id?: string | null;
+  segment_tags?: string[];
   status?: string;
   total?: number;
   sent?: number;
   failed?: number;
   created_at?: string;
+};
+
+export type CampaignTemplate = {
+  id: string;
+  name: string;
+  body: string;
+  variables?: string[];
+  status?: "active" | "archived";
 };
 
 export type AssistantSettings = {
@@ -204,7 +214,10 @@ export const api = {
     archiveContact: (id: string) => request<{ archived: true }>(`/api/platform/client/contacts/${encodeURIComponent(id)}`, { method: "DELETE" }),
     importContacts: (file: File) => { const form = new FormData(); form.append("file", file); return request<{ imported: number; skipped: number; total_rows: number }>("/api/platform/client/contacts/import", { method: "POST", body: form }); },
     campaigns: () => request<{ campaigns: Campaign[] }>("/api/platform/client/campaigns"),
-    createCampaign: (name: string, message: string) => request<{ created: true; campaign: Campaign }>("/api/platform/client/campaigns", { method: "POST", body: JSON.stringify({ name, message }) }),
+    templates: () => request<{ templates: CampaignTemplate[] }>("/api/platform/client/templates"),
+    createTemplate: (name: string, body: string) => request<{ created: true; template: CampaignTemplate }>("/api/platform/client/templates", { method: "POST", body: JSON.stringify({ name, body }) }),
+    updateTemplate: (id: string, fields: { name?: string; body?: string; status?: "active" | "archived" }) => request<{ updated: true }>(`/api/platform/client/templates/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(fields) }),
+    createCampaign: (name: string, message: string, options: { template_id?: string; tags?: string[] } = {}) => request<{ created: true; campaign: Campaign }>("/api/platform/client/campaigns", { method: "POST", body: JSON.stringify({ name, message, ...options }) }),
     campaignAction: (id: string, action: "pause" | "resume" | "cancel") => request<{ updated: true; status: string }>(`/api/platform/client/campaigns/${id}/actions/${action}`, { method: "POST" }),
     assistant: () => request<AssistantSettings>("/api/platform/client/assistant"),
     updateAssistant: (settings: Partial<AssistantSettings>) => request<{ updated: true }>("/api/platform/client/assistant", { method: "PATCH", body: JSON.stringify(settings) }),

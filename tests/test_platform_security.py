@@ -60,8 +60,10 @@ class FakeCollection:
             rows = [row for row in rows if row.data.get(field) == expected]
         return rows
 
-    def document(self, document_id):
+    def document(self, document_id=None):
         collection = self.db.collections.setdefault(self.name, {})
+        if document_id is None:
+            document_id = f"generated-{len(collection) + 1}"
         if document_id not in collection:
             collection[document_id] = FakeSnapshot(document_id, {}, exists=False)
         return collection[document_id]
@@ -157,6 +159,20 @@ class PlatformSecurityTests(unittest.TestCase):
         cross_tenant = self.client.patch("/api/platform/client/contacts/contact-b", json={"opt_in": False})
         self.assertEqual(cross_tenant.status_code, 404)
         self.assertTrue(self.db.collections["contacts"]["contact-b"].data["opt_in"])
+
+    def test_campaign_templates_are_tenant_scoped(self):
+        set_identity(self.client, {"id": "user-a", "name": "A", "role": "client", "tenant_id": "tenant-a", "tenant_role": "owner"})
+        created = self.client.post("/api/platform/client/templates", json={"name": "Boas-vindas", "body": "Olá {nome}, bem-vindo."})
+        self.assertEqual(created.status_code, 201)
+        template_id = created.get_json()["template"]["id"]
+        listed = self.client.get("/api/platform/client/templates")
+        self.assertEqual(listed.status_code, 200)
+        self.assertEqual([item["id"] for item in listed.get_json()["templates"]], [template_id])
+        cross_tenant = self.client.patch(f"/api/platform/client/templates/{template_id}", json={"status": "archived"})
+        self.assertEqual(cross_tenant.status_code, 200)
+        self.db.collections["campaign_templates"][template_id].data["tenant_id"] = "tenant-b"
+        cross_tenant_update = self.client.patch(f"/api/platform/client/templates/{template_id}", json={"status": "active"})
+        self.assertEqual(cross_tenant_update.status_code, 404)
 
     def test_login_rate_limit_applies_before_credential_lookup(self):
         for _ in range(8):
