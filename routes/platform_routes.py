@@ -9,7 +9,7 @@ import time
 from datetime import datetime, timezone
 from functools import wraps
 from typing import Any, Callable
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 import requests
 from flask import Blueprint, jsonify, request, session
@@ -19,6 +19,41 @@ import extensions
 
 platform_bp = Blueprint("platform", __name__, url_prefix="/api/platform")
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+_LOGIN_ATTEMPTS: dict[str, list[float]] = {}
+_LOGIN_WINDOW_SECONDS = 900
+_LOGIN_MAX_ATTEMPTS = 8
+
+
+def _request_key(identifier: str) -> str:
+    forwarded = request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+    address = forwarded or request.remote_addr or "unknown"
+    return f"{address}:{identifier[:160]}"
+
+
+def _login_allowed(identifier: str) -> bool:
+    now = time.time()
+    key = _request_key(identifier)
+    recent = [stamp for stamp in _LOGIN_ATTEMPTS.get(key, []) if now - stamp < _LOGIN_WINDOW_SECONDS]
+    if len(recent) >= _LOGIN_MAX_ATTEMPTS:
+        _LOGIN_ATTEMPTS[key] = recent
+        return False
+    recent.append(now)
+    _LOGIN_ATTEMPTS[key] = recent
+    return True
+
+
+@platform_bp.before_request
+def _same_origin_mutation_guard():
+    if request.method not in {"POST", "PUT", "PATCH", "DELETE"}:
+        return None
+    if request.path in {"/api/platform/auth/login", "/api/platform/auth/logout"}:
+        return None
+    origin = request.headers.get("Origin")
+    if origin:
+        origin_host = urlparse(origin).netloc
+        if origin_host and origin_host != request.host:
+            return jsonify({"error": "Origem da operação não autorizada."}), 403
+    return None
 
 
 def _now():
@@ -56,6 +91,24 @@ def _require_roles(*roles: str) -> Callable:
     return decorator
 
 
+def _require_tenant_roles(*tenant_roles: str) -> Callable:
+    def decorator(handler: Callable) -> Callable:
+        @wraps(handler)
+        def wrapped(*args, **kwargs):
+            identity = _identity()
+            if not identity:
+                return jsonify({"error": "autenticação necessária"}), 401
+            if identity.get("role") not in {"client", "operator"}:
+                return jsonify({"error": "A operação exige uma conta de tenant."}), 403
+            if identity.get("tenant_role") not in tenant_roles:
+                return jsonify({"error": "A tua função não permite esta operação."}), 403
+            return handler(*args, **kwargs)
+
+        return wrapped
+
+    return decorator
+
+
 def _tenant_for_identity(identity: dict[str, Any]) -> str | None:
     tenant_id = identity.get("tenant_id")
     return str(tenant_id) if tenant_id else None
@@ -68,6 +121,8 @@ def login():
     password = str(payload.get("password") or "")
     if not identifier or not password:
         return jsonify({"error": "Introduza o email e a palavra-passe."}), 400
+    if not _login_allowed(identifier):
+        return jsonify({"error": "Demasiadas tentativas. Aguarda alguns minutos antes de tentar novamente."}), 429
 
     admin_token = os.getenv("ADMIN_TOKEN", "")
     if identifier in {"admin", "owner", "administrador"} and admin_token and hmac.compare_digest(password, admin_token):
@@ -94,6 +149,7 @@ def login():
         "email": identifier,
         "role": user.get("role", "client"),
         "tenant_id": user.get("tenant_id"),
+        "tenant_role": user.get("tenant_role"),
     }
     session.clear()
     session["platform_identity"] = identity
@@ -169,12 +225,96 @@ def create_tenant():
         "email": email,
         "role": "client",
         "tenant_id": tenant_id,
+        "tenant_role": "owner",
         "status": "active",
         "password_hash": generate_password_hash(password),
         "created_at": now,
         "last_login_at": None,
     })
     return jsonify({"created": True, "tenant": {"id": tenant_id, "name": name, "plan": "demonstracao"}}), 201
+
+
+@platform_bp.get("/client/team")
+@_require_roles("client", "operator")
+def list_tenant_team():
+    tenant_id = _tenant_for_identity(_identity())
+    rows = []
+    for document in _db().collection("platform_users").where("tenant_id", "==", tenant_id).limit(100).stream():
+        item = document.to_dict() or {}
+        rows.append({
+            "id": document.id,
+            "name": item.get("name", ""),
+            "email": item.get("email", ""),
+            "role": item.get("role", "client"),
+            "tenant_role": item.get("tenant_role", "viewer"),
+            "status": item.get("status", "active"),
+            "created_at": item.get("created_at"),
+            "last_login_at": item.get("last_login_at"),
+        })
+    rows.sort(key=lambda item: item.get("name", "").lower())
+    return jsonify({"users": rows, "current_role": (_identity() or {}).get("tenant_role")})
+
+
+@platform_bp.post("/client/team")
+@_require_tenant_roles("owner")
+def create_tenant_operator():
+    payload = request.get_json(silent=True) or {}
+    name = str(payload.get("name") or "").strip()
+    email = str(payload.get("email") or "").strip().lower()
+    password = str(payload.get("password") or "")
+    if len(name) < 2 or not _EMAIL_RE.fullmatch(email) or len(password) < 8:
+        return jsonify({"error": "Nome, email válido e palavra-passe com pelo menos 8 caracteres são obrigatórios."}), 400
+    db = _db()
+    user_ref = db.collection("platform_users").document(_doc_id(email))
+    if user_ref.get().exists:
+        return jsonify({"error": "Já existe uma conta com este email."}), 409
+    tenant_id = _tenant_for_identity(_identity())
+    now = _now()
+    user_ref.set({
+        "name": name,
+        "email": email,
+        "role": "operator",
+        "tenant_role": "operator",
+        "tenant_id": tenant_id,
+        "status": "active",
+        "password_hash": generate_password_hash(password),
+        "created_at": now,
+        "last_login_at": None,
+    })
+    _audit("tenant_operator_created", _identity(), tenant_id, {"user_id": user_ref.id})
+    return jsonify({"created": True, "user": {"id": user_ref.id, "name": name, "email": email, "role": "operator", "tenant_role": "operator", "status": "active"}}), 201
+
+
+@platform_bp.patch("/client/team/<user_id>")
+@_require_tenant_roles("owner")
+def update_tenant_operator(user_id: str):
+    tenant_id = _tenant_for_identity(_identity())
+    reference = _db().collection("platform_users").document(user_id)
+    document = reference.get()
+    data = document.to_dict() if document.exists else None
+    if not data or data.get("tenant_id") != tenant_id:
+        return jsonify({"error": "Utilizador não encontrado neste tenant."}), 404
+    if data.get("tenant_role") == "owner":
+        return jsonify({"error": "O proprietário principal não pode ser alterado por esta operação."}), 400
+    payload = request.get_json(silent=True) or {}
+    allowed = {}
+    if "status" in payload:
+        status = str(payload.get("status") or "").lower()
+        if status not in {"active", "suspended"}:
+            return jsonify({"error": "Estado inválido."}), 400
+        allowed["status"] = status
+    if "tenant_role" in payload:
+        role = str(payload.get("tenant_role") or "").lower()
+        if role not in {"operator", "viewer"}:
+            return jsonify({"error": "Função inválida."}), 400
+        allowed["tenant_role"] = role
+        allowed["role"] = "operator" if role == "operator" else "client"
+    if not allowed:
+        return jsonify({"error": "Nenhuma alteração válida foi enviada."}), 400
+    allowed["updated_at"] = _now()
+    reference.set(allowed, merge=True)
+    _audit("tenant_operator_updated", _identity(), tenant_id, {"user_id": user_id, "fields": sorted(allowed)})
+    return jsonify({"updated": True, "user_id": user_id, "fields": sorted(allowed)})
 
 
 @platform_bp.get("/client/overview")
