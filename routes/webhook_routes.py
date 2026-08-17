@@ -1,11 +1,14 @@
 import threading
 import logging
+import re
 import time
 from datetime import datetime, timezone
 from flask import Blueprint, request
 from config import Config
+import extensions
 from services.evolution_service import notificar_erro_admin, send_whatsapp, transcrever_audio_mensagem
 from services.incoming_queue import enqueue_incoming_event
+from services.trial_service import ACTIVE_STATUS, PENDING_STATUS, active_fields, is_paid_plan
 from workflows.central_flow import process_central_flow
 from workflows.client_flow import process_client_flow
 
@@ -72,6 +75,90 @@ def universal_webhook():
         threading.Thread(target=processar_webhook_background, args=(data,), daemon=True).start()
     return 'OK', 200
 
+def _connection_instance_name(data: dict) -> str:
+    payload = data.get("data", {}) if isinstance(data.get("data"), dict) else {}
+    return str(data.get("instance") or payload.get("instance") or data.get("instanceId") or payload.get("instanceId") or "").strip()
+
+
+def _connection_state(data: dict) -> str:
+    payload = data.get("data", {}) if isinstance(data.get("data"), dict) else {}
+    nested = payload.get("state") if isinstance(payload.get("state"), dict) else {}
+    return str(payload.get("state") or payload.get("status") or nested.get("state") or data.get("state") or "").strip().lower()
+
+
+def _mark_trial_connection_open(instance_name: str, data: dict) -> None:
+    """Inicia a demonstração somente após a Evolution confirmar a ligação."""
+    if not instance_name or instance_name == str(Config.EVOLUTION_INSTANCE_NAME).strip():
+        return
+    if extensions.db is None:
+        extensions.init_extensions()
+    if extensions.db is None:
+        raise RuntimeError("Firestore indisponível para CONNECTION_UPDATE")
+
+    digits = re.sub(r"\D", "", instance_name)
+    canonical_ref = extensions.db.collection("clientes_bot").document(instance_name)
+    canonical_doc = canonical_ref.get()
+    canonical_data = canonical_doc.to_dict() if canonical_doc.exists else {}
+    legacy_ref = extensions.db.collection("clientes_bot").document(f"cliente_{digits}") if digits else None
+    legacy_doc = legacy_ref.get() if legacy_ref is not None else None
+    legacy_data = legacy_doc.to_dict() if legacy_doc is not None and legacy_doc.exists else {}
+    current = {**legacy_data, **canonical_data}
+
+    tenants = extensions.db.collection("tenants")
+    tenant_refs = []
+    try:
+        tenant_refs.extend(list(tenants.where("instance_name", "==", instance_name).limit(10).stream()))
+    except Exception:
+        logger.debug("Não foi possível procurar tenant por instance_name", exc_info=True)
+    if not tenant_refs and digits:
+        try:
+            tenant_refs.extend(list(tenants.where("telefone_proprietario", "==", digits).limit(10).stream()))
+        except Exception:
+            logger.debug("Não foi possível procurar tenant por telefone", exc_info=True)
+    if not current and not tenant_refs:
+        logger.info("CONNECTION_UPDATE ignorado para instância desconhecida=%s", instance_name)
+        return
+
+    if is_paid_plan(current):
+        fields = {"evolution_state": "open", "instance_name": instance_name}
+    elif current.get("trial_connected_at") or current.get("trial_connection_confirmed") is True:
+        fields = {"evolution_state": "open", "trial_status": ACTIVE_STATUS}
+    else:
+        fields = active_fields(digits or instance_name)
+
+    canonical_ref.set(fields, merge=True)
+    if legacy_ref is not None and legacy_ref.path != canonical_ref.path:
+        legacy_ref.set(fields, merge=True)
+    if digits:
+        extensions.db.collection("clientes").document(digits).set({
+            "status": "trial" if not is_paid_plan(current) else "active",
+            "trial_status": fields.get("trial_status", current.get("trial_status")),
+            **{key: fields[key] for key in ("trial_connected_at", "trial_expires_at", "data_ativacao", "data_expiracao") if key in fields},
+        }, merge=True)
+
+    tenant_fields = {
+        "instance_name": instance_name,
+        "telefone_proprietario": digits or instance_name,
+        "evolution_state": "open",
+        **{key: fields[key] for key in ("trial_status", "trial_connected_at", "trial_expires_at", "data_ativacao", "data_expiracao", "trial_connection_confirmed") if key in fields},
+    }
+    for tenant_ref in tenant_refs:
+        tenant_ref.set(tenant_fields, merge=True)
+    logger.info("Ligação WhatsApp confirmada instance=%s trial_status=%s", instance_name, fields.get("trial_status", current.get("trial_status")))
+
+
+def _handle_connection_update(data: dict) -> None:
+    instance_name = _connection_instance_name(data)
+    state = _connection_state(data)
+    if not instance_name:
+        logger.warning("CONNECTION_UPDATE sem nome de instância")
+        return
+    if state == "open":
+        _mark_trial_connection_open(instance_name, data)
+    elif state in {"close", "connecting", "qr", "refused"}:
+        logger.info("Estado WhatsApp instance=%s state=%s; demonstração permanece pendente/activa", instance_name, state)
+
+
 def processar_webhook_background(data):
     try:
         queued_at = data.get("_negobot_queue_enqueued_at") if isinstance(data, dict) else None
@@ -80,6 +167,10 @@ def processar_webhook_background(data):
         limpar_historico_processados()
 
         event_name = data.get('event', '').lower()
+
+        if event_name in {"connection.update", "connection_update"}:
+            _handle_connection_update(data)
+            return
 
         # 🚫 1. Filtrar apenas mensagens recebidas/enviadas reais
         if event_name not in ["messages.upsert", "messages_upsert"]:

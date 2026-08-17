@@ -15,6 +15,7 @@ from services.evolution_service import (
 )
 from services.payment_service import validar_e_ativar_pagamento_mpesa
 from services.image_generator_service import gerar_imagem_publicitaria
+from services.trial_service import PENDING_STATUS, active_fields, is_expired, pending_fields, trial_expiry
 
 logger = logging.getLogger(__name__)
 
@@ -93,46 +94,41 @@ def processar_geracao_imagem(clean_phone, message_text, central_instance):
 
 
 def processar_teste_gratis(clean_phone, agora, central_instance):
-    """Ativa uma única demonstração de 2 dias e gera QR Code."""
+    """Prepara o QR; os dois dias só começam após a primeira ligação `open`."""
     tenant_id = f"cliente_{clean_phone}"
     trial_ref = extensions.db.collection("clientes_bot").document(tenant_id)
     trial_doc = trial_ref.get()
     trial_data = trial_doc.to_dict() if trial_doc.exists else {}
-    current_status = str(trial_data.get("status_plano", trial_data.get("status", ""))).lower()
-    expiry = trial_data.get("data_expiracao")
-    if isinstance(expiry, str):
-        try:
-            expiry = datetime.fromisoformat(expiry.replace("Z", "+00:00"))
-        except ValueError:
-            expiry = None
-    if expiry is not None and getattr(expiry, "tzinfo", None) is None:
-        expiry = expiry.replace(tzinfo=timezone.utc)
-    if expiry and agora >= expiry:
-        send_whatsapp(clean_phone, "⏳ *A sua demonstração de 2 dias terminou.*\n\nPara continuar e gerar um novo QR Code, escolha um plano e faça o pagamento via M-Pesa para **855000929** (Abel Francisco). Depois envie o SMS ou ID da transferência.", instance_name=central_instance)
+    expiry = trial_expiry(trial_data)
+
+    if is_expired(trial_data, agora):
+        send_whatsapp(clean_phone, "⏳ *A sua demonstração de 2 dias terminou.*\n\nPara continuar a usar o Negobot Moz, escolha um plano e faça o pagamento via M-Pesa para **855000929** (Abel Francisco). Depois envie o SMS ou ID da transferência.", instance_name=central_instance)
         return
-    if current_status in {"trial", "demonstracao", "ativo"} and expiry and agora < expiry:
-        send_whatsapp(clean_phone, "✅ A sua demonstração/plano já está ativo. Se precisar de um novo QR Code, envie #qrcode.", instance_name=central_instance)
+    if expiry and agora < expiry:
+        send_whatsapp(clean_phone, "✅ A sua demonstração/plano já está activo. Pode continuar a conversar com o Negobot Moz; se precisar de reconectar, envie #qrcode.", instance_name=central_instance)
+        return
+    if trial_data.get("trial_status") == PENDING_STATUS and (trial_data.get("trial_qr_sent_at") or trial_data.get("instance_name")):
+        send_whatsapp(clean_phone, "ℹ️ O seu teste continua pendente de ligação. Os 2 dias ainda não começaram. Digitalize o QR Code já enviado ou envie #qrcode se precisar de um novo código.", instance_name=central_instance)
         return
 
-    send_whatsapp(clean_phone, "⏳ *A preparar o seu teste grátis de 2 dias do Negobot Moz...* 🚀", instance_name=central_instance)
-    
-    cliente_doc_ref = extensions.db.collection('clientes').document(clean_phone)
-    cliente_doc_ref.set({
+    # Pendente: não há data de expiração até a Evolution confirmar `open`.
+    pending = pending_fields(clean_phone, agora)
+    trial_ref.set(pending, merge=True)
+    extensions.db.collection("clientes").document(clean_phone).set({
         "phone_number": clean_phone,
-        "trial_start": agora,
-        "status": "trial"
+        "status": "pending_connection",
+        "trial_status": PENDING_STATUS,
     }, merge=True)
+    send_whatsapp(clean_phone, "⏳ *A preparar o seu teste grátis do Negobot Moz.*\n\nO teste de 2 dias ainda não começou. Começará apenas quando o seu WhatsApp for ligado pelo QR Code.", instance_name=central_instance)
 
-    extensions.db.collection('clientes_bot').document(tenant_id).set({
-        "status_plano": "demonstracao", 
-        "data_ativacao": agora, 
-        "data_expiracao": agora + timedelta(days=2),
-        "telefone_proprietario": clean_phone
-    }, merge=True)
-
-    criar_e_configurar_instancia_automatica(clean_phone)
+    if not criar_e_configurar_instancia_automatica(clean_phone):
+        send_whatsapp(clean_phone, "⚠️ Não foi possível preparar o QR Code neste momento. Pode continuar a fazer perguntas sobre o Negobot Moz e tentar novamente mais tarde.", instance_name=central_instance)
+        return
     time.sleep(2)
-    gerar_e_enviar_qrcode_central(clean_phone)
+    if not gerar_e_enviar_qrcode_central(clean_phone):
+        send_whatsapp(clean_phone, "⚠️ O QR Code ainda não ficou disponível. O teste continua pendente e os 2 dias não começaram. Tente novamente mais tarde.", instance_name=central_instance)
+        return
+    trial_ref.set({"trial_qr_sent_at": agora, "trial_status": PENDING_STATUS}, merge=True)
 
 
 def processar_suporte_humano(clean_phone, chat_ref, agora, central_instance):

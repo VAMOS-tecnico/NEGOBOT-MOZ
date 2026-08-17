@@ -89,6 +89,17 @@ class TestWebhookIntegration(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         central_flow.assert_not_called()
 
+    @patch("routes.webhook_routes._handle_connection_update")
+    def test_connection_update_eh_processado_fora_do_fluxo_de_mensagens(self, connection_handler):
+        payload = {
+            "event": "CONNECTION_UPDATE",
+            "instance": "258840000000",
+            "data": {"state": "open"},
+        }
+        response = self.post(payload)
+        self.assertEqual(response.status_code, 200)
+        connection_handler.assert_called_once_with(payload)
+
     @patch("routes.webhook_routes.process_central_flow")
     @patch("routes.webhook_routes.transcrever_audio_mensagem", return_value="Quais são os preços?")
     def test_audio_transcrito_e_encaminhado(self, transcribe, central_flow):

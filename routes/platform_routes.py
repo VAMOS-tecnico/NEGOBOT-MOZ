@@ -16,6 +16,7 @@ from flask import Blueprint, jsonify, request, session
 from werkzeug.security import check_password_hash, generate_password_hash
 
 import extensions
+from services.trial_service import active_fields, is_expired as trial_is_expired, is_paid_plan, pending_fields
 
 platform_bp = Blueprint("platform", __name__, url_prefix="/api/platform")
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -61,27 +62,8 @@ def _now():
 
 
 def _plan_expired(data: dict[str, Any], now: datetime | None = None) -> bool:
-    data = data if isinstance(data, dict) else {}
-    expiry = data.get("data_expiracao")
-    if isinstance(expiry, str) and expiry.strip():
-        try:
-            expiry = datetime.fromisoformat(expiry.replace("Z", "+00:00"))
-        except ValueError:
-            expiry = None
-    if not isinstance(expiry, datetime) and str(data.get("status_plano", data.get("status", ""))).lower() in {"demonstracao", "trial"}:
-        anchor = data.get("data_ativacao") or data.get("created_at")
-        if isinstance(anchor, str) and anchor.strip():
-            try:
-                anchor = datetime.fromisoformat(anchor.replace("Z", "+00:00"))
-            except ValueError:
-                anchor = None
-        if isinstance(anchor, datetime):
-            expiry = anchor + timedelta(days=2)
-    if not isinstance(expiry, datetime):
-        return False
-    if expiry.tzinfo is None:
-        expiry = expiry.replace(tzinfo=timezone.utc)
-    return (now or _now()) >= expiry
+    """Expira trial apenas após ligação WhatsApp confirmada; preserva planos pagos."""
+    return trial_is_expired(data, now)
 
 
 def _db():
@@ -247,8 +229,8 @@ def create_tenant():
         "plano": "demonstracao",
         "nome_plano": "Demonstração",
         "status_plano": "demonstracao",
-        "data_ativacao": now,
-        "data_expiracao": now + timedelta(days=2),
+        "trial_status": "trial_pending_connection",
+        "trial_connection_confirmed": False,
         "created_at": now,
         "limits": {"contacts": 500, "campaigns_per_month": 2, "messages_per_campaign": 100},
     })
@@ -1229,7 +1211,16 @@ def request_evolution_qr():
         instance_name = data["instance_name"]
         state = data["state"]
         base64_qr = data.get("base64")
-        tenant_ref.set({"instance_name": instance_name, "telefone_proprietario": phone, "evolution_state": state, "updated_at": _now()}, merge=True)
+        trial_fields = {}
+        if not is_paid_plan(tenant):
+            trial_fields = active_fields(phone) if state == "open" else pending_fields(phone)
+        tenant_ref.set({
+            **trial_fields,
+            "instance_name": instance_name,
+            "telefone_proprietario": phone,
+            "evolution_state": state,
+            "updated_at": _now(),
+        }, merge=True)
         profile_sync = {key: tenant.get(key) for key in ("empresa_nome", "nicho", "email_corporativo", "redes_sociais") if tenant.get(key) is not None}
         if profile_sync:
             _db().collection("clientes_bot").document(instance_name).set(profile_sync, merge=True)

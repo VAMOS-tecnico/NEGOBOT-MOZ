@@ -20,6 +20,7 @@ from services.flow_handlers import (
     processar_suporte_humano,
     processar_resposta_ia
 )
+from services.trial_service import is_expired as trial_is_expired, is_trial_pending
 
 logger = logging.getLogger(__name__)
 
@@ -79,8 +80,8 @@ def _data_aware(value):
 
 
 def _trial_or_plan_expired(data, agora):
-    expiry = _data_aware((data or {}).get("data_expiracao"))
-    return bool(expiry and agora >= expiry)
+    """Expira apenas trial com ligação real confirmada ou plano pago vencido."""
+    return trial_is_expired(data, agora)
 
 
 def _payment_required_message():
@@ -222,7 +223,10 @@ def process_central_flow(phone_number_or_data=None, message_text: str = "", msg_
             if _trial_or_plan_expired(trial_data, agora):
                 send_whatsapp(clean_phone, _payment_required_message(), instance_name=central_instance)
                 return
-            send_whatsapp(clean_phone, "🔄 *A gerar o seu novo QR Code...*\n\nSe o código anterior expirou, aguarda alguns segundos e lê o novo código no WhatsApp.", instance_name=central_instance)
+            if is_trial_pending(trial_data) and trial_data.get("trial_qr_sent_at"):
+                send_whatsapp(clean_phone, "🔄 O seu teste ainda está pendente de ligação. O contador de 2 dias só começa quando o WhatsApp ficar conectado. Vou preparar um novo QR Code agora.", instance_name=central_instance)
+            else:
+                send_whatsapp(clean_phone, "🔄 *A gerar o seu QR Code...*\n\nSe o código anterior expirou, aguarda alguns segundos e lê o novo código no WhatsApp.", instance_name=central_instance)
             criar_e_configurar_instancia_automatica(clean_phone)
             time.sleep(2)
             gerar_e_enviar_qrcode_central(clean_phone)

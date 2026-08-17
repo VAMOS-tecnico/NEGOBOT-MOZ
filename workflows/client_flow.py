@@ -10,6 +10,7 @@ from config import Config
 import extensions
 from services.groq_service import chamar_groq_rest
 from services.evolution_service import send_whatsapp
+from services.trial_service import PENDING_STATUS, is_expired as trial_is_expired
 from services.media_service import (
     extrair_texto_pdf_url, 
     extrair_texto_excel_url
@@ -198,34 +199,31 @@ def process_client_flow(
 
         if not client_doc.exists:
             dados_cliente = {
-                "status_plano": "demonstracao", 
-                "data_ativacao": agora, 
-                "data_expiracao": agora + timedelta(days=2), 
+                "status_plano": "demonstracao",
+                "status": "pending_connection",
+                "trial_status": PENDING_STATUS,
+                "trial_connection_confirmed": False,
+                "instance_name": nome_instancia_atual,
                 "diretrizes_corporativas": default_rules,
                 "disparos_teste_usados": 0
             }
-            client_doc_ref.set(dados_cliente)
+            client_doc_ref.set(dados_cliente, merge=True)
             base_conhecimento_docs = ""
         else:
             dados_cliente = client_doc.to_dict() or {}
             base_conhecimento_docs = dados_cliente.get("base_conhecimento_documentos", "")
 
         status_plano = dados_cliente.get("status_plano", "demonstracao")
-        data_expiracao = dados_cliente.get("data_expiracao")
 
-        if data_expiracao:
-            if hasattr(data_expiracao, 'tzinfo') and data_expiracao.tzinfo is None:
-                data_expiracao = data_expiracao.replace(tzinfo=timezone.utc)
-            
-            if agora > data_expiracao or status_plano in ["expirado", "suspenso", "cancelado"]:
-                logger.warning(f"⚠️ Instância {nome_instancia_atual} com plano expirado. Atendimento suspenso.")
-                if is_from_me or clean_user_phone == dados_cliente.get("telefone_proprietario"):
-                    send_whatsapp(
-                        clean_user_phone,
-                        "⚠️ *Aviso Negobot Moz:* O seu período de teste/plano expirou. Efetue o pagamento da mensalidade para reativar o assistente virtual.",
-                        instance_name=nome_instancia_atual
-                    )
-                return
+        if trial_is_expired(dados_cliente, agora):
+            logger.warning(f"⚠️ Instância {nome_instancia_atual} com plano expirado. Atendimento suspenso.")
+            if is_from_me or clean_user_phone == dados_cliente.get("telefone_proprietario"):
+                send_whatsapp(
+                    clean_user_phone,
+                    "⚠️ *Aviso Negobot Moz:* O seu período de teste/plano expirou. Efetue o pagamento da mensalidade para reativar o assistente virtual.",
+                    instance_name=nome_instancia_atual
+                )
+            return
 
         # ----------------------------------------------------------------------
         # 🎯 INTERCEPÇÃO DE COMANDOS DE DISPARO (#disparo, #broadcast, #ajuda_disparo)
