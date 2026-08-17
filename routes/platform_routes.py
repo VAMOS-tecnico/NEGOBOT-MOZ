@@ -234,6 +234,11 @@ def create_tenant():
         "empresa_nome": name,
         "status": "active",
         "plan": "demonstracao",
+        "plano": "demonstracao",
+        "nome_plano": "Demonstração",
+        "status_plano": "demonstracao",
+        "data_ativacao": now,
+        "data_expiracao": now + timedelta(days=2),
         "created_at": now,
         "limits": {"contacts": 500, "campaigns_per_month": 2, "messages_per_campaign": 100},
     })
