@@ -95,3 +95,21 @@ O redeploy autorizado do `NEGOBOT Incoming Worker` foi iniciado pelo cartão Boo
 
 
 A validação do cartão `NEGOBOT Incoming Worker` confirmou Firebase inicializado e o log `Consumidor online queues=whatsapp_incoming_queue,omnichannel_incoming_queue` às 21:16:04 UTC. O Worker permanece `running` e continua a processar eventos WhatsApp; a segunda fila omnichannel está activa no mesmo processo persistente.
+
+## Validação dos planos após o commit ebe59bf — 18/08/2026
+
+O repositório contém a nova tabela de planos e o build React local passou, mas a validação pública em `https://negobotmoz.duckdns.org/` ainda mostrou o conteúdo anterior: Básico com 1.500 conversas, Médio ilimitado, Premium sem limites e sem Omnichannel Pro. O cartão Boomploy observado para NEGOBOT Site mostra o endpoint `https://negobot.duckdns.org`, enquanto o domínio público usado pelos clientes é `negobotmoz.duckdns.org`. É necessário confirmar o redeploy efectivo do serviço Site e a origem/cache do domínio antes de declarar esta versão publicada.
+
+A recarga do domínio público com `?v=ebe59bf` continuou a mostrar a versão antiga, pelo que o problema não é apenas cache do navegador. O hostname do cartão Boomploy `negobot.duckdns.org` não resolve no ambiente de validação. O domínio `negobotmoz.duckdns.org` está a servir uma origem/serviço antigo; o redeploy do cartão actualmente associado ao Site não é suficiente para esse domínio.
+
+O editor autenticado do GitHub abriu `VAMOS-tecnico/boomploy-infra/docker-compose.yml` na branch `main`. O ficheiro remoto ainda contém o contexto antigo `./services/negobot-backend/source`; o editor é CodeMirror (`.cm-content`, contenteditable) e permite alteração cirúrgica da linha sem substituir configurações não relacionadas.
+
+A tentativa de pesquisa directa no editor confirmou que a página usa CodeMirror virtualizado. A instância pública EditorView não está exposta no DOM; a edição deve usar a interacção normal do editor ou o comando de substituição interno, sem reescrever o conteúdo parcial virtualizado.
+
+A linha do contexto antigo não aparece na pesquisa textual da página porque o editor GitHub virtualiza o conteúdo. Não serão feitas tentativas cegas de clique; a publicação deve usar um método autenticado que preserve o conteúdo completo do ficheiro.
+
+A API pública do GitHub devolveu `404 Not Found` ao tentar ler o conteúdo privado de `VAMOS-tecnico/boomploy-infra` através da sessão do navegador. O editor web continua autenticado, mas a API não pode ser usada para esta publicação; será necessário usar a interface de edição ou outro caminho autorizado.
+
+Após a confirmação visual do utilizador de que `negobot-site` já usa `https://github.com/VAMOS-tecnico/NEGOBOT-MOZ.git#main`, o cartão `NEGOBOT Site` foi autenticado e o force re-deploy final foi accionado pelo Boomploy. A validação pública deverá confirmar a nova versão depois da conclusão do build.
+
+A validação pós-redeploy em `https://negobotmoz.duckdns.org/?v=ebe59bf-final` confirmou a publicação correcta: Básico 1.500 conversas/contactos, Médio 5.000 com WhatsApp + 1 canal aprovado, Premium 15.000 com WhatsApp + até 3 canais aprovados e Omnichannel Pro sob consulta. O site também mostra a nota de que canais adicionais dependem de autorização/configuração do fornecedor e os CTAs mantêm os links de registo.
