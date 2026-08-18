@@ -40,3 +40,44 @@ A rota `https://app-negobotmoz.duckdns.org/plataforma/register?plan=premium&lang
 A entrada `https://app-negobotmoz.duckdns.org/plataforma/` deixou de ficar presa no carregamento e apresenta o login com o link `Começa a demonstração de 2 dias`.
 
 Smoke test seguro em produção: `POST /api/platform/auth/register` com dados inválidos respondeu HTTP 400 com a validação esperada; `GET /api/platform/auth/me` respondeu `authenticated=false`. Nenhum tenant de teste foi criado.
+
+
+## Verificação adicional do domínio público
+
+Em 18/08/2026, `https://negobotmoz.duckdns.org/` abriu correctamente a landing page React. O idioma inicial apareceu em inglês, mas o botão `PT` mudou imediatamente toda a interface para Português, incluindo os preços, benefícios e CTAs.
+
+Os botões `Criar espaço na plataforma`, `Escolher Básico`, `Escolher Médio` e `Escolher Premium` apontam para o subdomínio privado `app-negobotmoz.duckdns.org/plataforma/register`, com o plano e o idioma pré-seleccionados.
+
+
+## Verificação Lemon Squeezy no Boomploy
+
+O cartão `NEGOBOT Backend` está autenticado e `running`. Os nomes das variáveis Lemon Squeezy estão presentes e os logs mostram um arranque recente do Gunicorn depois da configuração.
+
+Foi detectada uma correcção necessária: `LEMONSQUEEZY_VARIANT_PREMIUM` está preenchida com um URL de checkout, mas o backend espera o **ID da variante**, normalmente um UUID. Os campos Basic e Médio aparecem no formato de ID de variante. O URL de checkout não deve ser usado como valor de `LEMONSQUEEZY_VARIANT_PREMIUM`.
+
+Não foram guardados neste relatório valores de API keys, tokens ou segredos.
+
+
+## Confirmação final das variantes Lemon Squeezy
+
+Após recarregar o Boomploy e autenticar novamente, o cartão `NEGOBOT Backend` mostrou os três campos `LEMONSQUEEZY_VARIANT_BASICO`, `LEMONSQUEEZY_VARIANT_MEDIO` e `LEMONSQUEEZY_VARIANT_PREMIUM` preenchidos com valores numéricos. O Backend permanece `running`. A configuração está agora no formato esperado por `variant_for_plan()`.
+
+
+## Auditoria omnichannel — fontes oficiais iniciais
+
+A documentação Meta do Instagram, actualizada em 03/03/2026, confirma que contas profissionais podem receber webhooks para comentários, menções, expiração de Stories e mensagens. A integração exige endpoint HTTPS com verificação GET (`hub.mode`, `hub.challenge`, `hub.verify_token`), subscrição de campos no App Dashboard, conta Instagram profissional ligada à aplicação e app em Live. Para comentários e `live_comments`, a Meta indica Advanced Access e Business Verification.
+
+A documentação oficial do Telegram Bot API confirma que bots podem receber updates por webhook HTTPS. O endpoint deve devolver um código HTTP 2xx; o Telegram repete pedidos que falhem. O webhook pode usar `secret_token`, enviado no cabeçalho `X-Telegram-Bot-Api-Secret-Token`, e permite limitar `allowed_updates` e controlar `max_connections`.
+
+Conclusão inicial: Instagram/Facebook e Telegram podem ter adaptadores com webhooks isolados por tenant, mas exigem credenciais, IDs de conta/página, revisão/permissões e segredos próprios; não devem ser activados globalmente apenas pela interface.
+
+
+## Auditoria omnichannel — TikTok, LinkedIn e X
+
+A documentação oficial do TikTok Business Messaging confirma suporte a mensagens directas para contas Business autorizadas, com interfaces para conversas, envio de mensagens, imagens, mensagens automáticas e webhooks de Business Messaging. O acesso depende de conta Business, autorização, aplicação TikTok for Business e eventuais revisões de segurança/privacidade e disponibilidade regional; não deve ser tratado como uma integração livre sem aprovação.
+
+A documentação oficial do LinkedIn indica que a maioria das permissões e programas exige aprovação explícita. As permissões abertas cobrem autenticação/partilha de conteúdo, enquanto produtos de vendas e acesso a dados profissionais dependem de programas parceiros. O catálogo menciona mensagens no contexto de Sales Display, mas não autoriza presumir DMs gerais para qualquer aplicação SaaS.
+
+A documentação oficial do X confirma endpoints OAuth para criar conversas e enviar DMs, lookup de eventos e webhooks. Webhooks exigem HTTPS público, resposta rápida 2xx, CRC challenge-response, verificação de assinatura e conta/app aprovados. A integração deve ser opcional e activada somente quando o cliente conceder OAuth e o projecto X tiver acesso compatível.
+
+Conclusão: a primeira versão omnichannel deve separar `connected`, `pending_review`, `not_configured`, `error` e `disabled`, mostrando no painel quais canais estão realmente activos. Instagram/Facebook, Telegram, TikTok e X têm caminhos técnicos claros; LinkedIn deve começar como publicação/gestão autorizada ou canal “aguarda aprovação”, não como promessa de DM universal.

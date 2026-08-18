@@ -72,6 +72,23 @@ export type IntegrationStatus = {
   configured?: boolean;
 };
 
+export type ChannelStatus = "not_configured" | "pending_authorization" | "pending_review" | "connected" | "disabled" | "error";
+
+export type ClientChannel = {
+  key: string;
+  label: string;
+  kind: string;
+  provider: string;
+  setup: string;
+  availability: string;
+  status: ChannelStatus;
+  external_account_id?: string | null;
+  last_event_at?: string | null;
+  last_error?: string | null;
+  can_connect?: boolean;
+  requires_review?: boolean;
+};
+
 export type Tenant = {
   id: string;
   name: string;
@@ -293,6 +310,8 @@ export const api = {
     plans: () => request<PlansCatalog>("/api/platform/client/plans"),
     plan: () => request<ClientPlan>("/api/platform/client/plan"),
     integrationStatus: () => request<IntegrationStatus>("/api/platform/client/integration/status"),
+    channels: () => request<{ tenant_id?: string; channels: ClientChannel[] }>("/api/platform/client/channels"),
+    updateChannel: (channel: string, status: "disabled" | "not_configured") => request<{ updated: true; channel: string; status: string }>(`/api/platform/client/channels/${encodeURIComponent(channel)}`, { method: "PATCH", body: JSON.stringify({ status }) }),
     team: () => request<{ users: TeamMember[]; current_role?: string }>("/api/platform/client/team"),
     createOperator: (name: string, email: string, password: string) => request<{ created: true; user: TeamMember }>("/api/platform/client/team", { method: "POST", body: JSON.stringify({ name, email, password }) }),
     updateTeamMember: (id: string, fields: { status?: "active" | "suspended"; tenant_role?: "operator" | "viewer" }) => request<{ updated: true }>(`/api/platform/client/team/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(fields) }),

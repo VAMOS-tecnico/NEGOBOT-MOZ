@@ -17,6 +17,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 import extensions
 from services.trial_service import active_fields, is_expired as trial_is_expired, is_paid_plan, pending_fields
+from services.channel_registry import CHANNEL_STATUSES, client_channel_rows, ensure_channel
 
 platform_bp = Blueprint("platform", __name__, url_prefix="/api/platform")
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -1579,3 +1580,41 @@ def get_video_job(job_id: str):
     job = data.get("job") or {}
     _db().collection("video_jobs").document(job_id).set({"status": job.get("status"), "progress": job.get("progress", 0), "updated_at": _now(), "output_path": job.get("output_path")}, merge=True)
     return jsonify({"job": job})
+
+
+@platform_bp.get("/client/channels")
+@_require_roles("client", "operator")
+def client_channels():
+    tenant_id = _tenant_for_identity(_identity())
+    tenant_document = _db().collection("tenants").document(tenant_id).get()
+    if not tenant_document.exists:
+        return jsonify({"error": "Tenant não encontrado."}), 404
+    tenant = tenant_document.to_dict() or {}
+    return jsonify({"tenant_id": tenant_id, "channels": client_channel_rows(tenant)})
+
+
+@platform_bp.patch("/client/channels/<channel>")
+@_require_tenant_roles("owner")
+def update_client_channel(channel: str):
+    try:
+        channel = ensure_channel(channel)
+    except ValueError:
+        return jsonify({"error": "Canal não suportado."}), 404
+    payload = request.get_json(silent=True) or {}
+    requested_status = str(payload.get("status") or "").strip().lower()
+    if requested_status not in {"disabled", "not_configured"}:
+        return jsonify({"error": "A ligação do canal será feita pelo fluxo seguro do fornecedor."}), 400
+    tenant_id = _tenant_for_identity(_identity())
+    reference = _db().collection("tenants").document(tenant_id)
+    document = reference.get()
+    if not document.exists:
+        return jsonify({"error": "Tenant não encontrado."}), 404
+    tenant = document.to_dict() or {}
+    channels = dict(tenant.get("channels") or {}) if isinstance(tenant.get("channels"), dict) else {}
+    config = dict(channels.get(channel) or {})
+    config["status"] = requested_status
+    config["updated_at"] = _now()
+    channels[channel] = config
+    reference.set({"channels": channels, "updated_at": _now()}, merge=True)
+    _audit("client_channel_updated", _identity(), tenant_id, {"channel": channel, "status": requested_status})
+    return jsonify({"updated": True, "channel": channel, "status": requested_status})

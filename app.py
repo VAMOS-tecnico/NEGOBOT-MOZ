@@ -12,6 +12,7 @@ from extensions import init_extensions
 from routes.webhook_routes import webhook_bp
 from routes.web_routes import web_bp
 from routes.platform_routes import platform_bp
+from routes.omnichannel_routes import omnichannel_bp
 
 
 def create_app():
@@ -30,6 +31,7 @@ def create_app():
     app.register_blueprint(webhook_bp)
     app.register_blueprint(web_bp)
     app.register_blueprint(platform_bp)
+    app.register_blueprint(omnichannel_bp)
 
     return app
 

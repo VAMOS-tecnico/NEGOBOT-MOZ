@@ -277,5 +277,44 @@ class PlatformSecurityTests(unittest.TestCase):
         self.assertEqual(payload["support"]["open"], 1)
 
 
+    def test_client_channel_catalog_is_tenant_scoped_and_explicit_about_restrictions(self):
+        self.db.collections["tenants"] = {
+            "tenant-a": FakeSnapshot("tenant-a", {"evolution_state": "open", "channels": {"telegram": {"status": "connected"}}}),
+            "tenant-b": FakeSnapshot("tenant-b", {"evolution_state": "open", "channels": {"instagram": {"status": "connected"}}}),
+        }
+        set_identity(self.client, {"id": "user-a", "name": "A", "role": "client", "tenant_id": "tenant-a", "tenant_role": "owner"})
+        response = self.client.get("/api/platform/client/channels")
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["tenant_id"], "tenant-a")
+        channels = {item["key"]: item for item in payload["channels"]}
+        self.assertEqual(channels["whatsapp"]["status"], "connected")
+        self.assertEqual(channels["telegram"]["status"], "connected")
+        self.assertEqual(channels["linkedin"]["status"], "pending_review")
+        self.assertNotIn("tenant-b", json.dumps(payload))
+
+    @patch("routes.omnichannel_routes.enqueue_omnichannel_event")
+    def test_telegram_webhook_validates_secret_and_queues_normalized_event(self, enqueue):
+        os.environ["TELEGRAM_WEBHOOK_SECRET"] = "telegram-test-secret"
+        self.db.collections["tenants"] = {"tenant-a": FakeSnapshot("tenant-a", {"channels": {}})}
+        enqueue.return_value = {"queued": True, "event_id": "event-a", "queue": "omnichannel_incoming_queue", "position": 1}
+        payload = {"update_id": 10, "message": {"message_id": 7, "chat": {"id": 99}, "from": {"id": 88}, "text": "Olá"}}
+        response = self.client.post("/api/omnichannel/telegram/tenant-a", json=payload, headers={"X-Telegram-Bot-Api-Secret-Token": "telegram-test-secret"})
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.get_json()["accepted"])
+        queued = enqueue.call_args.args[0]
+        self.assertEqual(queued["tenant_id"], "tenant-a")
+        self.assertEqual(queued["channel"], "telegram")
+        self.assertEqual(queued["text"], "Olá")
+        events = self.db.collections["omnichannel_events"]
+        self.assertEqual(len(events), 1)
+        self.assertEqual(next(iter(events.values())).data["status"], "queued")
+        self.assertEqual(self.db.collections["tenants"]["tenant-a"].data["channels"]["telegram"]["status"], "connected")
+
+    def test_omnichannel_webhook_rejects_unknown_tenant(self):
+        os.environ["TELEGRAM_WEBHOOK_SECRET"] = "telegram-test-secret"
+        response = self.client.post("/api/omnichannel/telegram/unknown", json={"text": "Olá"}, headers={"X-Telegram-Bot-Api-Secret-Token": "telegram-test-secret"})
+        self.assertEqual(response.status_code, 404)
+
 if __name__ == "__main__":
     unittest.main()

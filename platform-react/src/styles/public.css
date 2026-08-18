@@ -6,3 +6,9 @@
 @media(prefers-reduced-motion:reduce){.public-site *{scroll-behavior:auto!important;transition:none!important;animation:none!important}.public-site .public-feature:hover,.public-site .public-button:hover,.public-site .public-nav-cta:hover{transform:none}}
 
 .public-nav-actions{display:flex;align-items:center;gap:12px}.public-language-switcher{display:inline-flex;align-items:center;gap:4px;color:#8fa8b8;font-size:11px;font-weight:700;letter-spacing:.08em}.public-language-switcher button{padding:5px 4px;border:0;border-radius:6px;color:#8fa8b8;background:transparent;font:700 11px "DM Sans",system-ui,sans-serif;cursor:pointer}.public-language-switcher button:hover,.public-language-switcher button:focus-visible,.public-language-switcher button.active{color:var(--cyan);background:rgba(87,231,212,.1)}.public-language-switcher button:focus-visible{outline:2px solid var(--cyan);outline-offset:2px}.public-language-switcher span{color:#557184}@media(max-width:560px){.public-nav-actions{gap:7px}.public-language-switcher{gap:1px}.public-nav-cta{max-width:145px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
+
+
+.public-channel-brands { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 16px; }
+.public-channel-brands span { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; color: rgba(27, 59, 80, .68); font-size: 19px; transition: color .18s ease, transform .18s ease; }
+.public-channel-brands span:hover { color: #12616b; transform: translateY(-2px); }
+@media (max-width: 720px) { .public-channel-brands { justify-content: flex-start; gap: 12px; margin-top: 12px; } }
