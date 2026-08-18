@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
-import { Activity, Bot, Building2, CheckCircle2, ChevronRight, CircleDollarSign, LayoutDashboard, LogOut, MessageCircle, QrCode, Send, Settings2, Smartphone, Users, Wifi, X } from "lucide-react";
+import { Activity, Bot, Building2, CalendarClock, CheckCircle2, ChevronRight, CircleDollarSign, LayoutDashboard, LogOut, MessageCircle, QrCode, Send, Settings2, Smartphone, Users, Wifi, X } from "lucide-react";
 import { api, type AuthState, type ClientPlan, type IntegrationStatus, type Overview, type PlatformUser } from "./lib/api";
 import { AdminPage } from "./pages/AdminPage";
 import { AssistantPage, BillingPage, BusinessProfilePage, CampaignsPage, ConversationsPage, MetricsPage, SupportPage, TeamPage, VideoPage, WhatsAppPage } from "./pages/ClientPages";
 import { PublicAssistantPage, PublicSite } from "./pages/PublicSite";
 import { ChannelsPage } from "./pages/ChannelsPage";
+import { RenewalsPage } from "./pages/RenewalsPage";
 
 type AuthContextValue = { auth: AuthState; refresh: () => Promise<void>; logout: () => Promise<void> };
 const defaultAuth: AuthState = { authenticated: false, user: null };
@@ -38,7 +39,7 @@ function AppShell({ user, onLogout, children }: { user: PlatformUser; onLogout: 
   const location = useLocation(); const navigate = useNavigate(); const isAdmin = user.role === "owner" || user.role === "admin";
   const navigation = [{ label: "Visão geral", path: "/", icon: LayoutDashboard }, { label: "Conversas", path: "/conversas", icon: MessageCircle }, { label: "Campanhas", path: "/campanhas", icon: Send },  { label: "WhatsApp", path: "/whatsapp", icon: QrCode }, { label: "Canais", path: "/canais", icon: Smartphone }, { label: "Empresa e redes", path: "/empresa", icon: Building2 }, { label: "Equipa", path: "/equipa", icon: Users },
  { label: "Assistente", path: "/assistente", icon: Bot }, { label: "Métricas", path: "/metricas", icon: Activity }, { label: "Vídeos", path: "/videos", icon: Send }, { label: "Suporte", path: "/suporte", icon: MessageCircle },
- { label: "Plano e pagamentos", path: "/plano", icon: CircleDollarSign }, ...(isAdmin ? [{ label: "Administração", path: "/admin", icon: Settings2 }] : [])];
+ { label: "Plano e pagamentos", path: "/plano", icon: CircleDollarSign }, ...(isAdmin ? [{ label: "Administração", path: "/admin", icon: Settings2 }, { label: "Renovações", path: "/renovacoes", icon: CalendarClock }] : [])];
   return <div className="app-frame"><aside className="sidebar"><button className="brand-lockup" onClick={() => navigate("/")}><span className="brand-mark small">N</span><span><strong>NEGOBOT</strong><small>MOZ PLATFORM</small></span></button><div className="workspace-card"><span className="status-dot" />{isAdmin ? "Visão do administrador" : "Espaço do cliente"}</div><nav className="sidebar-nav"><span className="nav-heading">Plataforma</span>{navigation.map(({ label, path, icon: Icon }) => <button key={path} className={`nav-item ${location.pathname === path ? "active" : ""}`} onClick={() => navigate(path)}><Icon size={18} /><span>{label}</span><ChevronRight size={14} className="nav-chevron" /></button>)}</nav><div className="sidebar-bottom"><div className="user-mini"><div className="avatar">{(user.name || "N").slice(0, 1).toUpperCase()}</div><div><strong>{user.name}</strong><small>{user.role}</small></div></div><button className="nav-item logout" onClick={onLogout}><LogOut size={18} /><span>Sair</span></button></div></aside><div className="main-column"><header className="topbar"><div><span className="eyebrow">ESPAÇO DE GESTÃO</span><h2>Olá, {user.name.split(" ")[0]}</h2></div><div className="topbar-actions"><div className="live-pill"><span className="status-dot" /> Sistema operacional</div><div className="avatar large">{(user.name || "N").slice(0, 1).toUpperCase()}</div></div></header><main className="page-content">{children}</main></div></div>;
 }
 function StatCard({ label, value, caption, icon: Icon, tone = "green" }: { label: string; value: string; caption: string; icon: typeof Activity; tone?: string }) { return <article className={`stat-card ${tone}`}><div className="stat-top"><span>{label}</span><span className="icon-chip"><Icon size={17} /></span></div><strong>{value}</strong><small>{caption}</small></article>; }
@@ -52,7 +53,7 @@ function QuickAction({ icon: Icon, title, text, path }: { icon: typeof MessageCi
 function PlatformRouter({ user, onLogout }: { user: PlatformUser; onLogout: () => void }) { return <AppShell user={user} onLogout={onLogout}><Routes><Route index element={<OverviewPage user={user} />} /><Route path="conversas" element={<ConversationsPage />} /><Route path="campanhas" element={<CampaignsPage />} /><Route path="whatsapp" element={<WhatsAppPage />} /><Route path="empresa" element={<BusinessProfilePage />} /><Route path="equipa" element={<TeamPage />} />
   <Route path="assistente" element={<AssistantPage />} /><Route path="metricas" element={<MetricsPage />} /><Route path="videos" element={<VideoPage />} /><Route path="suporte" element={<SupportPage />} /><Route path="canais" element={<ChannelsPage />} />
 
-<Route path="plano" element={<BillingPage />} /><Route path="admin" element={(user.role === "owner" || user.role === "admin") ? <AdminPage /> : <Navigate to="/" replace />} /><Route path="*" element={<Navigate to="/" replace />} /></Routes></AppShell>; }
+<Route path="plano" element={<BillingPage />} /><Route path="admin" element={(user.role === "owner" || user.role === "admin") ? <AdminPage /> : <Navigate to="/" replace />} /><Route path="renovacoes" element={(user.role === "owner" || user.role === "admin") ? <RenewalsPage /> : <Navigate to="/" replace />} /><Route path="*" element={<Navigate to="/" replace />} /></Routes></AppShell>; }
 
 function PlatformApp() {
   const appBasePath = window.location.pathname.startsWith("/plataforma-react") ? "/plataforma-react" : "/plataforma"; const [auth, setAuth] = useState<AuthState>(defaultAuth); const [loading, setLoading] = useState(true);
