@@ -18,6 +18,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 import extensions
 from services.trial_service import active_fields, is_expired as trial_is_expired, is_paid_plan, pending_fields
 from services.channel_registry import CHANNEL_STATUSES, client_channel_rows, ensure_channel
+from services.plan_service import entitlements_for_tenant, plan_channel_limit, public_plan_rows
 
 platform_bp = Blueprint("platform", __name__, url_prefix="/api/platform")
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -121,6 +122,40 @@ def _tenant_for_identity(identity: dict[str, Any]) -> str | None:
     return str(tenant_id) if tenant_id else None
 
 
+def _tenant_data(tenant_id: str | None) -> dict[str, Any]:
+    if not tenant_id:
+        return {}
+    document = _db().collection("tenants").document(tenant_id).get()
+    return document.to_dict() if document.exists else {}
+
+
+def _current_entitlements(tenant_id: str | None) -> dict[str, Any]:
+    return entitlements_for_tenant(_tenant_data(tenant_id))
+
+
+def _month_key(value: Any) -> str:
+    if hasattr(value, "strftime"):
+        return value.strftime("%Y-%m")
+    return str(value or "")[:7]
+
+
+def _count_tenant_campaigns_this_month(tenant_id: str) -> int:
+    month = _now().strftime("%Y-%m")
+    return sum(
+        1
+        for document in _db().collection("campaigns").where("tenant_id", "==", tenant_id).limit(5000).stream()
+        if _month_key((document.to_dict() or {}).get("created_at")) == month
+    )
+
+
+def _count_tenant_contacts(tenant_id: str, limit: int = 20000) -> int:
+    return sum(1 for _ in _db().collection("contacts").where("tenant_id", "==", tenant_id).limit(limit).stream())
+
+
+def _count_tenant_team(tenant_id: str, limit: int = 100) -> int:
+    return sum(1 for _ in _db().collection("platform_users").where("tenant_id", "==", tenant_id).limit(limit).stream())
+
+
 @platform_bp.post("/auth/login")
 def login():
     payload = request.get_json(silent=True) or {}
@@ -203,7 +238,7 @@ def register():
         "billing_region": billing_region,
         "selected_plan": selected_plan or None,
         "created_at": now,
-        "limits": {"contacts": 500, "campaigns_per_month": 2, "messages_per_campaign": 100},
+        "limits": {"contacts": 500, "contact_limit": 500, "conversation_limit": 500, "campaigns_per_month": 2, "team_seats": 1, "messages_per_campaign": 100, "included_channels": ["whatsapp"], "additional_channel_slots": 0},
     })
     user_ref.set({
         "name": name,
@@ -291,7 +326,7 @@ def create_tenant():
         "trial_status": "trial_pending_connection",
         "trial_connection_confirmed": False,
         "created_at": now,
-        "limits": {"contacts": 500, "campaigns_per_month": 2, "messages_per_campaign": 100},
+        "limits": {"contacts": 500, "contact_limit": 500, "conversation_limit": 500, "campaigns_per_month": 2, "team_seats": 1, "messages_per_campaign": 100, "included_channels": ["whatsapp"], "additional_channel_slots": 0},
     })
     user_ref.set({
         "name": name,
@@ -342,6 +377,10 @@ def create_tenant_operator():
     if user_ref.get().exists:
         return jsonify({"error": "Já existe uma conta com este email."}), 409
     tenant_id = _tenant_for_identity(_identity())
+    entitlements = _current_entitlements(tenant_id)
+    team_limit = int(entitlements.get("team_seats") or 1)
+    if _count_tenant_team(tenant_id or "") >= team_limit:
+        return jsonify({"error": f"O teu plano permite até {team_limit} utilizador(es). Faz upgrade para adicionar mais membros."}), 403
     now = _now()
     user_ref.set({
         "name": name,
@@ -510,6 +549,10 @@ def create_contact():
     if len(name) < 2 or len(phone) < 8:
         return jsonify({"error": "Nome e número de telefone válidos são obrigatórios."}), 400
     tenant_id = _tenant_for_identity(_identity())
+    entitlements = _current_entitlements(tenant_id)
+    contact_limit = int(entitlements.get("contact_limit") or 0)
+    if contact_limit and _count_tenant_contacts(tenant_id or "", contact_limit + 1) >= contact_limit:
+        return jsonify({"error": f"O teu plano permite até {contact_limit} contactos. Faz upgrade para adicionar mais."}), 403
     tags = sorted({str(item).strip().lower() for item in (payload.get("tags") or []) if str(item).strip()})[:20]
     ref = _db().collection("contacts").document()
     ref.set({"tenant_id": tenant_id, "name": name, "phone": phone, "opt_in": bool(payload.get("opt_in", True)), "tags": tags, "status": "active", "created_at": _now(), "updated_at": _now()})
@@ -668,11 +711,16 @@ def import_contacts():
     except Exception:
         return jsonify({"error": "Não foi possível ler o ficheiro."}), 400
     db = _db()
-    existing = {re.sub(r"\D", "", str((doc.to_dict() or {}).get("phone") or "")) for doc in db.collection("contacts").where("tenant_id", "==", tenant_id).limit(5000).stream()}
+    entitlements = _current_entitlements(tenant_id)
+    contact_limit = int(entitlements.get("contact_limit") or 0)
+    existing = {re.sub(r"\D", "", str((doc.to_dict() or {}).get("phone") or "")) for doc in db.collection("contacts").where("tenant_id", "==", tenant_id).limit(min(contact_limit + 1, 5000) if contact_limit else 5000).stream()}
+    available = max(0, contact_limit - len(existing)) if contact_limit else len(rows)
+    if contact_limit and available <= 0:
+        return jsonify({"error": f"O teu plano permite até {contact_limit} contactos. Faz upgrade para importar mais."}), 403
     batch = db.batch()
     imported = 0
     skipped = 0
-    for row in rows[:5000]:
+    for row in rows[:min(5000, available)]:
         normalized = {str(key).strip().lower(): value for key, value in row.items()}
         name = str(normalized.get("name") or normalized.get("nome") or "").strip()
         phone = re.sub(r"\D", "", str(normalized.get("phone") or normalized.get("telefone") or normalized.get("whatsapp") or ""))
@@ -708,6 +756,13 @@ def create_campaign():
     scheduled_at = str(payload.get("scheduled_at") or "").strip()[:80] or None
     tenant_id = _tenant_for_identity(_identity())
     db = _db()
+    entitlements = _current_entitlements(tenant_id)
+    channel_limit = plan_channel_limit(_tenant_data(tenant_id))
+    if len(channels) > channel_limit:
+        return jsonify({"error": f"O teu plano permite até {channel_limit} canal(is) por campanha. Faz upgrade ou adiciona o Pacote Canais+."}), 403
+    campaign_limit = entitlements.get("campaigns_per_month")
+    if campaign_limit and _count_tenant_campaigns_this_month(tenant_id or "") >= int(campaign_limit):
+        return jsonify({"error": f"Atingiste o limite de {campaign_limit} campanhas este mês. Faz upgrade para continuar."}), 403
     template_id = str(payload.get("template_id") or "").strip()
     if template_id:
         template_document = db.collection("campaign_templates").document(template_id).get()
@@ -917,15 +972,19 @@ def conversation_handoff(phone: str):
 @_require_roles("client", "operator")
 def client_plan():
     tenant_id = _tenant_for_identity(_identity())
-    document = _db().collection("tenants").document(tenant_id).get()
-    data = document.to_dict() or {}
+    data = _tenant_data(tenant_id)
+    entitlements = _current_entitlements(tenant_id)
+    campaign_usage = _count_tenant_campaigns_this_month(tenant_id or "")
+    contact_usage = _count_tenant_contacts(tenant_id or "", int(entitlements.get("contact_limit") or 20000))
+    team_usage = _count_tenant_team(tenant_id or "")
     return jsonify({
-        "plan": data.get("plano", data.get("plan", "demonstracao")),
-        "plan_name": data.get("nome_plano", "Demonstração"),
+        "plan": data.get("plano", data.get("plan", entitlements["plan_id"])),
+        "plan_name": data.get("nome_plano", entitlements["plan_name"]),
         "status": data.get("status_plano", data.get("status", "demonstracao")),
         "expires_at": data.get("data_expiracao"),
-        "mass_broadcast": bool(data.get("disparo_liberado", False)),
-        "limits": data.get("limits", {}),
+        "mass_broadcast": bool(data.get("disparo_liberado", entitlements["mass_broadcast"])),
+        "limits": {**(data.get("limits") or {}), **entitlements},
+        "usage": {"contacts": contact_usage, "campaigns_this_month": campaign_usage, "team_seats": team_usage},
         "trial_status": data.get("trial_status", data.get("status_plano", "demonstracao")),
         "billing_region": data.get("billing_region", "mozambique"),
         "selected_plan": data.get("selected_plan"),
@@ -978,6 +1037,7 @@ def verify_mpesa_payment():
                 "disparo_liberado": bool(paid.get("disparo_liberado", False)),
                 "limite_conversas": paid.get("limite_conversas"),
                 "telefone_proprietario": client_phone or paid.get("telefone_proprietario"),
+                "plan_rules_version": "2026-08-v2",
                 "updated_at": _now(),
             }, merge=True)
             if intent_ref is not None:
@@ -1076,6 +1136,7 @@ def _apply_lemon_plan(tenant_id: str, plan_id: str, attributes: dict[str, Any], 
         "lemon_customer_id": attributes.get("customer_id"),
         "lemon_variant_id": event["variant_id"],
         "lemon_status": attributes.get("status") or "active",
+        "plan_rules_version": "2026-08-v2",
         "updated_at": now,
     }
     _db().collection("tenants").document(tenant_id).set(lemon_fields, merge=True)
@@ -1220,42 +1281,14 @@ def admin_health():
 @platform_bp.get("/client/plans")
 @_require_roles("client", "operator")
 def client_plans_catalog():
-    from services.payment_service import TABELA_PLANOS
-    benefits = {
-        "basico": [
-            "FAQ, horário, localização e catálogo em texto",
-            "Até 1.500 conversas por mês",
-            "1 número de WhatsApp",
-            "Suporte básico até 24 horas",
-            "Sem PDFs, Excel, fotos, áudios ou disparos em massa",
-        ],
-        "medio": [
-            "Tudo do Plano Básico",
-            "Conversas ilimitadas",
-            "Processamento de fotos e leitura básica de Excel",
-            "Menu interativo e relatórios mensais",
-            "Suporte prioritário até 12 horas",
-        ],
-        "premium": [
-            "Tudo do Plano Médio",
-            "Leitura de PDFs e documentos extensos",
-            "Interpretação de áudios e geração de artes (#imagem)",
-            "Disparos em massa e campanhas de marketing",
-            "Suporte dedicado e configuração inicial assistida",
-        ],
-    }
-    plans = []
-    for amount, data in sorted(TABELA_PLANOS.items()):
-        plans.append({
-            "id": data["id"],
-            "name": data["nome"],
-            "price_mt": int(amount),
-            "validity_days": data["dias_validade"],
-            "conversation_limit": data["limite_conversas"],
-            "mass_broadcast": bool(data["disparo_liberado"]),
-            "benefits": benefits.get(data["id"], []),
-        })
-    return jsonify({"plans": plans, "trial_days": 2, "mpesa_number": "855000929", "mpesa_name": "Abel Francisco"})
+    from services.plan_service import ADDONS
+    return jsonify({
+        "plans": public_plan_rows(),
+        "addons": list(ADDONS.values()),
+        "trial_days": 2,
+        "mpesa_number": "855000929",
+        "mpesa_name": "Abel Francisco",
+    })
 
 
 @platform_bp.post("/client/evolution/qr")

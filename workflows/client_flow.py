@@ -11,6 +11,7 @@ import extensions
 from services.groq_service import chamar_groq_rest
 from services.evolution_service import send_whatsapp
 from services.trial_service import PENDING_STATUS, is_expired as trial_is_expired
+from services.plan_service import entitlements_for_tenant
 from services.media_service import (
     extrair_texto_pdf_url, 
     extrair_texto_excel_url
@@ -214,6 +215,23 @@ def process_client_flow(
             base_conhecimento_docs = dados_cliente.get("base_conhecimento_documentos", "")
 
         status_plano = dados_cliente.get("status_plano", "demonstracao")
+
+        # Limite mensal de conversas: só conta uma conversa nova, não cada mensagem.
+        if not is_from_me and not conversa_ref.get().exists:
+            conversation_limit = entitlements_for_tenant(dados_cliente).get("conversation_limit")
+            if conversation_limit:
+                usage_key = agora.strftime("%Y-%m")
+                usage_ref = client_doc_ref.collection("usage").document(usage_key)
+                usage_doc = usage_ref.get()
+                conversations_used = int((usage_doc.to_dict() or {}).get("conversations", 0)) if usage_doc.exists else 0
+                if conversations_used >= int(conversation_limit):
+                    send_whatsapp(
+                        clean_user_phone,
+                        f"⚠️ O limite de {int(conversation_limit):,} conversas deste mês foi atingido. Faz upgrade do plano para continuar a receber novos atendimentos.",
+                        instance_name=nome_instancia_atual,
+                    )
+                    return
+                usage_ref.set({"conversations": firestore.Increment(1), "month": usage_key, "updated_at": agora}, merge=True)
 
         if trial_is_expired(dados_cliente, agora):
             logger.warning(f"⚠️ Instância {nome_instancia_atual} com plano expirado. Atendimento suspenso.")

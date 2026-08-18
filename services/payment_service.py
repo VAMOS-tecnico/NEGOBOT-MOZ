@@ -8,30 +8,8 @@ logger = logging.getLogger(__name__)
 # Número oficial de recebimento M-Pesa (Negobot Moz)
 NUMERO_RECEBEDOR_OFICIAL = "855000929"
 
-# 🎯 TABELA OFICIAL DE PLANOS NEGOBOT MOZ
-TABELA_PLANOS = {
-    500.0: {
-        "id": "basico",
-        "nome": "Plano Básico",
-        "dias_validade": 30,
-        "disparo_liberado": False,
-        "limite_conversas": 1500
-    },
-    1000.0: {
-        "id": "medio",
-        "nome": "Plano Médio",
-        "dias_validade": 30,
-        "disparo_liberado": False,
-        "limite_conversas": None  # Ilimitadas
-    },
-    1500.0: {
-        "id": "premium",
-        "nome": "Plano Premium",
-        "dias_validade": 30,
-        "disparo_liberado": True,  # Disparos em massa liberados
-        "limite_conversas": None  # Ilimitadas
-    }
-}
+# Catálogo central de planos: mantém IDs e preços compatíveis com pagamentos existentes.
+from services.plan_service import TABELA_PLANOS
 
 
 def identificar_plano_por_valor(valor_pago):
@@ -260,7 +238,8 @@ def validar_e_ativar_pagamento_mpesa(tenant_id, client_phone, message_text):
             "data_ativacao": agora,
             "data_expiracao": data_expiracao,
             "ultimo_tx_id": tx_id,
-            "metodo_pagamento": "M-Pesa AutoPay"
+            "metodo_pagamento": "M-Pesa AutoPay",
+            "plan_rules_version": "2026-08-v2",
         }, merge=True)
 
         logger.info(f"✅ Conta {tenant_id} ativada no {plano['nome']} via M-Pesa {tx_id}")

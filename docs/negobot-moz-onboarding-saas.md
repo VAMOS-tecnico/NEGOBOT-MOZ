@@ -106,9 +106,14 @@ A tabela de planos atualmente implementada é:
 
 | Plano | Preço | Validade | Características principais |
 |---|---:|---:|---|
-| Básico | 500 MT | 30 dias | Até 1.500 conversas, FAQ, horário, catálogo em texto e um número WhatsApp |
-| Médio | 1.000 MT | 30 dias | Conversas ilimitadas, fotos, Excel básico, menus e relatórios |
-| Premium | 1.500 MT | 30 dias | PDFs, documentos, áudio, artes, campanhas e disparos em massa |
+| Básico | 500 MT | 30 dias | Até 1.500 conversas/contactos, WhatsApp, 1 utilizador e 2 campanhas por mês |
+| Médio | 1.000 MT | 30 dias | Até 5.000 conversas/contactos, WhatsApp + 1 canal adicional aprovado, 3 utilizadores e 10 campanhas por mês |
+| Premium | 1.500 MT | 30 dias | Até 15.000 conversas/contactos, WhatsApp + até 3 canais aprovados, 5 utilizadores, IA avançada e 25 campanhas por mês |
+| Omnichannel Pro | Sob consulta | Contrato | Todos os canais autorizados, mais utilizadores, API, integrações e campanhas avançadas |
+
+Os extras comerciais previstos são o **Pacote Canais+** (+500 MT/mês, até dois canais adicionais), **Campanhas avançadas** (+500 MT/mês) e **Utilizador adicional** (+100 MT/mês). A activação destes extras é feita após confirmação comercial, porque os fornecedores externos podem exigir aprovação e credenciais próprias.
+
+Os canais adicionais nunca devem ser apresentados como activos apenas por aparecerem no catálogo. Cada canal depende de autorização, credenciais, consentimento e configuração do tenant.
 
 A validação M-Pesa deve impedir a reutilização do mesmo comprovativo. O registo AutoPay é marcado como usado, associado ao tenant e ao número que solicitou a ativação. O remetente da transação deve coincidir com o número informado pelo cliente, salvo exceção operacional tratada pelo administrador.
 

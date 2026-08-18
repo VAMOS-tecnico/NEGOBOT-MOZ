@@ -42,13 +42,27 @@ export type Plan = {
   name: string;
   price_mt: number;
   validity_days: number;
-  conversation_limit?: number;
+  conversation_limit?: number | null;
+  contact_limit?: number;
+  campaigns_per_month?: number;
+  team_seats?: number;
+  included_channels?: string[];
+  additional_channel_slots?: number;
   mass_broadcast?: boolean;
+  ai_media?: boolean;
   benefits: string[];
+};
+
+export type PlanAddon = {
+  name: string;
+  description: string;
+  price_mt: number;
+  type: string;
 };
 
 export type PlansCatalog = {
   plans: Plan[];
+  addons?: PlanAddon[];
   trial_days?: number;
   mpesa_number?: string;
   mpesa_name?: string;
@@ -60,7 +74,8 @@ export type ClientPlan = {
   status: string;
   expires_at?: string | null;
   mass_broadcast: boolean;
-  limits?: Record<string, number>;
+  limits?: Record<string, number | string[] | boolean | null>;
+  usage?: { contacts: number; campaigns_this_month: number; team_seats: number };
   trial_status?: string;
   billing_region?: "mozambique" | "international" | string;
   selected_plan?: string | null;
