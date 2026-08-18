@@ -236,6 +236,18 @@ class PlatformSecurityTests(unittest.TestCase):
         with self.client.session_transaction() as session:
             self.assertEqual(session["platform_identity"]["tenant_id"], tenant_id)
 
+    def test_public_registration_accepts_minimal_payload_for_all_clients(self):
+        response = self.client.post("/api/platform/auth/register", json={"email": "minimal@example.com", "password": "password-123"})
+        self.assertEqual(response.status_code, 201)
+        tenant_id = response.get_json()["tenant"]["id"]
+        tenant = self.db.collections["tenants"][tenant_id].data
+        self.assertEqual(tenant["trial_status"], "trial_pending_connection")
+        self.assertFalse(tenant["profile_completed"])
+        self.assertEqual(tenant["onboarding_status"], "incomplete")
+        self.assertIsNone(tenant["selected_plan"])
+        self.assertEqual(tenant["billing_region"], "mozambique")
+        self.assertEqual(tenant["name"], "minimal")
+
     def test_public_registration_rejects_duplicate_email(self):
         email = "duplicate@example.com"
         self.db.collections["platform_users"] = {platform_routes._doc_id(email): FakeSnapshot(platform_routes._doc_id(email), {"email": email})}

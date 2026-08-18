@@ -29,6 +29,12 @@ class TrialLifecycleTests(unittest.TestCase):
         self.assertFalse(is_expired(data, self.start + timedelta(days=1, hours=23)))
         self.assertTrue(is_expired(data, self.start + timedelta(days=2)))
 
+    def test_trial_duration_is_independent_of_billing_region(self):
+        for region in ("mozambique", "international"):
+            data = {**active_fields("258840000000", self.start), "billing_region": region}
+            self.assertEqual(data["trial_expires_at"], self.start + timedelta(days=2))
+            self.assertTrue(is_expired(data, self.start + timedelta(days=2)))
+
     def test_expired_status_is_expired(self):
         data = {"trial_status": EXPIRED_STATUS}
         self.assertTrue(is_expired(data, self.start))

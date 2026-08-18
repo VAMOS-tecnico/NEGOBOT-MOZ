@@ -231,6 +231,10 @@ export type BusinessProfile = {
   redes_sociais: { facebook: string; instagram: string; twitter_x: string; tiktok: string; telegram: string; linkedin: string };
   instance_name?: string | null;
   status_conexao?: string;
+  billing_region?: "mozambique" | "international" | string;
+  selected_plan?: string | null;
+  onboarding_status?: "incomplete" | "completed" | string;
+  profile_completed?: boolean;
 };
 
 export type AssistantSettings = {
@@ -298,7 +302,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 export const api = {
   auth: {
     me: () => request<AuthState>("/api/platform/auth/me"),
-    register: (payload: { name: string; email: string; password: string; billing_region: "mozambique" | "international"; plan_id?: string }) =>
+    register: (payload: { name?: string; email: string; password: string; billing_region?: "mozambique" | "international"; plan_id?: string }) =>
       request<{ authenticated: true; user: PlatformUser; tenant: Tenant }>("/api/platform/auth/register", {
         method: "POST",
         body: JSON.stringify(payload),

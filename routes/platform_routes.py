@@ -208,8 +208,12 @@ def register():
     password = str(payload.get("password") or "")
     billing_region = str(payload.get("billing_region") or "mozambique").strip().lower()
     selected_plan = str(payload.get("plan_id") or "").strip().lower()
-    if len(name) < 2 or not _EMAIL_RE.fullmatch(email) or len(password) < 8:
-        return jsonify({"error": "Nome, email válido e palavra-passe com pelo menos 8 caracteres são obrigatórios."}), 400
+    if not _EMAIL_RE.fullmatch(email) or len(password) < 8:
+        return jsonify({"error": "Email válido e palavra-passe com pelo menos 8 caracteres são obrigatórios."}), 400
+    if not name:
+        name = email.split("@", 1)[0].replace(".", " ").replace("_", " ").strip() or "Novo cliente"
+    if len(name) < 2:
+        name = "Novo cliente"
     if billing_region not in {"mozambique", "international"}:
         return jsonify({"error": "Escolhe Moçambique ou pagamento internacional."}), 400
     if selected_plan and selected_plan not in {"basico", "medio", "premium"}:
@@ -237,6 +241,9 @@ def register():
         "trial_connection_confirmed": False,
         "billing_region": billing_region,
         "selected_plan": selected_plan or None,
+        "onboarding_status": "incomplete",
+        "profile_completed": False,
+        "onboarding_step": "profile",
         "created_at": now,
         "limits": {"contacts": 500, "contact_limit": 500, "conversation_limit": 500, "campaigns_per_month": 2, "team_seats": 1, "messages_per_campaign": 100, "included_channels": ["whatsapp"], "additional_channel_slots": 0},
     })
@@ -470,6 +477,10 @@ def get_client_profile():
         "redes_sociais": {key: str(socials.get(key) or "") for key in _SOCIAL_PROFILE_KEYS},
         "instance_name": tenant.get("instance_name"),
         "status_conexao": tenant.get("evolution_state", "desconectado"),
+        "billing_region": tenant.get("billing_region", "mozambique"),
+        "selected_plan": tenant.get("selected_plan"),
+        "onboarding_status": tenant.get("onboarding_status", "incomplete"),
+        "profile_completed": bool(tenant.get("profile_completed", False)),
     })
 
 
@@ -499,12 +510,29 @@ def update_client_profile():
             key: str(payload["redes_sociais"].get(key) or "").strip()[:400]
             for key in _SOCIAL_PROFILE_KEYS
         }
+    if "billing_region" in payload:
+        region = str(payload.get("billing_region") or "").strip().lower()
+        if region not in {"mozambique", "international"}:
+            return jsonify({"error": "Escolhe Moçambique ou pagamento internacional."}), 400
+        changes["billing_region"] = region
+    if "selected_plan" in payload or "plan_id" in payload:
+        selected_plan = str(payload.get("selected_plan") or payload.get("plan_id") or "").strip().lower()
+        if selected_plan and selected_plan not in {"basico", "medio", "premium"}:
+            return jsonify({"error": "Plano seleccionado inválido."}), 400
+        changes["selected_plan"] = selected_plan or None
     if not changes:
         return jsonify({"error": "Nenhuma alteração de perfil foi enviada."}), 400
     changes["updated_at"] = _now()
     tenant_ref = _db().collection("tenants").document(tenant_id)
-    tenant_ref.set(changes, merge=True)
     current_tenant = tenant_ref.get().to_dict() or {}
+    effective_company = changes.get("empresa_nome", current_tenant.get("empresa_nome") or current_tenant.get("name"))
+    effective_region = changes.get("billing_region", current_tenant.get("billing_region", "mozambique"))
+    if str(effective_company or "").strip() and effective_region in {"mozambique", "international"}:
+        changes["profile_completed"] = True
+        changes["onboarding_status"] = "completed"
+        changes["onboarding_step"] = "whatsapp"
+    tenant_ref.set(changes, merge=True)
+    current_tenant = {**current_tenant, **changes}
     instance_name = str(current_tenant.get("instance_name") or "").strip()
     if instance_name:
         _db().collection("clientes_bot").document(instance_name).set({
