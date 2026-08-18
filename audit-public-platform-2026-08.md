@@ -81,3 +81,17 @@ A documentação oficial do LinkedIn indica que a maioria das permissões e prog
 A documentação oficial do X confirma endpoints OAuth para criar conversas e enviar DMs, lookup de eventos e webhooks. Webhooks exigem HTTPS público, resposta rápida 2xx, CRC challenge-response, verificação de assinatura e conta/app aprovados. A integração deve ser opcional e activada somente quando o cliente conceder OAuth e o projecto X tiver acesso compatível.
 
 Conclusão: a primeira versão omnichannel deve separar `connected`, `pending_review`, `not_configured`, `error` e `disabled`, mostrando no painel quais canais estão realmente activos. Instagram/Facebook, Telegram, TikTok e X têm caminhos técnicos claros; LinkedIn deve começar como publicação/gestão autorizada ou canal “aguarda aprovação”, não como promessa de DM universal.
+
+
+## 2026-08-18 — Publicação omnichannel
+
+O commit `44153ac` foi publicado no GitHub e o redeploy do `NEGOBOT Backend` e do `NEGOBOT Site` foi concluído no Boomploy. O Site iniciou às 21:14:58 UTC e permanece `running`. O site público foi validado em `https://negobotmoz.duckdns.org/`: depois da renderização inicial, apresentou o hero `Automação omnichannel`, a mensagem sobre WhatsApp, Instagram, Facebook, Telegram, TikTok, LinkedIn, X e email, a faixa visual de marcas, os planos e os CTAs de registo. Nenhum volume persistente foi alterado.
+
+
+A entrada privada `https://app-negobotmoz.duckdns.org/plataforma/` continua a apresentar o login e não expõe o painel sem sessão. A rota `register?plan=premium&region=international` carregou o formulário React depois da renderização inicial, com `Outro país · cartão/PayPal via Lemon Squeezy` e `Premium · 1.500 MT / 30 dias` pré-seleccionados. Não foi criada nenhuma conta de teste.
+
+
+O redeploy autorizado do `NEGOBOT Incoming Worker` foi iniciado pelo cartão Boomploy e o serviço permanece em estado `running`. A validação final dos logs será feita após abrir o cartão, sem alterar variáveis ou volumes.
+
+
+A validação do cartão `NEGOBOT Incoming Worker` confirmou Firebase inicializado e o log `Consumidor online queues=whatsapp_incoming_queue,omnichannel_incoming_queue` às 21:16:04 UTC. O Worker permanece `running` e continua a processar eventos WhatsApp; a segunda fila omnichannel está activa no mesmo processo persistente.
