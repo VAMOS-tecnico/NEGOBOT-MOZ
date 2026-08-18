@@ -14,6 +14,7 @@ TABELA_PLANOS: dict[float, dict[str, Any]] = {
     500.0: {
         "id": "basico",
         "nome": "Plano Básico",
+        "price_usd": 8,
         "dias_validade": 30,
         "disparo_liberado": False,
         "limite_conversas": 1500,
@@ -35,6 +36,7 @@ TABELA_PLANOS: dict[float, dict[str, Any]] = {
     1000.0: {
         "id": "medio",
         "nome": "Plano Médio",
+        "price_usd": 16,
         "dias_validade": 30,
         "disparo_liberado": False,
         "limite_conversas": 5000,
@@ -57,6 +59,7 @@ TABELA_PLANOS: dict[float, dict[str, Any]] = {
     1500.0: {
         "id": "premium",
         "nome": "Plano Premium",
+        "price_usd": 24,
         "dias_validade": 30,
         "disparo_liberado": True,
         "limite_conversas": 15000,
@@ -83,18 +86,21 @@ ADDONS: dict[str, dict[str, Any]] = {
         "name": "Pacote Canais+",
         "description": "Até 2 canais adicionais aprovados",
         "price_mt": 500,
+        "price_usd": 8,
         "type": "recurring",
     },
     "campanhas_avancadas": {
         "name": "Campanhas avançadas",
         "description": "Segmentação e orquestração adicional",
         "price_mt": 500,
+        "price_usd": 8,
         "type": "recurring",
     },
     "utilizador_adicional": {
         "name": "Utilizador adicional",
         "description": "Mais um lugar na equipa do tenant",
         "price_mt": 100,
+        "price_usd": 2,
         "type": "recurring",
     },
 }
@@ -170,6 +176,7 @@ def public_plan_rows() -> list[dict[str, Any]]:
             "id": data["id"],
             "name": data["nome"],
             "price_mt": int(amount),
+            "price_usd": int(data["price_usd"]),
             "validity_days": data["dias_validade"],
             "conversation_limit": data["limite_conversas"],
             "contact_limit": data["limite_contactos"],

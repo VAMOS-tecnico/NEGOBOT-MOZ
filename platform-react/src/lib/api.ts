@@ -41,6 +41,7 @@ export type Plan = {
   id: string;
   name: string;
   price_mt: number;
+  price_usd?: number;
   validity_days: number;
   conversation_limit?: number | null;
   contact_limit?: number;
@@ -57,6 +58,7 @@ export type PlanAddon = {
   name: string;
   description: string;
   price_mt: number;
+  price_usd?: number;
   type: string;
 };
 

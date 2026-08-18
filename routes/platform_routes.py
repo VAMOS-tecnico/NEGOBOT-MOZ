@@ -1338,10 +1338,12 @@ _PUBLIC_CHAT_RATE: dict[str, list[float]] = {}
 def _public_plan_answer() -> str:
     return (
         "Aqui estão os planos NEGOBOT-MOZ:\n\n"
-        "• Básico — 500 MT/mês: até 1.500 conversas, FAQ, horário e catálogo em texto, 1 número de WhatsApp e suporte básico até 24 horas.\n"
-        "• Médio — 1.000 MT/mês: conversas ilimitadas, fotos, leitura básica de Excel, menu interativo, relatórios e suporte prioritário até 12 horas.\n"
-        "• Premium — 1.500 MT/mês: IA avançada, áudio, PDFs, documentos, artes publicitárias, campanhas e disparos em massa e suporte dedicado.\n\n"
-        "Todos os planos têm validade de 30 dias e começam com demonstração de 2 dias. O pagamento é feito manualmente por M-Pesa para 855000929, em nome de Abel Francisco. Depois da validação pelo AutoPay, a Evolution API prepara o QR Code para ligares o WhatsApp."
+        "Para clientes em Moçambique:\n"
+        "• Básico — 500 MT/mês: até 1.500 conversas/contactos, 1 utilizador, 2 campanhas por mês e WhatsApp.\n"
+        "• Médio — 1.000 MT/mês: até 5.000 conversas/contactos, 3 utilizadores, 10 campanhas por mês e mais 1 canal aprovado.\n"
+        "• Premium — 1.500 MT/mês: até 15.000 conversas/contactos, 5 utilizadores, 25 campanhas por mês e até 3 canais adicionais aprovados.\n\n"
+        "Para clientes internacionais, os mesmos planos são apresentados em USD: Basic USD 8/mês, Growth USD 16/mês e Premium USD 24/mês. O pagamento internacional é feito por cartão ou PayPal através do checkout Lemon Squeezy. Os preços em USD são valores comerciais fixos; o checkout mostra o valor final configurado.\n\n"
+        "Todos os planos têm validade de 30 dias e começam com demonstração de 2 dias. Clientes de Moçambique pagam por M-Pesa para 855000929, em nome de Abel Francisco; depois da validação pelo AutoPay, a Evolution API prepara o QR Code para ligar o WhatsApp."
     )
 
 
@@ -1370,7 +1372,7 @@ def public_assistant_chat():
         _db().collection("public_leads").add({"source": source, "message": message[:1200], "created_at": _now()})
     except Exception:
         pass
-    prompt = """És o assistente comercial público do NEGOBOT-MOZ, em Português de Moçambique. Explica com clareza os planos reais: Básico 500 MT/mês com até 1.500 conversas e FAQ/catalogo em texto; Médio 1.000 MT/mês com conversas ilimitadas, fotos, Excel básico, menus e relatórios; Premium 1.500 MT/mês com IA avançada, PDFs, documentos, áudio, artes publicitárias e disparos em massa. Todos têm validade de 30 dias e existe demonstração de 2 dias. O pagamento é manual via M-Pesa para 855000929 em nome de Abel Francisco. Nunca digas que um pagamento foi confirmado sem validação AutoPay. Explica que o cliente deve enviar o SMS ou ID da transferência na plataforma ou ao bot WhatsApp; depois da confirmação, a Evolution API prepara o QR Code. Sê comercial, honesto e breve. Não inventes preços, limites ou integrações."""
+    prompt = """És o assistente comercial público do NEGOBOT-MOZ, em Português de Moçambique. Explica apenas os planos reais: para Moçambique, Básico 500 MT com até 1.500 conversas/contactos, Médio 1.000 MT com até 5.000 e Premium 1.500 MT com até 15.000; para clientes internacionais, mostra USD 8, USD 16 e USD 24, respectivamente. Todos têm validade de 30 dias e demonstração de 2 dias. M-Pesa é apenas para Moçambique; clientes internacionais usam cartão ou PayPal no checkout Lemon Squeezy. Nunca digas que um pagamento foi confirmado sem validação. Sê comercial, honesto e breve. Não inventes preços, limites ou integrações."""
     if _public_is_plan_question(message):
         answer = _public_plan_answer()
     else:

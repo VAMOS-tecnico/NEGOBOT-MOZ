@@ -46,8 +46,11 @@ class PlanCatalogTests(unittest.TestCase):
         self.assertEqual([row["id"] for row in rows], ["basico", "medio", "premium"])
         self.assertEqual(rows[1]["campaigns_per_month"], 10)
         self.assertEqual(rows[2]["team_seats"], 5)
+        self.assertEqual([row["price_usd"] for row in rows], [8, 16, 24])
         self.assertIn("canais_plus", ADDONS)
         self.assertEqual(ADDONS["canais_plus"]["price_mt"], 500)
+        self.assertEqual(ADDONS["canais_plus"]["price_usd"], 8)
+        self.assertEqual(ADDONS["utilizador_adicional"]["price_usd"], 2)
 
 
 if __name__ == "__main__":
