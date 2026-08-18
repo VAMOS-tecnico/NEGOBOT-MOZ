@@ -61,6 +61,9 @@ export type ClientPlan = {
   expires_at?: string | null;
   mass_broadcast: boolean;
   limits?: Record<string, number>;
+  trial_status?: string;
+  billing_region?: "mozambique" | "international" | string;
+  selected_plan?: string | null;
 };
 
 export type IntegrationStatus = {
@@ -261,6 +264,11 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 export const api = {
   auth: {
     me: () => request<AuthState>("/api/platform/auth/me"),
+    register: (payload: { name: string; email: string; password: string; billing_region: "mozambique" | "international"; plan_id?: string }) =>
+      request<{ authenticated: true; user: PlatformUser; tenant: Tenant }>("/api/platform/auth/register", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
     login: (identifier: string, password: string) =>
       request<{ authenticated: true; user: PlatformUser }>("/api/platform/auth/login", {
         method: "POST",

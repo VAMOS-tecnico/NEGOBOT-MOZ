@@ -164,6 +164,64 @@ def login():
     return jsonify({"authenticated": True, "user": identity})
 
 
+@platform_bp.post("/auth/register")
+def register():
+    payload = request.get_json(silent=True) or {}
+    name = str(payload.get("name") or "").strip()
+    email = str(payload.get("email") or "").strip().lower()
+    password = str(payload.get("password") or "")
+    billing_region = str(payload.get("billing_region") or "mozambique").strip().lower()
+    selected_plan = str(payload.get("plan_id") or "").strip().lower()
+    if len(name) < 2 or not _EMAIL_RE.fullmatch(email) or len(password) < 8:
+        return jsonify({"error": "Nome, email válido e palavra-passe com pelo menos 8 caracteres são obrigatórios."}), 400
+    if billing_region not in {"mozambique", "international"}:
+        return jsonify({"error": "Escolhe Moçambique ou pagamento internacional."}), 400
+    if selected_plan and selected_plan not in {"basico", "medio", "premium"}:
+        return jsonify({"error": "Plano selecionado inválido."}), 400
+    if not _login_allowed(email):
+        return jsonify({"error": "Demasiadas tentativas. Aguarda alguns minutos antes de tentar novamente."}), 429
+    db = _db()
+    user_ref = db.collection("platform_users").document(_doc_id(email))
+    if user_ref.get().exists:
+        return jsonify({"error": "Já existe uma conta com este email. Usa a opção Entrar na plataforma."}), 409
+    tenant_id = f"tnt_{secrets.token_urlsafe(8)}"
+    now = _now()
+    tenant_ref = db.collection("tenants").document(tenant_id)
+    tenant_ref.set({
+        "name": name,
+        "email": email,
+        "account_email": email,
+        "empresa_nome": name,
+        "status": "active",
+        "plan": "demonstracao",
+        "plano": "demonstracao",
+        "nome_plano": "Demonstração",
+        "status_plano": "demonstracao",
+        "trial_status": "trial_pending_connection",
+        "trial_connection_confirmed": False,
+        "billing_region": billing_region,
+        "selected_plan": selected_plan or None,
+        "created_at": now,
+        "limits": {"contacts": 500, "campaigns_per_month": 2, "messages_per_campaign": 100},
+    })
+    user_ref.set({
+        "name": name,
+        "email": email,
+        "role": "client",
+        "tenant_id": tenant_id,
+        "tenant_role": "owner",
+        "status": "active",
+        "password_hash": generate_password_hash(password),
+        "created_at": now,
+        "last_login_at": now,
+    })
+    identity = {"id": user_ref.id, "name": name, "email": email, "role": "client", "tenant_id": tenant_id, "tenant_role": "owner"}
+    session.clear()
+    session["platform_identity"] = identity
+    session.permanent = True
+    return jsonify({"authenticated": True, "user": identity, "tenant": {"id": tenant_id, "name": name, "plan": "demonstracao"}}), 201
+
+
 @platform_bp.post("/auth/logout")
 def logout():
     session.pop("platform_identity", None)
@@ -867,6 +925,9 @@ def client_plan():
         "expires_at": data.get("data_expiracao"),
         "mass_broadcast": bool(data.get("disparo_liberado", False)),
         "limits": data.get("limits", {}),
+        "trial_status": data.get("trial_status", data.get("status_plano", "demonstracao")),
+        "billing_region": data.get("billing_region", "mozambique"),
+        "selected_plan": data.get("selected_plan"),
     })
 
 
@@ -879,6 +940,10 @@ def verify_mpesa_payment():
     if not message_text:
         return jsonify({"error": "Introduza o código ou SMS do M-Pesa."}), 400
     tenant_id = _tenant_for_identity(_identity())
+    tenant_document = _db().collection("tenants").document(tenant_id).get()
+    tenant_data = tenant_document.to_dict() or {}
+    if tenant_data.get("billing_region", "mozambique") == "international":
+        return jsonify({"error": "Esta conta está configurada para pagamento internacional. Usa o checkout Lemon Squeezy."}), 403
     intent_ref = None
     tx_id = None
     try:
@@ -1039,6 +1104,10 @@ def create_lemonsqueezy_checkout():
     tenant_id = _tenant_for_identity(_identity())
     if not tenant_id:
         return jsonify({"error": "Tenant não encontrado na sessão."}), 400
+    tenant_doc = _db().collection("tenants").document(tenant_id).get()
+    tenant = tenant_doc.to_dict() or {}
+    if tenant.get("billing_region", "mozambique") != "international":
+        return jsonify({"error": "Esta conta está configurada para M-Pesa. Usa a validação AutoPay na área de pagamentos."}), 403
     intent_ref = _db().collection("payment_intents").document()
     intent_ref.set({
         "tenant_id": tenant_id,
@@ -1050,8 +1119,6 @@ def create_lemonsqueezy_checkout():
         "created_at": _now(),
     })
     identity = _identity() or {}
-    tenant_doc = _db().collection("tenants").document(tenant_id).get()
-    tenant = tenant_doc.to_dict() or {}
     try:
         checkout = create_checkout(
             plan_id=plan_id,

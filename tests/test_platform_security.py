@@ -222,6 +222,27 @@ class PlatformSecurityTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual([item["id"] for item in response.get_json()["payments"]], ["payment-a"])
 
+    def test_public_registration_creates_isolated_pending_trial_and_session(self):
+        response = self.client.post("/api/platform/auth/register", json={"name": "Loja Maputo", "email": "novo@example.com", "password": "password-123", "billing_region": "international", "plan_id": "premium"})
+        self.assertEqual(response.status_code, 201)
+        payload = response.get_json()
+        self.assertTrue(payload["authenticated"])
+        tenant_id = payload["tenant"]["id"]
+        tenant = self.db.collections["tenants"][tenant_id].data
+        self.assertEqual(tenant["trial_status"], "trial_pending_connection")
+        self.assertEqual(tenant["billing_region"], "international")
+        self.assertEqual(tenant["selected_plan"], "premium")
+        self.assertEqual(self.db.collections["platform_users"][platform_routes._doc_id("novo@example.com")].data["tenant_id"], tenant_id)
+        with self.client.session_transaction() as session:
+            self.assertEqual(session["platform_identity"]["tenant_id"], tenant_id)
+
+    def test_public_registration_rejects_duplicate_email(self):
+        email = "duplicate@example.com"
+        self.db.collections["platform_users"] = {platform_routes._doc_id(email): FakeSnapshot(platform_routes._doc_id(email), {"email": email})}
+        response = self.client.post("/api/platform/auth/register", json={"name": "Duplicado", "email": email, "password": "password-123", "billing_region": "mozambique"})
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("Já existe", response.get_json()["error"])
+
     def test_login_rate_limit_applies_before_credential_lookup(self):
         for _ in range(8):
             response = self.client.post("/api/platform/auth/login", json={"identifier": "admin", "password": "wrong-password"})
