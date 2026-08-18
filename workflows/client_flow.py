@@ -262,24 +262,16 @@ def process_client_flow(
                 send_whatsapp(clean_user_phone, ajuda_txt, instance_name=nome_instancia_atual)
                 return
 
-            # Validação de Permissão de Plano (Se não for Admin)
-            if not is_admin and status_plano not in ["premium", "demonstracao", "ativo"]:
+            # A demonstração activa herda a capacidade de campanhas do Premium.
+            # O estado pendente e os planos pagos sem esta capacidade continuam bloqueados.
+            current_entitlements = entitlements_for_tenant(dados_cliente)
+            if not is_admin and not current_entitlements.get("mass_broadcast"):
                 send_whatsapp(
                     clean_user_phone,
-                    "❌ *Recurso Indisponível:* O envio de disparos em massa é exclusivo do *Plano Premium*.",
+                    "❌ *Recurso Indisponível:* o envio de disparos em massa está disponível no Premium ou durante a demonstração Premium.",
                     instance_name=nome_instancia_atual
                 )
                 return
-
-            if not is_admin and status_plano == "demonstracao":
-                disparos_usados = dados_cliente.get("disparos_teste_usados", 0)
-                if disparos_usados >= 2:
-                    send_whatsapp(
-                        clean_user_phone,
-                        "⚠️ *Limite de Teste Atingido:* No plano de demonstração são permitidos apenas 2 disparos. Assine o Plano Premium para disparar sem limites!",
-                        instance_name=nome_instancia_atual
-                    )
-                    return
 
             # Extração de Números e Mensagem
             conteudo = message_text.replace("#disparo", "").replace("#broadcast", "").strip()
