@@ -12,3 +12,4 @@ groq
 setuptools
 edge-tts
 redis==5.0.8
+cryptography>=42,<47

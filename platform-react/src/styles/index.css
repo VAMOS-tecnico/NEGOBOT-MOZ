@@ -230,3 +230,31 @@ select:focus { border-color: rgba(98, 226, 171, .7); box-shadow: 0 0 0 3px rgba(
 .trial-premium-banner strong, .trial-expired-banner strong { color: #ecfff3; font-size: 14px; }
 .trial-premium-banner p, .trial-expired-banner p { margin: 0; color: #a7cbb6; font-size: 11px; line-height: 1.55; }
 .trial-expired-banner p { color: #d5bd8c; }
+
+/* Telegram connection wizard */
+.modal-backdrop { position: fixed; z-index: 60; inset: 0; display: grid; place-items: center; padding: 20px; background: rgba(2, 9, 7, .78); backdrop-filter: blur(8px); }
+.channel-modal { width: min(100%, 560px); max-height: min(720px, calc(100vh - 40px)); overflow: auto; padding: 22px; border: 1px solid rgba(98, 226, 171, .28); border-radius: 17px; color: #e7f7eb; background: #102820; box-shadow: 0 28px 90px rgba(0, 0, 0, .45); }
+.channel-modal .panel-heading { margin-bottom: 18px; }
+.icon-button { display: grid; width: 32px; height: 32px; place-items: center; border: 1px solid rgba(117, 173, 148, .18); border-radius: 8px; color: #a4bcae; background: rgba(5, 15, 12, .4); cursor: pointer; }
+.icon-button:hover { color: #e7f7eb; border-color: rgba(98, 226, 171, .45); }
+.telegram-steps { display: grid; gap: 10px; margin-bottom: 18px; }
+.telegram-steps > div { display: flex; align-items: flex-start; gap: 11px; padding: 11px 12px; border: 1px solid rgba(117, 173, 148, .12); border-radius: 11px; background: rgba(5, 15, 12, .3); }
+.telegram-steps > div > span { display: grid; width: 23px; height: 23px; flex: 0 0 auto; place-items: center; border-radius: 7px; color: #082117; background: #62e2ab; font-size: 12px; font-weight: 800; }
+.telegram-steps p { display: grid; gap: 3px; margin: 0; }
+.telegram-steps strong { color: #e2f7e8; font-size: 12px; }
+.telegram-steps small { color: #9bb5a9; font-size: 11px; line-height: 1.4; }
+.telegram-steps a { display: inline-flex; align-items: center; gap: 5px; width: fit-content; margin-top: 3px; color: #7ce0ae; font-size: 11px; font-weight: 700; }
+.telegram-token-field { display: grid; gap: 7px; color: #cfe6d7; font-size: 12px; font-weight: 700; }
+.token-input-wrap { display: flex; align-items: center; border: 1px solid rgba(117, 173, 148, .22); border-radius: 9px; background: rgba(5, 15, 12, .58); }
+.token-input-wrap:focus-within { border-color: rgba(98, 226, 171, .72); box-shadow: 0 0 0 3px rgba(98, 226, 171, .1); }
+.token-input-wrap input { min-width: 0; flex: 1; padding: 13px 14px; border: 0; outline: 0; color: #e7f7eb; background: transparent; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.token-action { display: grid; width: 42px; height: 42px; place-items: center; border: 0; color: #8ba99a; background: transparent; cursor: pointer; }
+.token-action:hover { color: #cfe6d7; }
+.paste-token-button { width: 100%; justify-content: center; margin-top: 10px; }
+.security-note { display: flex; align-items: center; gap: 6px; margin: 12px 0; color: #82b79a; font-size: 11px; line-height: 1.45; }
+.security-note svg { flex: 0 0 auto; color: #62e2ab; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 17px; }
+.modal-actions .primary-button, .modal-actions .secondary-button { justify-content: center; }
+.spin { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (max-width: 560px) { .modal-backdrop { padding: 10px; } .channel-modal { padding: 17px; border-radius: 14px; } .modal-actions { flex-direction: column-reverse; } .modal-actions button { width: 100%; justify-content: center; } }

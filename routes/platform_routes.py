@@ -19,6 +19,8 @@ import extensions
 from services.trial_service import active_fields, is_expired as trial_is_expired, is_paid_plan, pending_fields
 from services.channel_registry import CHANNEL_STATUSES, client_channel_rows, ensure_channel
 from services.plan_service import entitlements_for_tenant, plan_channel_limit, public_plan_rows
+from services.secret_store import SecretStoreError, decrypt_secret, encrypt_secret
+from services.telegram_service import TelegramApiError, delete_webhook, get_me, get_webhook_info, set_webhook
 
 platform_bp = Blueprint("platform", __name__, url_prefix="/api/platform")
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -1657,6 +1659,88 @@ def client_channels():
         return jsonify({"error": "Tenant não encontrado."}), 404
     tenant = tenant_document.to_dict() or {}
     return jsonify({"tenant_id": tenant_id, "channels": client_channel_rows(tenant)})
+
+
+@platform_bp.get("/client/channels/telegram")
+@_require_roles("client", "operator")
+def telegram_channel_status():
+    tenant_id = _tenant_for_identity(_identity())
+    tenant = _tenant_data(tenant_id)
+    telegram = dict((tenant.get("channels") or {}).get("telegram") or {})
+    info = telegram.get("last_webhook_info") if isinstance(telegram.get("last_webhook_info"), dict) else {}
+    return jsonify({
+        "channel": "telegram",
+        "status": telegram.get("status", "not_configured"),
+        "bot": {"id": telegram.get("bot_id"), "username": telegram.get("bot_username"), "name": telegram.get("bot_name")},
+        "webhook_url": telegram.get("webhook_url"),
+        "last_event_at": telegram.get("last_event_at"),
+        "last_error": telegram.get("last_error") or info.get("last_error_message"),
+        "pending_update_count": info.get("pending_update_count", 0),
+        "has_token": bool(telegram.get("token_ciphertext")),
+    })
+
+
+@platform_bp.post("/client/channels/telegram/connect")
+@_require_tenant_roles("owner", "operator")
+def connect_telegram():
+    payload = request.get_json(silent=True) or {}
+    token = str(payload.get("bot_token") or "").strip()
+    if not token or len(token) > 256:
+        return jsonify({"error": "Introduz um token Telegram válido."}), 400
+    tenant_id = _tenant_for_identity(_identity())
+    webhook_base = str(os.getenv("PUBLIC_API_BASE_URL") or "https://negobot-api.duckdns.org").rstrip("/")
+    webhook_url = f"{webhook_base}/api/omnichannel/telegram/{tenant_id}"
+    try:
+        bot = get_me(token)
+        secret_token = secrets.token_hex(32)
+        set_webhook(token, url=webhook_url, secret_token=secret_token)
+        info = get_webhook_info(token)
+    except (TelegramApiError, SecretStoreError) as exc:
+        _audit("telegram_webhook_setup_failed", _identity(), tenant_id, {"error": str(exc)[:240]})
+        return jsonify({"error": "Não foi possível validar ou registar o bot Telegram."}), 502
+    if str(info.get("url") or "") != webhook_url:
+        _audit("telegram_webhook_verification_failed", _identity(), tenant_id, {})
+        return jsonify({"error": "O Telegram não confirmou o URL do webhook."}), 502
+    tenant_ref = _db().collection("tenants").document(tenant_id)
+    tenant = tenant_ref.get().to_dict() or {}
+    channels = dict(tenant.get("channels") or {}) if isinstance(tenant.get("channels"), dict) else {}
+    channels["telegram"] = {
+        "status": "connected",
+        "setup": "bot_token",
+        "provider": "Telegram Bot API",
+        "bot_id": str(bot.get("id")),
+        "bot_username": bot.get("username"),
+        "bot_name": bot.get("first_name"),
+        "token_ciphertext": encrypt_secret(token),
+        "webhook_secret_ciphertext": encrypt_secret(secret_token),
+        "webhook_url": webhook_url,
+        "last_webhook_info": {"pending_update_count": info.get("pending_update_count", 0), "last_error_message": info.get("last_error_message"), "last_error_date": info.get("last_error_date")},
+        "connected_at": _now(),
+        "updated_at": _now(),
+    }
+    tenant_ref.set({"channels": channels, "updated_at": _now()}, merge=True)
+    _audit("telegram_webhook_connected", _identity(), tenant_id, {"bot_id": str(bot.get("id"))})
+    return jsonify({"connected": True, "channel": "telegram", "bot": {"id": bot.get("id"), "username": bot.get("username"), "name": bot.get("first_name")}, "webhook_url": webhook_url, "pending_update_count": info.get("pending_update_count", 0)})
+
+
+@platform_bp.post("/client/channels/telegram/disconnect")
+@_require_tenant_roles("owner", "operator")
+def disconnect_telegram():
+    tenant_id = _tenant_for_identity(_identity())
+    tenant_ref = _db().collection("tenants").document(tenant_id)
+    tenant = tenant_ref.get().to_dict() or {}
+    channels = dict(tenant.get("channels") or {}) if isinstance(tenant.get("channels"), dict) else {}
+    telegram = dict(channels.get("telegram") or {})
+    ciphertext = str(telegram.get("token_ciphertext") or "")
+    if ciphertext:
+        try:
+            delete_webhook(decrypt_secret(ciphertext))
+        except (TelegramApiError, SecretStoreError):
+            pass
+    channels["telegram"] = {"status": "disabled", "provider": "Telegram Bot API", "updated_at": _now()}
+    tenant_ref.set({"channels": channels, "updated_at": _now()}, merge=True)
+    _audit("telegram_webhook_disconnected", _identity(), tenant_id, {})
+    return jsonify({"disconnected": True, "channel": "telegram"})
 
 
 @platform_bp.patch("/client/channels/<channel>")

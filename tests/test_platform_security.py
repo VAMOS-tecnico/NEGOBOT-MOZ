@@ -14,6 +14,7 @@ dotenv_stub.load_dotenv = lambda: None
 sys.modules.setdefault("dotenv", dotenv_stub)
 os.environ.setdefault("PLATFORM_SECRET_KEY", "platform-test-secret")
 os.environ.setdefault("ADMIN_TOKEN", "admin-test-token")
+os.environ.setdefault("TELEGRAM_TOKEN_ENCRYPTION_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
 
 import extensions
 extensions.init_extensions = lambda _app: None
@@ -133,6 +134,34 @@ class PlatformSecurityTests(unittest.TestCase):
         self.assertIn("Médio — 1.000 MT/mês", answer)
         self.assertIn("Premium — 1.500 MT/mês", answer)
         self.assertIn("855000929", answer)
+
+    @patch("routes.platform_routes.get_me")
+    @patch("routes.platform_routes.set_webhook")
+    @patch("routes.platform_routes.get_webhook_info")
+    def test_owner_can_connect_telegram_without_exposing_token(self, mock_info, mock_set, mock_me):
+        self.db.collections["tenants"] = {"tenant-a": FakeSnapshot("tenant-a", {"tenant_id": "tenant-a", "channels": {}})}
+        mock_me.return_value = {"id": 123, "username": "cliente_bot", "first_name": "Cliente"}
+        mock_info.return_value = {"url": "https://negobot-api.duckdns.org/api/omnichannel/telegram/tenant-a", "pending_update_count": 0}
+        set_identity(self.client, {"id": "user-a", "name": "A", "role": "client", "tenant_id": "tenant-a", "tenant_role": "owner"})
+        response = self.client.post("/api/platform/client/channels/telegram/connect", json={"bot_token": "123:SECRET"})
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("123:SECRET", response.get_data(as_text=True))
+        stored = self.db.collections["tenants"]["tenant-a"].data["channels"]["telegram"]
+        self.assertEqual(stored["status"], "connected")
+        self.assertTrue(stored["token_ciphertext"].startswith("gAAAA"))
+        self.assertTrue(stored["webhook_secret_ciphertext"].startswith("gAAAA"))
+        self.assertNotIn("123:SECRET", stored["token_ciphertext"])
+        mock_set.assert_called_once()
+
+    def test_telegram_status_does_not_return_secrets(self):
+        self.db.collections["tenants"] = {"tenant-a": FakeSnapshot("tenant-a", {"tenant_id": "tenant-a", "channels": {"telegram": {"status": "connected", "token_ciphertext": "gAAAA-secret", "webhook_secret_ciphertext": "gAAAA-webhook", "bot_username": "cliente_bot"}}})}
+        set_identity(self.client, {"id": "user-a", "name": "A", "role": "client", "tenant_id": "tenant-a", "tenant_role": "owner"})
+        response = self.client.get("/api/platform/client/channels/telegram")
+        self.assertEqual(response.status_code, 200)
+        body = response.get_json()
+        self.assertTrue(body["has_token"])
+        self.assertNotIn("token_ciphertext", body)
+        self.assertNotIn("webhook_secret_ciphertext", body)
 
     def test_client_cannot_open_admin_endpoints(self):
         set_identity(self.client, {"id": "user-a", "name": "Cliente A", "role": "client", "tenant_id": "tenant-a", "tenant_role": "owner"})

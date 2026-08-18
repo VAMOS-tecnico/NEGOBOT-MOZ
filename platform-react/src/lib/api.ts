@@ -94,6 +94,17 @@ export type IntegrationStatus = {
 
 export type ChannelStatus = "not_configured" | "pending_authorization" | "pending_review" | "connected" | "disabled" | "error";
 
+export type TelegramChannelInfo = {
+  channel: "telegram";
+  status: ChannelStatus;
+  bot: { id?: string | number; username?: string; name?: string };
+  webhook_url?: string | null;
+  last_event_at?: string | null;
+  last_error?: string | null;
+  pending_update_count?: number;
+  has_token?: boolean;
+};
+
 export type ClientChannel = {
   key: string;
   label: string;
@@ -336,6 +347,9 @@ export const api = {
     integrationStatus: () => request<IntegrationStatus>("/api/platform/client/integration/status"),
     channels: () => request<{ tenant_id?: string; channels: ClientChannel[] }>("/api/platform/client/channels"),
     updateChannel: (channel: string, status: "disabled" | "not_configured") => request<{ updated: true; channel: string; status: string }>(`/api/platform/client/channels/${encodeURIComponent(channel)}`, { method: "PATCH", body: JSON.stringify({ status }) }),
+    telegramStatus: () => request<TelegramChannelInfo>("/api/platform/client/channels/telegram"),
+    connectTelegram: (botToken: string) => request<{ connected: true; channel: "telegram"; bot: TelegramChannelInfo["bot"]; webhook_url: string; pending_update_count: number }>("/api/platform/client/channels/telegram/connect", { method: "POST", body: JSON.stringify({ bot_token: botToken }) }),
+    disconnectTelegram: () => request<{ disconnected: true; channel: "telegram" }>("/api/platform/client/channels/telegram/disconnect", { method: "POST" }),
     team: () => request<{ users: TeamMember[]; current_role?: string }>("/api/platform/client/team"),
     createOperator: (name: string, email: string, password: string) => request<{ created: true; user: TeamMember }>("/api/platform/client/team", { method: "POST", body: JSON.stringify({ name, email, password }) }),
     updateTeamMember: (id: string, fields: { status?: "active" | "suspended"; tenant_role?: "operator" | "viewer" }) => request<{ updated: true }>(`/api/platform/client/team/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(fields) }),
