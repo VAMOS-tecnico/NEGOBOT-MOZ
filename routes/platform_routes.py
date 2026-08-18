@@ -1007,7 +1007,7 @@ def client_plan():
     team_usage = _count_tenant_team(tenant_id or "")
     return jsonify({
         "plan": data.get("plano", data.get("plan", entitlements["plan_id"])),
-        "plan_name": data.get("nome_plano", entitlements["plan_name"]),
+        "plan_name": entitlements["plan_name"] if entitlements.get("trial_access") else data.get("nome_plano", entitlements["plan_name"]),
         "status": data.get("status_plano", data.get("status", "demonstracao")),
         "expires_at": data.get("data_expiracao"),
         "mass_broadcast": bool(data.get("disparo_liberado", entitlements["mass_broadcast"])),
@@ -1016,6 +1016,9 @@ def client_plan():
         "trial_status": data.get("trial_status", data.get("status_plano", "demonstracao")),
         "billing_region": data.get("billing_region", "mozambique"),
         "selected_plan": data.get("selected_plan"),
+        "trial_access": bool(entitlements.get("trial_access", False)),
+        "trial_access_level": entitlements.get("trial_access_level", "standard"),
+        "trial_features": ["vídeo", "PDFs e documentos", "áudio", "imagens", "campanhas avançadas", "funcionalidades Premium"] if entitlements.get("trial_access") else [],
     })
 
 

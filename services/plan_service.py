@@ -117,9 +117,39 @@ DEMO_ENTITLEMENTS: dict[str, Any] = {
     "mass_broadcast": False,
     "ai_media": False,
     "api_enabled": False,
+    "video_enabled": False,
+    "document_ai": False,
+    "audio_ai": False,
+    "image_ai": False,
+    "trial_access": False,
+    "trial_access_level": "standard",
 }
 
 PLAN_BY_ID = {data["id"]: data for data in TABELA_PLANOS.values()}
+
+
+def trial_premium_entitlements() -> dict[str, Any]:
+    """Acesso Premium temporário do trial; nunca altera o plano pago do tenant."""
+    premium = PLAN_BY_ID["premium"]
+    return {
+        "plan_id": "demonstracao",
+        "plan_name": "Demonstração Premium",
+        "conversation_limit": premium["limite_conversas"],
+        "contact_limit": premium["limite_contactos"],
+        "campaigns_per_month": premium["campanhas_por_mes"],
+        "team_seats": premium["lugares_equipa"],
+        "included_channels": list(premium["canais_incluidos"]),
+        "additional_channel_slots": premium["canais_adicionais"],
+        "mass_broadcast": True,
+        "ai_media": True,
+        "api_enabled": bool(premium["api_incluida"]),
+        "video_enabled": True,
+        "document_ai": True,
+        "audio_ai": True,
+        "image_ai": True,
+        "trial_access": True,
+        "trial_access_level": "premium",
+    }
 
 
 def plan_for_id(plan_id: str | None) -> dict[str, Any] | None:
@@ -132,6 +162,11 @@ def entitlements_for_tenant(tenant: dict[str, Any] | None) -> dict[str, Any]:
     data = tenant or {}
     plan_id = str(data.get("plan_id") or data.get("plano") or data.get("plan") or "demonstracao").strip().lower()
     plan = plan_for_id(plan_id)
+    trial_status = str(data.get("trial_status") or "").strip().lower()
+    if trial_status == "trial_active" and not data.get("plan_rules_version") and not (str(data.get("status_plano") or data.get("status") or "").lower() in {"ativo", "active", "paid"}):
+        from services.trial_service import is_expired as trial_is_expired
+        if not trial_is_expired(data):
+            return trial_premium_entitlements()
     if not plan or str(data.get("status_plano") or data.get("status") or "").lower() not in {"ativo", "active"}:
         result = deepcopy(DEMO_ENTITLEMENTS)
         stored_limits = data.get("limits") or {}
@@ -151,6 +186,12 @@ def entitlements_for_tenant(tenant: dict[str, Any] | None) -> dict[str, Any]:
         "mass_broadcast": bool(plan["disparo_liberado"]),
         "ai_media": bool(plan["ia_media"]),
         "api_enabled": bool(plan["api_incluida"]),
+        "video_enabled": bool(plan["id"] == "premium"),
+        "document_ai": bool(plan["id"] in {"medio", "premium"}),
+        "audio_ai": bool(plan["id"] == "premium"),
+        "image_ai": bool(plan["id"] == "premium"),
+        "trial_access": False,
+        "trial_access_level": "paid",
     }
     # Clientes pagos antes desta tabela são grandfathered até à renovação.
     # Assim, uma alteração comercial não corta silenciosamente conversas ou campanhas.

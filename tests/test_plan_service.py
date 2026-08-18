@@ -1,7 +1,9 @@
 import unittest
+from datetime import datetime, timedelta, timezone
 
 from services.payment_service import TABELA_PLANOS, identificar_plano_por_valor
 from services.plan_service import ADDONS, DEMO_ENTITLEMENTS, entitlements_for_tenant, plan_channel_limit, public_plan_rows
+from services.trial_service import active_fields
 
 
 class PlanCatalogTests(unittest.TestCase):
@@ -26,6 +28,27 @@ class PlanCatalogTests(unittest.TestCase):
         self.assertEqual(premium["conversation_limit"], 15000)
         self.assertEqual(premium["additional_channel_slots"], 3)
         self.assertTrue(premium["mass_broadcast"])
+
+    def test_active_trial_gets_temporary_premium_entitlements(self):
+        connected_at = datetime(2026, 8, 18, 12, 0, tzinfo=timezone.utc)
+        trial = active_fields("258840000000", connected_at)
+        entitlements = entitlements_for_tenant(trial)
+        self.assertTrue(entitlements["trial_access"])
+        self.assertEqual(entitlements["trial_access_level"], "premium")
+        self.assertEqual(entitlements["conversation_limit"], 15000)
+        self.assertEqual(entitlements["campaigns_per_month"], 25)
+        self.assertTrue(entitlements["video_enabled"])
+        self.assertTrue(entitlements["document_ai"])
+        self.assertTrue(entitlements["audio_ai"])
+        self.assertTrue(entitlements["image_ai"])
+
+    def test_expired_trial_falls_back_to_demo_entitlements(self):
+        connected_at = datetime(2026, 8, 15, 12, 0, tzinfo=timezone.utc)
+        trial = {**active_fields("258840000000", connected_at), "trial_expires_at": connected_at - timedelta(minutes=1)}
+        entitlements = entitlements_for_tenant(trial)
+        self.assertFalse(entitlements.get("trial_access", False))
+        self.assertEqual(entitlements["contact_limit"], DEMO_ENTITLEMENTS["contact_limit"])
+        self.assertFalse(entitlements["video_enabled"])
 
     def test_demo_never_gets_paid_entitlements(self):
         result = entitlements_for_tenant({"plano": "premium", "status_plano": "demonstracao"})

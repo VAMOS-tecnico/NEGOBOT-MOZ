@@ -30,7 +30,7 @@ RESPOSTA_SAUDACAO_NEGOBOT = (
     "uma plataforma de automação de WhatsApp com Inteligência Artificial para negócios "
     "em Moçambique. Ajudamos empresas e empreendedores a atender clientes 24/7 de "
     "forma eficiente e personalizada. Escreva TESTE para experimentar a plataforma "
-    "grátis durante 2 dias."
+    "com acesso Premium completo durante 2 dias."
 )
 
 RESPOSTA_PLANOS_NEGOBOT = (
@@ -42,9 +42,9 @@ RESPOSTA_PLANOS_NEGOBOT = (
     "• Suporte técnico básico até 24h.\\n"
     "• Não inclui PDF/Excel, fotos, áudios nem disparos em massa.\\n\\n"
     "2. *Plano Médio — 1.000 MT/mês*\\n"
-    "• Tudo do Básico e conversas ilimitadas.\\n"
-    "• Processamento de fotos e leitura básica de tabelas Excel.\\n"
-    "• Menu interativo e relatórios mensais de utilização.\\n"
+    "• Até 5.000 conversas/contactos, 3 utilizadores e 10 campanhas por mês.\\n"
+    "• Tudo do Básico, mais fotos, leitura básica de tabelas Excel e relatórios.\\n"
+    "• WhatsApp e mais 1 canal aprovado.\\n"
     "• Suporte prioritário até 12h.\\n\\n"
     "3. *Plano Premium — 1.500 MT/mês*\\n"
     "• Tudo do Médio e automação avançada com IA.\\n"
@@ -52,8 +52,8 @@ RESPOSTA_PLANOS_NEGOBOT = (
     "• Interpretação de áudios e geração de artes com #imagem.\\n"
     "• Campanhas e disparos em massa para a base de contactos, com utilização responsável.\\n"
     "• Suporte dedicado e acompanhamento inicial.\\n\\n"
-    "Não paga nada agora: pode testar qualquer plano durante 2 dias sem compromisso. "
-    "Escreva TESTE para começar."
+    "Não paga nada agora: escreva TESTE para activar 2 dias de acesso Premium completo, incluindo vídeo, PDFs, documentos, áudio, imagens, IA avançada e campanhas. "
+    "Quando terminar, escolha Básico, Médio ou Premium para continuar."
 )
 
 SAUDACOES_NEGOBOT = {

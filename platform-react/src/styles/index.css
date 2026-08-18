@@ -221,3 +221,12 @@ select:focus { border-color: rgba(98, 226, 171, .7); box-shadow: 0 0 0 3px rgba(
 .onboarding-mini-banner small { color: #8eb5a0; font-size: 11px; line-height: 1.45; }
 .onboarding-mini-banner .primary-button { display: inline-flex; align-items: center; gap: 6px; padding: 10px 12px; white-space: nowrap; }
 @media (max-width: 680px) { .onboarding-mini-banner { align-items: flex-start; flex-wrap: wrap; } .onboarding-mini-banner .primary-button { width: 100%; justify-content: center; } }
+
+.trial-premium-banner, .trial-expired-banner { display: flex; align-items: center; gap: 14px; padding: 16px; border-radius: 14px; }
+.trial-premium-banner { border: 1px solid rgba(100, 226, 171, .25); background: linear-gradient(100deg, rgba(47, 139, 96, .25), rgba(24, 66, 49, .36)); }
+.trial-expired-banner { justify-content: space-between; border: 1px solid rgba(245, 184, 82, .24); background: linear-gradient(100deg, rgba(131, 92, 31, .2), rgba(58, 43, 21, .32)); color: #f5d89f; }
+.trial-premium-icon { display: grid; width: 42px; height: 42px; flex: 0 0 auto; place-items: center; border-radius: 12px; color: #092017; background: linear-gradient(135deg, #70e7b2, #c2f8bd); }
+.trial-premium-banner > div:last-child, .trial-expired-banner > div { display: flex; flex-direction: column; gap: 4px; }
+.trial-premium-banner strong, .trial-expired-banner strong { color: #ecfff3; font-size: 14px; }
+.trial-premium-banner p, .trial-expired-banner p { margin: 0; color: #a7cbb6; font-size: 11px; line-height: 1.55; }
+.trial-expired-banner p { color: #d5bd8c; }

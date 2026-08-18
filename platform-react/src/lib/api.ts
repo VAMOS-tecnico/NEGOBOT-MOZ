@@ -81,6 +81,9 @@ export type ClientPlan = {
   trial_status?: string;
   billing_region?: "mozambique" | "international" | string;
   selected_plan?: string | null;
+  trial_access?: boolean;
+  trial_access_level?: string;
+  trial_features?: string[];
 };
 
 export type IntegrationStatus = {

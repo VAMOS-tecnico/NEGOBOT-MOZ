@@ -140,14 +140,14 @@ def _mark_trial_connection_open(instance_name: str, data: dict) -> None:
         extensions.db.collection("clientes").document(digits).set({
             "status": "trial" if not is_paid_plan(current) else "active",
             "trial_status": fields.get("trial_status", current.get("trial_status")),
-            **{key: fields[key] for key in ("trial_connected_at", "trial_expires_at", "data_ativacao", "data_expiracao") if key in fields},
+            **{key: fields[key] for key in ("trial_access_level", "trial_connected_at", "trial_expires_at", "data_ativacao", "data_expiracao") if key in fields},
         }, merge=True)
 
     tenant_fields = {
         "instance_name": instance_name,
         "telefone_proprietario": digits or instance_name,
         "evolution_state": "open",
-        **{key: fields[key] for key in ("trial_status", "trial_connected_at", "trial_expires_at", "data_ativacao", "data_expiracao", "trial_connection_confirmed") if key in fields},
+        **{key: fields[key] for key in ("trial_status", "trial_access_level", "trial_connected_at", "trial_expires_at", "data_ativacao", "data_expiracao", "trial_connection_confirmed") if key in fields},
     }
     for tenant_ref in tenant_refs:
         tenant_ref.set(tenant_fields, merge=True)
