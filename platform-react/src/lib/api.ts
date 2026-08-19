@@ -114,6 +114,9 @@ export type ClientChannel = {
   availability: string;
   status: ChannelStatus;
   external_account_id?: string | null;
+  external_account_name?: string | null;
+  connected_at?: string | null;
+  token_expires_at?: string | null;
   last_event_at?: string | null;
   last_error?: string | null;
   can_connect?: boolean;
@@ -426,6 +429,8 @@ export const api = {
     syncGroups: () => request<{ groups: WhatsAppGroup[]; total: number; verified: number; webhook_configured?: boolean }>("/api/platform/client/groups/sync", { method: "POST" }),
     updateGroup: (id: string, fields: Partial<Pick<WhatsAppGroup, "automation_enabled" | "mention_required" | "welcome_enabled" | "welcome_message" | "keywords">>) => request<{ updated: true; group_id: string; changes: Partial<WhatsAppGroup> }>(`/api/platform/client/groups/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(fields) }),
     updateChannel: (channel: string, status: "disabled" | "not_configured") => request<{ updated: true; channel: string; status: string }>(`/api/platform/client/channels/${encodeURIComponent(channel)}`, { method: "PATCH", body: JSON.stringify({ status }) }),
+    authorizeChannel: (channel: string) => request<{ channel: string; provider: string; status: ChannelStatus; authorize_url: string; expires_in: number }>(`/api/platform/client/channels/${encodeURIComponent(channel)}/authorize`),
+    disconnectOAuthChannel: (channel: string) => request<{ disconnected: true; channel: string; status: string }>(`/api/platform/client/channels/${encodeURIComponent(channel)}/disconnect`, { method: "POST" }),
     telegramStatus: () => request<TelegramChannelInfo>("/api/platform/client/channels/telegram"),
     connectTelegram: (botToken: string) => request<{ connected: true; channel: "telegram"; bot: TelegramChannelInfo["bot"]; webhook_url: string; pending_update_count: number }>("/api/platform/client/channels/telegram/connect", { method: "POST", body: JSON.stringify({ bot_token: botToken }) }),
     disconnectTelegram: () => request<{ disconnected: true; channel: "telegram" }>("/api/platform/client/channels/telegram/disconnect", { method: "POST" }),

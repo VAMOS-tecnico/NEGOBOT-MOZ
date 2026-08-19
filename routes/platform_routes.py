@@ -12,7 +12,7 @@ from typing import Any, Callable
 from urllib.parse import quote, urlparse
 
 import requests
-from flask import Blueprint, jsonify, request, session
+from flask import Blueprint, jsonify, redirect, request, session
 from werkzeug.security import check_password_hash, generate_password_hash
 
 import extensions
@@ -24,6 +24,7 @@ from services.secret_store import SecretStoreError, decrypt_secret, encrypt_secr
 from services.telegram_service import TelegramApiError, delete_webhook, get_me, get_webhook_info, set_webhook
 from services.group_automation_service import authorized_group_jids, group_document_id, sync_groups_for_tenant
 from services.channel_publication_service import channel_capability, create_publication_data, enqueue_publication
+from services.channel_oauth_service import complete_oauth, disconnect_oauth, provider_config, start_oauth
 
 platform_bp = Blueprint("platform", __name__, url_prefix="/api/platform")
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -2015,6 +2016,59 @@ def connect_telegram():
     tenant_ref.set({"channels": channels, **tenant_trial_fields, "central_account_id": central_account_id, "updated_at": _now()}, merge=True)
     _audit("telegram_webhook_connected", _identity(), tenant_id, {"bot_id": str(bot.get("id")), "trial_started_channel": tenant_trial_fields.get("trial_started_channel")})
     return jsonify({"connected": True, "channel": "telegram", "bot": {"id": bot.get("id"), "username": bot.get("username"), "name": bot.get("first_name")}, "webhook_url": webhook_url, "pending_update_count": info.get("pending_update_count", 0)})
+
+
+@platform_bp.get("/client/channels/<channel>/authorize")
+@_require_tenant_roles("owner")
+def authorize_client_channel(channel: str):
+    try:
+        channel = ensure_channel(channel)
+        if channel not in {"instagram", "facebook", "tiktok", "x", "linkedin"}:
+            return jsonify({"error": "Este canal não usa autorização OAuth."}), 400
+        result = start_oauth(_db(), channel, _tenant_for_identity(_identity()), str((_identity() or {}).get("id") or ""))
+        _audit("channel_oauth_started", _identity(), _tenant_for_identity(_identity()), {"channel": channel, "provider": result.get("provider")})
+        return jsonify(result)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 404
+    except RuntimeError as exc:
+        return jsonify({"error": str(exc)}), 409
+
+
+@platform_bp.get("/client/channels/<channel>/callback")
+def authorize_client_channel_callback(channel: str):
+    try:
+        channel = ensure_channel(channel)
+        result = complete_oauth(_db(), channel, str(request.args.get("code") or ""), str(request.args.get("state") or ""))
+        tenant_id = str(result.get("tenant_id") or "")
+        tenant = _tenant_data(tenant_id)
+        central_account_id = central_account_id_for_tenant(tenant)
+        registry = registry_status(_db(), central_account_id)
+        if central_account_id and not is_paid_plan(tenant) and not registry.get("trial_consumed"):
+            claimed, registry = claim_trial_for_account(_db(), central_account_id, tenant_id, channel, email=tenant.get("account_email") or tenant.get("email"))
+            if claimed:
+                tenant_ref = _db().collection("tenants").document(tenant_id)
+                tenant_ref.set({**trial_fields_from_registry(registry, channel, result.get("external_account_id") or "oauth"), "central_account_id": central_account_id, "updated_at": _now()}, merge=True)
+        _audit("channel_oauth_connected", {"role": "system"}, tenant_id, {"channel": channel, "external_account_id": result.get("external_account_id")})
+        frontend = str(os.getenv("PUBLIC_APP_BASE_URL") or "https://app-negobotmoz.duckdns.org/plataforma").rstrip("/")
+        return redirect(f"{frontend}/canais?oauth=success&channel={quote(channel)}")
+    except (ValueError, RuntimeError) as exc:
+        frontend = str(os.getenv("PUBLIC_APP_BASE_URL") or "https://app-negobotmoz.duckdns.org/plataforma").rstrip("/")
+        return redirect(f"{frontend}/canais?oauth=error&channel={quote(str(channel))}")
+
+
+@platform_bp.post("/client/channels/<channel>/disconnect")
+@_require_tenant_roles("owner")
+def disconnect_client_oauth_channel(channel: str):
+    try:
+        channel = ensure_channel(channel)
+        if channel not in {"instagram", "facebook", "tiktok", "x", "linkedin"}:
+            return jsonify({"error": "Este canal não usa desligamento OAuth."}), 400
+        tenant_id = _tenant_for_identity(_identity())
+        disconnect_oauth(_db(), channel, tenant_id)
+        _audit("channel_oauth_disconnected", _identity(), tenant_id, {"channel": channel})
+        return jsonify({"disconnected": True, "channel": channel, "status": "disabled"})
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 404
 
 
 @platform_bp.post("/client/channels/telegram/disconnect")

@@ -4,6 +4,7 @@ import { FaLinkedin } from "react-icons/fa";
 import { SiFacebook, SiGmail, SiInstagram, SiTelegram, SiTiktok, SiWhatsapp, SiX } from "react-icons/si";
 import type { IconType } from "react-icons";
 import { api, type ClientChannel, type TelegramChannelInfo } from "../lib/api";
+import { usePlatformLanguage } from "../lib/platformLanguage";
 
 const icons: Record<string, IconType> = {
   whatsapp: SiWhatsapp,
@@ -24,6 +25,14 @@ const statusLabels: Record<ClientChannel["status"], string> = {
   disabled: "Desligado",
   error: "Precisa de atenção",
 };
+const statusLabelsEnglish: Record<ClientChannel["status"], string> = {
+  connected: "Connected",
+  not_configured: "Not configured yet",
+  pending_authorization: "Waiting for authorisation",
+  pending_review: "Waiting for review",
+  disabled: "Disconnected",
+  error: "Needs attention",
+};
 
 function statusTone(status: ClientChannel["status"]): string {
   if (status === "connected") return "active";
@@ -32,15 +41,17 @@ function statusTone(status: ClientChannel["status"]): string {
   return "neutral";
 }
 
-function channelDescription(channel: ClientChannel): string {
-  if (channel.key === "whatsapp") return "Atendimento, QR Code e assistente Negobot através da Evolution API.";
-  if (channel.key === "telegram") return "Mensagens através de um bot Telegram próprio do teu negócio.";
-  if (channel.key === "email") return "Entrada e envio de email através de SMTP ou fornecedor transaccional.";
-  if (channel.requires_review) return `Disponível mediante autorização e revisão do ${channel.provider}.`;
-  return `Integração através de ${channel.provider}.`;
+function channelDescription(channel: ClientChannel, english: boolean): string {
+  if (channel.key === "whatsapp") return english ? "Customer care, QR Code and the Negobot assistant through Evolution API." : "Atendimento, QR Code e assistente Negobot através da Evolution API.";
+  if (channel.key === "telegram") return english ? "Messages through a Telegram bot owned by your business." : "Mensagens através de um bot Telegram próprio do teu negócio.";
+  if (channel.key === "email") return english ? "Inbound and outbound email through SMTP or a transactional provider." : "Entrada e envio de email através de SMTP ou fornecedor transaccional.";
+  if (channel.requires_review) return english ? `Available after ${channel.provider} authorisation and review.` : `Disponível mediante autorização e revisão do ${channel.provider}.`;
+  return english ? `Integration through ${channel.provider}.` : `Integração através de ${channel.provider}.`;
 }
 
 export function ChannelsPage() {
+  const { language } = usePlatformLanguage();
+  const english = language === "en";
   const [channels, setChannels] = useState<ClientChannel[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
@@ -69,6 +80,14 @@ export function ChannelsPage() {
   }
 
   useEffect(() => { void load(); }, []);
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const result = params.get("oauth");
+    const channel = params.get("channel");
+    if (result === "success") setNotice(english ? `${channel || "Channel"} connected successfully.` : `${channel || "Canal"} ligado com sucesso.`);
+    if (result === "error") setError(english ? `Could not complete ${channel || "channel"} authorisation.` : `Não foi possível concluir a autorização de ${channel || "canal"}.`);
+    if (result) window.history.replaceState({}, document.title, window.location.pathname);
+  }, [english]);
 
   const connectedCount = useMemo(() => channels.filter((channel) => channel.status === "connected").length, [channels]);
 
@@ -87,23 +106,37 @@ export function ChannelsPage() {
       try {
         if (channel.key === "telegram") {
           await disconnectTelegram();
+        } else if (channel.setup === "oauth" || channel.setup === "partner_oauth") {
+          await api.client.disconnectOAuthChannel(channel.key);
+          setNotice(english ? `${channel.label} disconnected from this workspace.` : `${channel.label} foi desligado neste tenant.`);
         } else {
           await api.client.updateChannel(channel.key, "disabled");
-          setNotice(`${channel.label} foi desligado neste tenant.`);
+          setNotice(english ? `${channel.label} disconnected from this workspace.` : `${channel.label} foi desligado neste tenant.`);
         }
         await load();
       } catch (reason) {
-        setError(reason instanceof Error ? reason.message : `Não foi possível desligar ${channel.label}.`);
+        setError(reason instanceof Error ? reason.message : (english ? `Could not disconnect ${channel.label}.` : `Não foi possível desligar ${channel.label}.`));
       } finally {
         setBusy(null);
       }
       return;
     }
-    if (channel.requires_review) {
-      setNotice(`${channel.label} requer autorização e aprovação do fornecedor antes de receber mensagens.`);
+    if ((channel.setup === "oauth" || channel.setup === "partner_oauth") && channel.can_connect) {
+      setBusy(channel.key);
+      try {
+        const result = await api.client.authorizeChannel(channel.key);
+        window.location.assign(result.authorize_url);
+      } catch (reason) {
+        setError(reason instanceof Error ? reason.message : (english ? `Could not start ${channel.label} authorisation.` : `Não foi possível iniciar a autorização de ${channel.label}.`));
+        setBusy(null);
+      }
       return;
     }
-    setNotice(`A ligação de ${channel.label} será activada quando as credenciais do fornecedor forem configuradas com segurança.`);
+    if (channel.requires_review) {
+      setNotice(english ? `${channel.label} requires provider authorisation and review before receiving messages.` : `${channel.label} requer autorização e aprovação do fornecedor antes de receber mensagens.`);
+      return;
+    }
+    setNotice(english ? `${channel.label} will be available after secure provider credentials are configured.` : `A ligação de ${channel.label} será activada quando as credenciais do fornecedor forem configuradas com segurança.`);
   }
 
   async function pasteTelegramToken() {
@@ -156,14 +189,15 @@ export function ChannelsPage() {
       <div className="panel-heading"><div><span className="eyebrow">ESTADO DAS INTEGRAÇÕES</span><h3>Os teus canais</h3></div><span className="muted">{connectedCount} ligado{connectedCount === 1 ? "" : "s"}</span></div>
       {loading ? <div className="loading-box">A carregar canais...</div> : <div className="channel-grid">{channels.map((channel) => {
         const Icon = icons[channel.key] || Link2;
-        const label = statusLabels[channel.status] || channel.status;
+                  const label = (english ? statusLabelsEnglish[channel.status] : statusLabels[channel.status]) || channel.status;
+
         return <article className="channel-card" key={channel.key}>
           <div className="channel-card-top"><span className="channel-brand"><Icon size={24} /><strong>{channel.label}</strong></span><span className={`status-badge ${statusTone(channel.status)}`}>{label}</span></div>
-          <p>{channelDescription(channel)}</p>
-          <div className="channel-meta"><span>{channel.provider}</span>{channel.last_event_at && <span>Último evento: {new Date(channel.last_event_at).toLocaleString()}</span>}</div>
+          <p>{channelDescription(channel, english)}</p>
+          <div className="channel-meta"><span>{channel.provider}</span>{channel.last_event_at && <span>{english ? "Last event" : "Último evento"}: {new Date(channel.last_event_at).toLocaleString()}</span>}</div>
           {channel.last_error && <div className="channel-error"><AlertCircle size={14} />{channel.last_error}</div>}
           <button className={channel.status === "connected" ? "secondary-button" : "primary-button"} onClick={() => void handleAction(channel)} disabled={busy === channel.key}>
-            {busy === channel.key ? "A actualizar..." : channel.status === "connected" ? "Desligar canal" : channel.key === "whatsapp" ? "Abrir ligação WhatsApp" : channel.requires_review ? "Ver requisitos" : "Preparar ligação"}
+            {busy === channel.key ? (english ? "Updating..." : "A actualizar...") : channel.status === "connected" ? (english ? "Disconnect channel" : "Desligar canal") : channel.key === "whatsapp" ? (english ? "Open WhatsApp connection" : "Abrir ligação WhatsApp") : (channel.setup === "oauth" || channel.setup === "partner_oauth") && channel.can_connect ? (english ? `Connect ${channel.label}` : `Ligar ${channel.label}`) : channel.requires_review ? (english ? "View requirements" : "Ver requisitos") : (english ? "Prepare connection" : "Preparar ligação")}
           </button>
         </article>;
       })}</div>}

@@ -111,9 +111,12 @@ def client_channel_rows(tenant: dict[str, Any]) -> list[dict[str, Any]]:
             **definition,
             "status": status,
             "external_account_id": str(config.get("external_account_id") or "") or None,
+            "external_account_name": str(config.get("external_account_name") or "") or None,
+            "connected_at": config.get("connected_at"),
+            "token_expires_at": config.get("token_expires_at"),
             "last_event_at": config.get("last_event_at"),
             "last_error": config.get("last_error"),
-            "can_connect": status in {"not_configured", "disabled", "error"} and definition["availability"] != "restricted",
+            "can_connect": status in {"not_configured", "disabled", "error"} and definition["setup"] in {"oauth", "partner_oauth", "bot_token", "qr"},
             "requires_review": definition["availability"] in {"requires_review", "requires_business_review", "restricted", "available_with_approval"},
         })
     return rows
