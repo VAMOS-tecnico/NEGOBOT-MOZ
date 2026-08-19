@@ -281,13 +281,42 @@ export function AssistantPage() {
 
 
 export function BusinessProfilePage() {
+  const { language } = usePlatformLanguage();
+  const english = language === "en";
   const [profile, setProfile] = useState<import("../lib/api").BusinessProfile>({ empresa_nome: "", nicho: "", email_corporativo: "", redes_sociais: { facebook: "", instagram: "", twitter_x: "", tiktok: "", telegram: "", linkedin: "" } });
-  const [busy, setBusy] = useState(true); const [saving, setSaving] = useState(false); const [error, setError] = useState(""); const [notice, setNotice] = useState("");
-  useEffect(() => { api.client.profile().then(setProfile).catch((reason) => setError(reason instanceof Error ? reason.message : "Não foi possível carregar o perfil empresarial.")).finally(() => setBusy(false)); }, []);
+  const [busy, setBusy] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  useEffect(() => { api.client.profile().then(setProfile).catch((reason) => setError(reason instanceof Error ? reason.message : (english ? "Unable to load the business profile." : "Não foi possível carregar o perfil empresarial."))).finally(() => setBusy(false)); }, [english]);
   function changeSocial(key: keyof typeof profile.redes_sociais, value: string) { setProfile((current) => ({ ...current, redes_sociais: { ...current.redes_sociais, [key]: value } })); }
-  async function save(event: FormEvent) { event.preventDefault(); setSaving(true); setError(""); setNotice(""); try { await api.client.updateProfile(profile); setNotice("Perfil empresarial e redes sociais guardados no teu tenant."); } catch (reason) { setError(reason instanceof Error ? reason.message : "Não foi possível guardar o perfil."); } finally { setSaving(false); } }
+  async function save(event: FormEvent) {
+    event.preventDefault(); setSaving(true); setError(""); setNotice("");
+    try { await api.client.updateProfile(profile); setNotice(english ? "Business profile and social networks saved to your workspace." : "Perfil empresarial e redes sociais guardados no teu tenant."); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : (english ? "Unable to save the profile." : "Não foi possível guardar o perfil.")); }
+    finally { setSaving(false); }
+  }
   if (busy) return <div className="content-stack"><LoadingBox /></div>;
-  return <div className="content-stack"><ModuleHeader eyebrow="PERFIL EMPRESARIAL" title="Empresa e redes sociais" description="Estes dados ficam associados ao email da tua conta e serão usados pelo assistente e pelas integrações omnichannel." />{error && <ErrorBox message={error} />}{notice && <SuccessBox message={notice} />}<form className="data-panel stack-form" onSubmit={save}><div className="panel-heading"><div><span className="eyebrow">IDENTIFICAÇÃO</span><h3>Dados do negócio</h3></div><Building2 size={20} /></div><label>Email da conta<input value={profile.email || ""} readOnly disabled /></label><label>Nome da empresa<input value={profile.empresa_nome} onChange={(event) => setProfile({ ...profile, empresa_nome: event.target.value })} required /></label><label>Nicho de negócio<input value={profile.nicho} onChange={(event) => setProfile({ ...profile, nicho: event.target.value })} placeholder="Ex.: comércio, restauração, imobiliária" /></label><label>Email corporativo<input type="email" value={profile.email_corporativo} onChange={(event) => setProfile({ ...profile, email_corporativo: event.target.value })} placeholder="contacto@empresa.co.mz" /></label><div className="panel-heading"><div><span className="eyebrow">CANAIS DIGITAIS</span><h3>Redes sociais e mensageria</h3></div></div><label>Facebook<input value={profile.redes_sociais.facebook} onChange={(event) => changeSocial("facebook", event.target.value)} placeholder="URL ou nome de utilizador" /></label><label>Instagram<input value={profile.redes_sociais.instagram} onChange={(event) => changeSocial("instagram", event.target.value)} placeholder="URL ou nome de utilizador" /></label><label>X / Twitter<input value={profile.redes_sociais.twitter_x} onChange={(event) => changeSocial("twitter_x", event.target.value)} placeholder="URL ou nome de utilizador" /></label><label>TikTok<input value={profile.redes_sociais.tiktok} onChange={(event) => changeSocial("tiktok", event.target.value)} placeholder="URL ou nome de utilizador" /></label><label>Telegram<input value={profile.redes_sociais.telegram} onChange={(event) => changeSocial("telegram", event.target.value)} placeholder="URL ou nome de utilizador" /></label><label>LinkedIn<input value={profile.redes_sociais.linkedin} onChange={(event) => changeSocial("linkedin", event.target.value)} placeholder="URL ou nome de utilizador" /></label><button className="primary-button" disabled={saving} type="submit">{saving ? "A guardar..." : "Guardar perfil empresarial"}</button></form></div>;
+  const socialPlaceholder = english ? "URL or username" : "URL ou nome de utilizador";
+  return <div className="content-stack">
+    <ModuleHeader eyebrow="PERFIL EMPRESARIAL" title="Empresa e redes sociais" description="Estes dados ficam associados ao email da tua conta e serão usados pelo assistente e pelas integrações omnichannel." />
+    {error && <ErrorBox message={error} />}{notice && <SuccessBox message={notice} />}
+    <form className="data-panel stack-form" onSubmit={save}>
+      <div className="panel-heading"><div><span className="eyebrow">IDENTIFICAÇÃO</span><h3>Dados do negócio</h3></div><Building2 size={20} /></div>
+      <label>{english ? "Account email" : "Email da conta"}<input value={profile.email || ""} readOnly disabled /></label>
+      <label>{english ? "Company name" : "Nome da empresa"}<input value={profile.empresa_nome} onChange={(event) => setProfile({ ...profile, empresa_nome: event.target.value })} required /></label>
+      <label>{english ? "Business niche" : "Nicho de negócio"}<input value={profile.nicho} onChange={(event) => setProfile({ ...profile, nicho: event.target.value })} placeholder={english ? "e.g. retail, hospitality, real estate" : "Ex.: comércio, restauração, imobiliária"} /></label>
+      <label>{english ? "Business email" : "Email corporativo"}<input type="email" value={profile.email_corporativo} onChange={(event) => setProfile({ ...profile, email_corporativo: event.target.value })} placeholder="contact@company.com" /></label>
+      <div className="panel-heading"><div><span className="eyebrow">{english ? "DIGITAL CHANNELS" : "CANAIS DIGITAIS"}</span><h3>{english ? "Social networks and messaging" : "Redes sociais e mensageria"}</h3></div></div>
+      <label>Facebook<input value={profile.redes_sociais.facebook} onChange={(event) => changeSocial("facebook", event.target.value)} placeholder={socialPlaceholder} /></label>
+      <label>Instagram<input value={profile.redes_sociais.instagram} onChange={(event) => changeSocial("instagram", event.target.value)} placeholder={socialPlaceholder} /></label>
+      <label>X / Twitter<input value={profile.redes_sociais.twitter_x} onChange={(event) => changeSocial("twitter_x", event.target.value)} placeholder={socialPlaceholder} /></label>
+      <label>TikTok<input value={profile.redes_sociais.tiktok} onChange={(event) => changeSocial("tiktok", event.target.value)} placeholder={socialPlaceholder} /></label>
+      <label>Telegram<input value={profile.redes_sociais.telegram} onChange={(event) => changeSocial("telegram", event.target.value)} placeholder={socialPlaceholder} /></label>
+      <label>LinkedIn<input value={profile.redes_sociais.linkedin} onChange={(event) => changeSocial("linkedin", event.target.value)} placeholder={socialPlaceholder} /></label>
+      <button className="primary-button" disabled={saving} type="submit">{saving ? (english ? "Saving..." : "A guardar...") : (english ? "Save business profile" : "Guardar perfil empresarial")}</button>
+    </form>
+  </div>;
 }
 
 
