@@ -8,6 +8,8 @@ from campaign_worker import (
     next_allowed_time,
     parse_datetime,
     _recipient_allowed,
+    _group_recipient_allowed,
+    _delivery_delays,
 )
 
 
@@ -33,6 +35,16 @@ class CampaignWorkerPolicyTests(unittest.TestCase):
         tenant = {"campaign_settings": {"timezone": "Africa/Maputo", "silence_start": "22:00", "silence_end": "08:00"}}
         result = next_allowed_time(datetime(2026, 8, 19, 21, 30, tzinfo=timezone.utc), tenant)
         self.assertEqual(result, datetime(2026, 8, 20, 6, 0, tzinfo=timezone.utc))
+
+    @patch("campaign_worker.authorized_group_jids", return_value=["12345@g.us"])
+    def test_group_recipient_requires_current_tenant_authorization(self, authorized_mock):
+        self.assertTrue(_group_recipient_allowed({"recipient_type": "group", "group_jid": "12345@g.us", "group_authorized": True}, "tenant-a", "instance-a"))
+        self.assertFalse(_group_recipient_allowed({"recipient_type": "group", "group_jid": "99999@g.us", "group_authorized": True}, "tenant-a", "instance-a"))
+        authorized_mock.assert_called_with("tenant-a", "instance-a")
+
+    def test_delivery_delays_are_clamped_to_safe_minimum(self):
+        self.assertEqual(_delivery_delays({"campaign_settings": {"min_delay_seconds": 1, "max_delay_seconds": 2}}), (5.0, 5.0))
+        self.assertEqual(_delivery_delays({"campaign_settings": {"min_delay_seconds": 10, "max_delay_seconds": 20}}), (10.0, 20.0))
 
     def test_opt_in_is_required_at_send_time(self):
         self.assertTrue(_recipient_allowed({"opt_in": True}))

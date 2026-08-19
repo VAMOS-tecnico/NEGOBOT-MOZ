@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
-import { AlertCircle, BarChart3, Bot, Building2, CheckCircle2, CircleDollarSign, FileUp, LifeBuoy, Loader2, MessageCircle, Pause, Play, Plus, QrCode, RefreshCw, Send, Smartphone, Sparkles, Users, Video, XCircle } from "lucide-react";
-import { api, type AssistantSettings, type Campaign, type CampaignTemplate, type ClientPlan, type Contact, type Conversation, type DeliveryMetrics, type IntegrationStatus, type LemonSqueezyStatus, type PaymentRecord, type Plan, type PlanAddon, type SupportTicket, type TeamMember, type TenantMetrics, type VideoJob } from "../lib/api";
+import { AlertCircle, BarChart3, Bot, Building2, CheckCircle2, CircleDollarSign, FileUp, LifeBuoy, Loader2, MessageCircle, Pause, Play, Plus, QrCode, RefreshCw, Send, ShieldCheck, Smartphone, Sparkles, Users, Video, XCircle } from "lucide-react";
+import { api, type AssistantSettings, type Campaign, type CampaignTemplate, type CampaignSettings, type ClientPlan, type Contact, type Conversation, type DeliveryMetrics, type IntegrationStatus, type LemonSqueezyStatus, type PaymentRecord, type Plan, type PlanAddon, type SupportTicket, type TeamMember, type TenantMetrics, type VideoJob, type WhatsAppGroup } from "../lib/api";
 
 function ModuleHeader({ eyebrow, title, description, action }: { eyebrow: string; title: string; description: string; action?: ReactNode }) {
   return <div className="module-header"><div><span className="eyebrow">{eyebrow}</span><h1>{title}</h1><p>{description}</p></div>{action}</div>;
@@ -65,15 +65,121 @@ export function ConversationsPage() {
 export function CampaignsPage() {
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [templates, setTemplates] = useState<CampaignTemplate[]>([]);
-  const [name, setName] = useState(""); const [message, setMessage] = useState(""); const [templateId, setTemplateId] = useState(""); const [segmentTags, setSegmentTags] = useState("");
-  const [channels, setChannels] = useState<string[]>(["whatsapp"]); const [language, setLanguage] = useState("pt-MZ"); const [tone, setTone] = useState("profissional"); const [offer, setOffer] = useState(""); const [scheduledAt, setScheduledAt] = useState(""); const [recipientLimit, setRecipientLimit] = useState(200); const [consentConfirmed, setConsentConfirmed] = useState(false);
-  const [busy, setBusy] = useState(true); const [saving, setSaving] = useState(false); const [error, setError] = useState(""); const [notice, setNotice] = useState("");
-  const channelOptions = [{ id: "whatsapp", label: "WhatsApp" }, { id: "facebook", label: "Facebook" }, { id: "instagram", label: "Instagram" }, { id: "tiktok", label: "TikTok" }, { id: "x", label: "X" }, { id: "linkedin", label: "LinkedIn" }, { id: "telegram", label: "Telegram" }, { id: "email", label: "E-mail" }];
-  async function load() { setBusy(true); try { const [campaignResult, templateResult] = await Promise.all([api.client.campaigns(), api.client.templates()]); setCampaigns(campaignResult.campaigns || []); setTemplates(templateResult.templates || []); } catch (reason) { setError(reason instanceof Error ? reason.message : "Não foi possível carregar campanhas."); } finally { setBusy(false); } }
+  const [name, setName] = useState("");
+  const [message, setMessage] = useState("");
+  const [templateId, setTemplateId] = useState("");
+  const [segmentTags, setSegmentTags] = useState("");
+  const [channels, setChannels] = useState<string[]>(["whatsapp"]);
+  const [language, setLanguage] = useState("pt-MZ");
+  const [tone, setTone] = useState("profissional");
+  const [offer, setOffer] = useState("");
+  const [scheduledAt, setScheduledAt] = useState("");
+  const [recipientLimit, setRecipientLimit] = useState(200);
+  const [consentConfirmed, setConsentConfirmed] = useState(false);
+  const [includeContacts, setIncludeContacts] = useState(true);
+  const [groups, setGroups] = useState<WhatsAppGroup[]>([]);
+  const [selectedGroupJids, setSelectedGroupJids] = useState<string[]>([]);
+  const [groupAuthorizationConfirmed, setGroupAuthorizationConfirmed] = useState(false);
+  const [busy, setBusy] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [settingsSaving, setSettingsSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [campaignSettings, setCampaignSettings] = useState<CampaignSettings>({
+    timezone: "Africa/Maputo",
+    silence_start: "22:00",
+    silence_end: "08:00",
+    daily_limit: 200,
+    min_delay_seconds: 5,
+    max_delay_seconds: 12,
+  });
+  const channelOptions = [
+    { id: "whatsapp", label: "WhatsApp" }, { id: "facebook", label: "Facebook" },
+    { id: "instagram", label: "Instagram" }, { id: "tiktok", label: "TikTok" },
+    { id: "x", label: "X" }, { id: "linkedin", label: "LinkedIn" },
+    { id: "telegram", label: "Telegram" }, { id: "email", label: "E-mail" },
+  ];
+  const verifiedGroups = groups.filter((group) => group.admin_verified && group.bot_is_admin && group.status === "active");
+
+  async function load() {
+    setBusy(true);
+    setError("");
+    try {
+      const [campaignResult, templateResult, groupResult, settingsResult] = await Promise.all([
+        api.client.campaigns(), api.client.templates(), api.client.groups(), api.client.campaignSettings(),
+      ]);
+      setCampaigns(campaignResult.campaigns || []);
+      setTemplates(templateResult.templates || []);
+      setGroups(groupResult.groups || []);
+      setCampaignSettings(settingsResult);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Não foi possível carregar campanhas.");
+    } finally { setBusy(false); }
+  }
   useEffect(() => { void load(); }, []);
-  async function create(event: FormEvent) { event.preventDefault(); setSaving(true); setError(""); setNotice(""); try { const tags = segmentTags.split(",").map((item) => item.trim()).filter(Boolean); await api.client.createCampaign(name, message, { ...(templateId ? { template_id: templateId } : {}), ...(tags.length ? { tags } : {}), channels, language, tone, offer, recipient_limit: recipientLimit, ...(scheduledAt ? { scheduled_at: scheduledAt } : {}) }); setName(""); setMessage(""); setTemplateId(""); setSegmentTags(""); setChannels(["whatsapp"]); setOffer(""); setScheduledAt(""); setRecipientLimit(200); setConsentConfirmed(false); setNotice("Campanha validada e colocada na fila persistente."); await load(); } catch (reason) { setError(reason instanceof Error ? reason.message : "Não foi possível criar a campanha."); } finally { setSaving(false); } }
-  async function action(id: string, value: "pause" | "resume" | "cancel") { try { await api.client.campaignAction(id, value); await load(); } catch (reason) { setError(reason instanceof Error ? reason.message : "Não foi possível atualizar a campanha."); } }
-  return <div className="content-stack"><ModuleHeader eyebrow="CAMPANHAS OMNICHANNEL" title="Uma mensagem, vários canais" description="Cria a oferta uma vez e encaminha-a para os canais autorizados pelo teu tenant. O WhatsApp é processado por um worker persistente com consentimento, pausa, agendamento e retries." action={<div className="live-pill"><span className="status-dot" /> Redis worker</div>} />{error && <ErrorBox message={error} />}{notice && <SuccessBox message={notice} />}<div className="module-grid two"><section className="data-panel"><div className="panel-heading"><div><span className="eyebrow">NOVA CAMPANHA</span><h3>Preparar conteúdo</h3></div><Send size={19} /></div><form className="stack-form compact-form" onSubmit={create}><label>Nome da campanha<input value={name} onChange={(event) => setName(event.target.value)} placeholder="Promoção de agosto" required /></label><label>Canais de publicação<div className="channel-grid">{channelOptions.map((channel) => <label className="check-card" key={channel.id}><input type="checkbox" checked={channels.includes(channel.id)} onChange={() => setChannels((current) => current.includes(channel.id) ? current.filter((item) => item !== channel.id) : [...current, channel.id])} />{channel.label}</label>)}</div></label><label>Template opcional<select value={templateId} onChange={(event) => { const value = event.target.value; setTemplateId(value); const selected = templates.find((item) => item.id === value); if (selected) setMessage(selected.body); }}><option value="">Escrever mensagem</option>{templates.filter((item) => item.status !== "archived").map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label>Mensagem<textarea value={message} onChange={(event) => setMessage(event.target.value)} placeholder="Escreve a mensagem base ou seleciona um template" rows={5} required={!templateId} /></label><label>Oferta ou produto<small className="muted">Opcional; o n8n pode adaptar o conteúdo por canal.</small><input value={offer} onChange={(event) => setOffer(event.target.value)} placeholder="Ex.: Plano Premium por 1.500 MT" /></label><div className="form-grid-two"><label>Idioma<select value={language} onChange={(event) => setLanguage(event.target.value)}><option value="pt-MZ">Português de Moçambique</option><option value="en">English</option></select></label><label>Tom<select value={tone} onChange={(event) => setTone(event.target.value)}><option value="profissional">Profissional</option><option value="direto">Direto</option><option value="amigável">Amigável</option><option value="promocional">Promocional</option></select></label></div><label>Agendar<small className="muted">Opcional; usa o fuso horário configurado no servidor.</small><input type="datetime-local" value={scheduledAt} onChange={(event) => setScheduledAt(event.target.value)} /></label><label>Limite de destinatários<small className="muted">Apenas contactos com opt-in activo; começa com um lote conservador de 200.</small><input type="number" min={1} max={15000} value={recipientLimit} onChange={(event) => setRecipientLimit(Math.max(1, Number(event.target.value) || 1))} required /></label><label>Etiquetas do segmento<small className="muted">Separadas por vírgulas; vazio envia para todos com opt-in.</small><input value={segmentTags} onChange={(event) => setSegmentTags(event.target.value)} placeholder="vip, cliente" /></label><label className="check-card consent-card"><input type="checkbox" checked={consentConfirmed} onChange={(event) => setConsentConfirmed(event.target.checked)} required />Confirmo que estes contactos deram autorização para receber comunicações de marketing e que os pedidos PARAR/STOP/SAIR serão respeitados.</label><button className="primary-button" disabled={saving || channels.length === 0 || !consentConfirmed} type="submit">{saving ? "A preparar..." : "Colocar na fila omnichannel"}</button></form></section><section className="data-panel"><div className="panel-heading"><div><span className="eyebrow">HISTÓRICO</span><h3>{campaigns.length} campanhas</h3></div><ActivityIcon /></div>{busy ? <LoadingBox /> : campaigns.length ? <div className="data-list">{campaigns.map((campaign) => <div className="data-row" key={campaign.id}><div className="quick-icon"><Send size={16} /></div><div className="row-main"><strong>{campaign.name}</strong><small>{(campaign.channels || ["whatsapp"]).join(", ")} · {campaign.total || 0} destinatários · {campaign.sent || 0} enviados</small></div><span className={`status-badge ${campaign.status || "queued"}`}>{campaign.status || "queued"}</span><div className="row-actions">{campaign.status === "paused" ? <button title="Retomar" onClick={() => void action(campaign.id, "resume")}><Play size={14} /></button> : <button title="Pausar" onClick={() => void action(campaign.id, "pause")}><Pause size={14} /></button>}<button title="Cancelar" onClick={() => void action(campaign.id, "cancel")}><XCircle size={14} /></button></div></div>)}</div> : <div className="empty-state">Ainda não criaste nenhuma campanha.</div>}</section></div></div>;
+
+  async function create(event: FormEvent) {
+    event.preventDefault();
+    setSaving(true); setError(""); setNotice("");
+    try {
+      const tags = segmentTags.split(",").map((item) => item.trim()).filter(Boolean);
+      await api.client.createCampaign(name, message, {
+        ...(templateId ? { template_id: templateId } : {}), ...(tags.length ? { tags } : {}),
+        channels, language, tone, offer, recipient_limit: recipientLimit,
+        include_contacts: includeContacts, consent_confirmed: consentConfirmed,
+        group_jids: selectedGroupJids, group_authorization_confirmed: groupAuthorizationConfirmed,
+        ...(scheduledAt ? { scheduled_at: scheduledAt } : {}),
+      });
+      setName(""); setMessage(""); setTemplateId(""); setSegmentTags(""); setChannels(["whatsapp"]);
+      setOffer(""); setScheduledAt(""); setRecipientLimit(200); setConsentConfirmed(false);
+      setIncludeContacts(true); setSelectedGroupJids([]); setGroupAuthorizationConfirmed(false);
+      setNotice("Campanha validada e colocada na fila persistente.");
+      await load();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Não foi possível criar a campanha.");
+    } finally { setSaving(false); }
+  }
+  async function action(id: string, value: "pause" | "resume" | "cancel") {
+    try { await api.client.campaignAction(id, value); await load(); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : "Não foi possível atualizar a campanha."); }
+  }
+  async function saveCampaignSettings(event: FormEvent) {
+    event.preventDefault(); setSettingsSaving(true); setError(""); setNotice("");
+    try {
+      await api.client.updateCampaignSettings(campaignSettings);
+      setNotice("Protecções de campanha guardadas: limite diário, silêncio e atrasos aplicados ao worker.");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Não foi possível guardar as protecções.");
+    } finally { setSettingsSaving(false); }
+  }
+
+  return <div className="content-stack">
+    <ModuleHeader eyebrow="CAMPANHAS OMNICHANNEL" title="Disparos, grupos e conversas" description="Cria uma mensagem para contactos autorizados ou publica directamente nos teus grupos próprios. O WhatsApp é processado por um worker persistente com consentimento, pausa, agendamento e retries." action={<div className="live-pill"><span className="status-dot" /> Redis worker</div>} />
+    {error && <ErrorBox message={error} />}{notice && <SuccessBox message={notice} />}
+    <div className="module-grid two">
+      <section className="data-panel"><div className="panel-heading"><div><span className="eyebrow">NOVA CAMPANHA</span><h3>Preparar conteúdo</h3></div><Send size={19} /></div>
+        <form className="stack-form compact-form" onSubmit={create}>
+          <label>Nome da campanha<input value={name} onChange={(event) => setName(event.target.value)} placeholder="Promoção de agosto" required /></label>
+          <label>Canais de publicação<div className="channel-grid">{channelOptions.map((channel) => <label className="check-card" key={channel.id}><input type="checkbox" checked={channels.includes(channel.id)} onChange={() => setChannels((current) => current.includes(channel.id) ? current.filter((item) => item !== channel.id) : [...current, channel.id])} />{channel.label}</label>)}</div></label>
+          <fieldset className="destination-fieldset"><legend>Destinos de envio</legend><small className="muted">Contactos usam apenas <code>opt_in=true</code>. Grupos recebem a mensagem directamente; os membros nunca são extraídos para marketing.</small>
+            <label className="check-card"><input type="checkbox" checked={includeContacts} onChange={(event) => setIncludeContacts(event.target.checked)} />Contactos autorizados</label>
+            {verifiedGroups.length ? <><div className="group-target-list">{verifiedGroups.map((group) => <label className="check-card" key={group.id}><input type="checkbox" checked={selectedGroupJids.includes(group.group_jid)} onChange={(event) => setSelectedGroupJids((current) => event.target.checked ? [...current, group.group_jid] : current.filter((item) => item !== group.group_jid))} />Grupo próprio: {group.name || group.group_jid}</label>)}</div><label className="check-card"><input type="checkbox" checked={groupAuthorizationConfirmed} onChange={(event) => setGroupAuthorizationConfirmed(event.target.checked)} required={selectedGroupJids.length > 0} />Confirmo que autorizo o envio apenas para estes grupos próprios onde a instância é administradora.</label></> : <small className="muted">Ainda não há grupos próprios verificados. Abre <b>Grupos próprios</b> e clica em <b>Sincronizar grupos</b>.</small>}
+          </fieldset>
+          <label>Template opcional<select value={templateId} onChange={(event) => { const value = event.target.value; setTemplateId(value); const selected = templates.find((item) => item.id === value); if (selected) setMessage(selected.body); }}><option value="">Escrever mensagem</option>{templates.filter((item) => item.status !== "archived").map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+          <label>Mensagem<textarea value={message} onChange={(event) => setMessage(event.target.value)} placeholder="Escreve a mensagem base ou seleciona um template" rows={5} required={!templateId} /></label>
+          <label>Oferta ou produto<small className="muted">Opcional; o n8n pode adaptar o conteúdo por canal.</small><input value={offer} onChange={(event) => setOffer(event.target.value)} placeholder="Ex.: Plano Premium por 1.500 MT" /></label>
+          <div className="form-grid-two"><label>Idioma<select value={language} onChange={(event) => setLanguage(event.target.value)}><option value="pt-MZ">Português de Moçambique</option><option value="en">English</option></select></label><label>Tom<select value={tone} onChange={(event) => setTone(event.target.value)}><option value="profissional">Profissional</option><option value="direto">Direto</option><option value="amigável">Amigável</option><option value="promocional">Promocional</option></select></label></div>
+          <label>Agendar data e hora<small className="muted">Opcional; usa o fuso horário configurado abaixo.</small><input type="datetime-local" value={scheduledAt} onChange={(event) => setScheduledAt(event.target.value)} /></label>
+          <label>Limite de contactos<small className="muted">Só afecta contactos com opt-in; grupos seleccionados são destinos directos e não contam como membros extraídos.</small><input type="number" min={1} max={15000} value={recipientLimit} onChange={(event) => setRecipientLimit(Math.max(1, Number(event.target.value) || 1))} required /></label>
+          <label>Etiquetas do segmento<small className="muted">Separadas por vírgulas; vazio envia para todos com opt-in.</small><input value={segmentTags} onChange={(event) => setSegmentTags(event.target.value)} placeholder="vip, cliente" /></label>
+          <label className="check-card consent-card"><input type="checkbox" checked={consentConfirmed} onChange={(event) => setConsentConfirmed(event.target.checked)} required={includeContacts} disabled={!includeContacts} />Confirmo que os contactos deram autorização e que PARAR/STOP/SAIR será respeitado.</label>
+          <button className="primary-button" disabled={saving || channels.length === 0 || (includeContacts && !consentConfirmed) || (selectedGroupJids.length > 0 && !groupAuthorizationConfirmed)} type="submit">{saving ? "A preparar..." : "Colocar na fila omnichannel"}</button>
+        </form>
+      </section>
+      <section className="data-panel"><div className="panel-heading"><div><span className="eyebrow">HISTÓRICO</span><h3>{campaigns.length} campanhas</h3></div><ActivityIcon /></div>{busy ? <LoadingBox /> : campaigns.length ? <div className="data-list">{campaigns.map((campaign) => <div className="data-row" key={campaign.id}><div className="quick-icon"><Send size={16} /></div><div className="row-main"><strong>{campaign.name}</strong><small>{(campaign.channels || ["whatsapp"]).join(", ")} · {campaign.total || 0} destinos · {campaign.sent || 0} enviados</small></div><span className={`status-badge ${campaign.status || "queued"}`}>{campaign.status || "queued"}</span><div className="row-actions">{campaign.status === "paused" ? <button title="Retomar" onClick={() => void action(campaign.id, "resume")}><Play size={14} /></button> : <button title="Pausar" onClick={() => void action(campaign.id, "pause")}><Pause size={14} /></button>}<button title="Cancelar" onClick={() => void action(campaign.id, "cancel")}><XCircle size={14} /></button></div></div>)}</div> : <div className="empty-state">Ainda não criaste nenhuma campanha.</div>}</section>
+    </div>
+    <section className="data-panel campaign-safety-settings"><div className="panel-heading"><div><span className="eyebrow">PROTECÇÃO CONTRA SPAM</span><h3>Regras automáticas de envio</h3></div><ShieldCheck size={19} /></div><p className="muted">O worker pausa na janela de silêncio, limita o volume diário e usa atrasos aleatórios para reduzir risco de spam.</p><form className="form-grid-two" onSubmit={saveCampaignSettings}><label>Fuso horário<select value={campaignSettings.timezone} onChange={(event) => setCampaignSettings({ ...campaignSettings, timezone: event.target.value })}><option value="Africa/Maputo">África/Maputo</option><option value="UTC">UTC</option></select></label><label>Limite diário<input type="number" min={1} max={10000} value={campaignSettings.daily_limit} onChange={(event) => setCampaignSettings({ ...campaignSettings, daily_limit: Number(event.target.value) || 1 })} /></label><label>Silêncio começa às<input type="time" value={campaignSettings.silence_start} onChange={(event) => setCampaignSettings({ ...campaignSettings, silence_start: event.target.value })} /></label><label>Silêncio termina às<input type="time" value={campaignSettings.silence_end} onChange={(event) => setCampaignSettings({ ...campaignSettings, silence_end: event.target.value })} /></label><label>Atraso mínimo (segundos)<input type="number" min={5} max={120} value={campaignSettings.min_delay_seconds} onChange={(event) => setCampaignSettings({ ...campaignSettings, min_delay_seconds: Number(event.target.value) || 5 })} /></label><label>Atraso máximo (segundos)<input type="number" min={5} max={120} value={campaignSettings.max_delay_seconds} onChange={(event) => setCampaignSettings({ ...campaignSettings, max_delay_seconds: Number(event.target.value) || 12 })} /></label><button className="primary-button" disabled={settingsSaving} type="submit">{settingsSaving ? "A guardar..." : "Guardar protecções"}</button></form></section>
+  </div>;
 }
 function ActivityIcon() { return <Send size={19} />; }
 

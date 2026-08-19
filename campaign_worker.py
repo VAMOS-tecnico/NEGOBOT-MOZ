@@ -19,6 +19,7 @@ from firebase_admin import firestore
 
 import extensions
 from services.evolution_service import send_whatsapp
+from services.group_automation_service import authorized_group_jids
 from services.n8n_service import dispatch_campaign_event
 from services.plan_service import entitlements_for_tenant
 
@@ -151,6 +152,16 @@ def _tenant_and_campaign(campaign_id: str) -> tuple[Any, str, dict[str, Any], di
     return document.reference, tenant_id, campaign, tenant_document.to_dict() or {}
 
 
+def _delivery_delays(tenant: dict[str, Any]) -> tuple[float, float]:
+    settings = tenant.get("campaign_settings") if isinstance(tenant.get("campaign_settings"), dict) else {}
+    try:
+        minimum = max(5.0, min(120.0, float(settings.get("min_delay_seconds") or DEFAULT_MIN_DELAY)))
+        maximum = max(minimum, min(120.0, float(settings.get("max_delay_seconds") or DEFAULT_MAX_DELAY)))
+        return minimum, maximum
+    except (TypeError, ValueError):
+        return DEFAULT_MIN_DELAY, DEFAULT_MAX_DELAY
+
+
 def _campaign_daily_limit(tenant: dict[str, Any], campaign: dict[str, Any]) -> int:
     settings = tenant.get("campaign_settings") if isinstance(tenant.get("campaign_settings"), dict) else {}
     raw = campaign.get("daily_limit") or settings.get("daily_limit") or tenant.get("campaign_daily_limit") or DEFAULT_DAILY_LIMIT
@@ -181,6 +192,15 @@ def _mark_counter(campaign_ref: Any, field: str, amount: int = 1) -> None:
 
 def _recipient_allowed(contact: dict[str, Any]) -> bool:
     return bool(contact.get("opt_in") is True and not contact.get("do_not_contact"))
+
+
+def _group_recipient_allowed(data: dict[str, Any], tenant_id: str, instance_name: str) -> bool:
+    if str(data.get("recipient_type") or "").lower() != "group":
+        return False
+    group_jid = clean_phone(data.get("group_jid") or data.get("phone"))
+    if not group_jid.endswith("@g.us") or data.get("group_authorized") is not True:
+        return False
+    return group_jid in set(authorized_group_jids(tenant_id, instance_name))
 
 
 def _contact_for_recipient(db: Any, data: dict[str, Any]) -> dict[str, Any]:
@@ -276,7 +296,7 @@ def process_campaign(campaign_id: str, queue: Any) -> None:
         recipient_id = recipient_document.id
         current_status = str(data.get("status") or "queued").lower()
         attempts = int(data.get("attempts") or 0)
-        if current_status in {"sent", "skipped_opt_out", "cancelled"} or attempts >= MAX_ATTEMPTS:
+        if current_status in {"sent", "skipped_opt_out", "skipped_group_not_authorized", "cancelled"} or attempts >= MAX_ATTEMPTS:
             continue
         lock_key = f"{CONTROL_PREFIX}{campaign_id}:recipient:{recipient_id}:lock"
         if not queue.set(lock_key, "1", nx=True, ex=180):
@@ -289,12 +309,20 @@ def process_campaign(campaign_id: str, queue: Any) -> None:
             if control == "pause":
                 campaign_ref.set({"status": "paused", "updated_at": now_utc()}, merge=True)
                 return
-            contact = _contact_for_recipient(db, data)
-            if not _recipient_allowed(contact):
-                recipient_document.reference.set({"status": "skipped_opt_out", "skipped_at": now_utc(), "reason": "opt_in ausente ou revogado"}, merge=True)
-                _mark_counter(campaign_ref, "skipped", 1)
-                continue
-            phone = clean_phone(data.get("phone") or contact.get("phone"))
+            is_group = str(data.get("recipient_type") or "").lower() == "group"
+            if is_group:
+                if not _group_recipient_allowed(data, tenant_id, instance_name):
+                    recipient_document.reference.set({"status": "skipped_group_not_authorized", "skipped_at": now_utc(), "reason": "grupo deixou de ser verificado como próprio/admin"}, merge=True)
+                    _mark_counter(campaign_ref, "skipped", 1)
+                    continue
+                contact = {}
+            else:
+                contact = _contact_for_recipient(db, data)
+                if not _recipient_allowed(contact):
+                    recipient_document.reference.set({"status": "skipped_opt_out", "skipped_at": now_utc(), "reason": "opt_in ausente ou revogado"}, merge=True)
+                    _mark_counter(campaign_ref, "skipped", 1)
+                    continue
+            phone = clean_phone(data.get("phone") or data.get("group_jid") or contact.get("phone"))
             if len(phone) < 8:
                 recipient_document.reference.set({"status": "failed", "attempts": attempts + 1, "error": "telefone inválido", "updated_at": now_utc()}, merge=True)
                 _mark_counter(campaign_ref, "failed", 1)
@@ -316,7 +344,7 @@ def process_campaign(campaign_id: str, queue: Any) -> None:
                 if final_status == "failed":
                     _mark_counter(campaign_ref, "failed", 1)
             processed += 1
-            time.sleep(random.uniform(DEFAULT_MIN_DELAY, DEFAULT_MAX_DELAY))
+            time.sleep(random.uniform(*_delivery_delays(tenant)))
         finally:
             queue.delete(lock_key)
 

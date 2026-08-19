@@ -225,6 +225,15 @@ export type WhatsAppGroup = {
   last_error?: string | null;
 };
 
+export type CampaignSettings = {
+  timezone: string;
+  silence_start: string;
+  silence_end: string;
+  daily_limit: number;
+  min_delay_seconds: number;
+  max_delay_seconds: number;
+};
+
 export type CampaignTemplate = {
   id: string;
   name: string;
@@ -431,6 +440,8 @@ export const api = {
     archiveContact: (id: string) => request<{ archived: true }>(`/api/platform/client/contacts/${encodeURIComponent(id)}`, { method: "DELETE" }),
     importContacts: (file: File) => { const form = new FormData(); form.append("file", file); return request<{ imported: number; skipped: number; total_rows: number }>("/api/platform/client/contacts/import", { method: "POST", body: form }); },
     campaigns: () => request<{ campaigns: Campaign[] }>("/api/platform/client/campaigns"),
+    campaignSettings: () => request<CampaignSettings>("/api/platform/client/campaign-settings"),
+    updateCampaignSettings: (settings: CampaignSettings) => request<{ updated: true } & CampaignSettings>("/api/platform/client/campaign-settings", { method: "PATCH", body: JSON.stringify(settings) }),
     metrics: () => request<{ tenant_id?: string; metrics: TenantMetrics }>("/api/platform/client/metrics"),
     campaignReport: () => request<{ tenant_id?: string; generated_at?: string; campaigns: TenantMetrics["campaigns"]; deliveries: DeliveryMetrics }>("/api/platform/client/reports/campaigns"),
     supportTickets: () => request<{ tickets: SupportTicket[] }>("/api/platform/client/support/tickets"),
@@ -441,7 +452,7 @@ export const api = {
     templates: () => request<{ templates: CampaignTemplate[] }>("/api/platform/client/templates"),
     createTemplate: (name: string, body: string) => request<{ created: true; template: CampaignTemplate }>("/api/platform/client/templates", { method: "POST", body: JSON.stringify({ name, body }) }),
     updateTemplate: (id: string, fields: { name?: string; body?: string; status?: "active" | "archived" }) => request<{ updated: true }>(`/api/platform/client/templates/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(fields) }),
-    createCampaign: (name: string, message: string, options: { template_id?: string; tags?: string[]; channels?: string[]; language?: string; tone?: string; offer?: string; scheduled_at?: string; recipient_limit?: number } = {}) => request<{ created: true; campaign: Campaign }>("/api/platform/client/campaigns", { method: "POST", body: JSON.stringify({ name, message, ...options }) }),
+    createCampaign: (name: string, message: string, options: { template_id?: string; tags?: string[]; channels?: string[]; language?: string; tone?: string; offer?: string; scheduled_at?: string; recipient_limit?: number; include_contacts?: boolean; consent_confirmed?: boolean; group_jids?: string[]; group_authorization_confirmed?: boolean } = {}) => request<{ created: true; campaign: Campaign }>("/api/platform/client/campaigns", { method: "POST", body: JSON.stringify({ name, message, ...options }) }),
     campaignAction: (id: string, action: "pause" | "resume" | "cancel") => request<{ updated: true; status: string }>(`/api/platform/client/campaigns/${id}/actions/${action}`, { method: "POST" }),
     profile: () => request<BusinessProfile>("/api/platform/client/profile"),
     updateProfile: (profile: Partial<BusinessProfile>) => request<{ updated: true; fields: string[] }>("/api/platform/client/profile", { method: "PATCH", body: JSON.stringify(profile) }),

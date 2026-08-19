@@ -22,7 +22,7 @@ from services.channel_registry import CHANNEL_STATUSES, client_channel_rows, ens
 from services.plan_service import entitlements_for_tenant, plan_channel_limit, public_plan_rows
 from services.secret_store import SecretStoreError, decrypt_secret, encrypt_secret
 from services.telegram_service import TelegramApiError, delete_webhook, get_me, get_webhook_info, set_webhook
-from services.group_automation_service import group_document_id, sync_groups_for_tenant
+from services.group_automation_service import authorized_group_jids, group_document_id, sync_groups_for_tenant
 from services.channel_publication_service import channel_capability, create_publication_data, enqueue_publication
 
 platform_bp = Blueprint("platform", __name__, url_prefix="/api/platform")
@@ -909,6 +909,48 @@ def list_campaigns():
     return jsonify({"campaigns": rows})
 
 
+@platform_bp.get("/client/campaign-settings")
+@_require_roles("client", "operator")
+def get_campaign_settings():
+    tenant_id = _tenant_for_identity(_identity())
+    data = _tenant_data(tenant_id)
+    stored = data.get("campaign_settings") if isinstance(data.get("campaign_settings"), dict) else {}
+    return jsonify({
+        "timezone": str(stored.get("timezone") or data.get("campaign_timezone") or "Africa/Maputo"),
+        "silence_start": str(stored.get("silence_start") or data.get("campaign_silence_start") or "22:00"),
+        "silence_end": str(stored.get("silence_end") or data.get("campaign_silence_end") or "08:00"),
+        "daily_limit": int(stored.get("daily_limit") or data.get("campaign_daily_limit") or 200),
+        "min_delay_seconds": int(stored.get("min_delay_seconds") or 5),
+        "max_delay_seconds": int(stored.get("max_delay_seconds") or 12),
+    })
+
+
+@platform_bp.patch("/client/campaign-settings")
+@_require_tenant_roles("owner", "operator")
+def update_campaign_settings():
+    tenant_id = _tenant_for_identity(_identity())
+    payload = request.get_json(silent=True) or {}
+    timezone_name = str(payload.get("timezone") or "Africa/Maputo").strip()[:80]
+    silence_start = str(payload.get("silence_start") or "22:00").strip()
+    silence_end = str(payload.get("silence_end") or "08:00").strip()
+    if not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", silence_start) or not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", silence_end):
+        return jsonify({"error": "A janela de silêncio deve usar o formato HH:MM."}), 400
+    try:
+        daily_limit = int(payload.get("daily_limit", 200))
+        min_delay_seconds = int(payload.get("min_delay_seconds", 5))
+        max_delay_seconds = int(payload.get("max_delay_seconds", 12))
+    except (TypeError, ValueError):
+        return jsonify({"error": "Limite e atrasos devem ser números inteiros."}), 400
+    if not 1 <= daily_limit <= 10000:
+        return jsonify({"error": "O limite diário deve ficar entre 1 e 10.000 mensagens."}), 400
+    if not 5 <= min_delay_seconds <= max_delay_seconds <= 120:
+        return jsonify({"error": "Os atrasos devem respeitar 5–120 segundos e o mínimo não pode exceder o máximo."}), 400
+    settings = {"timezone": timezone_name, "silence_start": silence_start, "silence_end": silence_end, "daily_limit": daily_limit, "min_delay_seconds": min_delay_seconds, "max_delay_seconds": max_delay_seconds, "updated_at": _now()}
+    _db().collection("tenants").document(tenant_id).set({"campaign_settings": settings, "campaign_timezone": timezone_name, "campaign_silence_start": silence_start, "campaign_silence_end": silence_end, "campaign_daily_limit": daily_limit}, merge=True)
+    _audit("campaign_settings_updated", _identity(), tenant_id, {"daily_limit": daily_limit, "silence_start": silence_start, "silence_end": silence_end})
+    return jsonify({"updated": True, **settings})
+
+
 @platform_bp.post("/client/contacts/import")
 @_require_roles("client", "operator")
 def import_contacts():
@@ -1015,12 +1057,25 @@ def create_campaign():
     plan_contact_limit = int(entitlements.get("contact_limit") or 0)
     if recipient_limit < 1 or (plan_contact_limit and recipient_limit > plan_contact_limit):
         return jsonify({"error": f"O limite deve ficar entre 1 e {plan_contact_limit or 'o limite do plano'} contactos."}), 400
-    contacts = list(db.collection("contacts").where("tenant_id", "==", tenant_id).where("opt_in", "==", True).limit(min(recipient_limit, 5000)).stream())
-    if segment_tags:
-        contacts = [contact for contact in contacts if set(segment_tags).issubset(set((contact.to_dict() or {}).get("tags") or []))]
-    contacts = contacts[:recipient_limit]
-    if not contacts:
-        return jsonify({"error": "Adicione primeiro contactos com consentimento para receber mensagens."}), 400
+    include_contacts = bool(payload.get("include_contacts", True))
+    group_jids = sorted({str(item).strip() for item in (payload.get("group_jids") or []) if str(item).strip()})[:50]
+    if include_contacts and payload.get("consent_confirmed") is not True:
+        return jsonify({"error": "Confirma que os contactos deram opt-in antes de criar a campanha."}), 400
+    if group_jids:
+        if payload.get("group_authorization_confirmed") is not True:
+            return jsonify({"error": "Confirma que autorizas o envio apenas para os teus grupos próprios."}), 400
+        authorized = set(authorized_group_jids(tenant_id or "", authorized_instance))
+        unauthorized = sorted(set(group_jids) - authorized)
+        if unauthorized:
+            return jsonify({"error": "Um ou mais grupos não estão verificados como grupos próprios administrados pela instância deste tenant.", "unauthorized_groups": unauthorized}), 403
+    contacts = []
+    if include_contacts:
+        contacts = list(db.collection("contacts").where("tenant_id", "==", tenant_id).where("opt_in", "==", True).limit(min(recipient_limit, 5000)).stream())
+        if segment_tags:
+            contacts = [contact for contact in contacts if set(segment_tags).issubset(set((contact.to_dict() or {}).get("tags") or []))]
+        contacts = contacts[:recipient_limit]
+    if not contacts and not group_jids:
+        return jsonify({"error": "Adiciona contactos com opt-in ou selecciona pelo menos um grupo próprio verificado."}), 400
     campaign_ref = db.collection("campaigns").document()
     campaign_ref.set({
         "tenant_id": tenant_id,
@@ -1042,6 +1097,10 @@ def create_campaign():
         "created_at": _now(),
         "started_at": None,
         "finished_at": None,
+        "include_contacts": include_contacts,
+        "group_jids": group_jids,
+        "contacts_count": 0,
+        "groups_count": len(group_jids),
     })
     recipients = []
     for contact in contacts:
@@ -1050,9 +1109,14 @@ def create_campaign():
         if not phone:
             continue
         recipient_ref = db.collection("campaign_recipients").document(f"{campaign_ref.id}_{contact.id}")
-        recipient_ref.set({"tenant_id": tenant_id, "campaign_id": campaign_ref.id, "contact_id": contact.id, "phone": phone, "status": "queued", "attempts": 0})
+        recipient_ref.set({"tenant_id": tenant_id, "campaign_id": campaign_ref.id, "contact_id": contact.id, "recipient_type": "contact", "phone": phone, "status": "queued", "attempts": 0})
         recipients.append(phone)
-    campaign_ref.set({"total": len(recipients)}, merge=True)
+    for group_jid in group_jids:
+        safe_id = re.sub(r"[^A-Za-z0-9]+", "_", group_jid).strip("_")[:90]
+        recipient_ref = db.collection("campaign_recipients").document(f"{campaign_ref.id}_group_{safe_id}")
+        recipient_ref.set({"tenant_id": tenant_id, "campaign_id": campaign_ref.id, "recipient_type": "group", "group_jid": group_jid, "phone": group_jid, "group_authorized": True, "status": "queued", "attempts": 0})
+        recipients.append(group_jid)
+    campaign_ref.set({"total": len(recipients), "contacts_count": len([item for item in recipients if "@g.us" not in item]), "groups_count": len(group_jids)}, merge=True)
     try:
         import redis
         queue = redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379/1"), decode_responses=True)
@@ -1060,7 +1124,7 @@ def create_campaign():
     except Exception as exc:
         campaign_ref.set({"status": "failed", "error": "Fila indisponível"}, merge=True)
         return jsonify({"error": "Não foi possível iniciar a fila da campanha."}), 503
-    return jsonify({"created": True, "campaign": {"id": campaign_ref.id, "name": name, "status": "queued", "total": len(recipients), "channels": channels, "scheduled_at": scheduled_at}}), 201
+    return jsonify({"created": True, "campaign": {"id": campaign_ref.id, "name": name, "status": "queued", "total": len(recipients), "channels": channels, "scheduled_at": scheduled_at, "contacts_count": len(contacts), "groups_count": len(group_jids)}}), 201
 
 
 @platform_bp.post("/client/campaigns/<campaign_id>/actions/<action>")
