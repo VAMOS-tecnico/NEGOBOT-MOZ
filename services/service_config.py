@@ -19,21 +19,21 @@ class ServiceProfile:
 
 PROFILES: dict[str, ServiceProfile] = {
     "api": ServiceProfile(
-        required=("FIREBASE_CONFIG", "REDIS_URL"),
+        required=("FIREBASE_CONFIG",),
         required_any=(("PLATFORM_SECRET_KEY", "ADMIN_TOKEN"),),
-        optional=("SMTP_HOST", "SMTP_USER", "SMTP_PASSWORD", "SMTP_FROM", "VIDEO_SERVICE_URL", "VIDEO_SERVICE_TOKEN"),
+        optional=("REDIS_URL", "SMTP_HOST", "SMTP_USER", "SMTP_PASSWORD", "SMTP_FROM", "VIDEO_SERVICE_URL", "VIDEO_SERVICE_TOKEN"),
     ),
     "whatsapp_ingress": ServiceProfile(
-        required=("FIREBASE_CONFIG", "REDIS_URL", "EVOLUTION_API_URL", "EVOLUTION_API_KEY"),
-        optional=("GROQ_API_KEY", "OPENROUTER_API_KEY", "WHATSAPP_INCOMING_QUEUE", "OMNICHANNEL_INCOMING_QUEUE"),
+        required=("FIREBASE_CONFIG", "EVOLUTION_API_URL", "EVOLUTION_API_KEY"),
+        optional=("REDIS_URL", "GROQ_API_KEY", "OPENROUTER_API_KEY", "WHATSAPP_INCOMING_QUEUE", "OMNICHANNEL_INCOMING_QUEUE"),
     ),
     "campaign": ServiceProfile(
-        required=("FIREBASE_CONFIG", "REDIS_URL", "EVOLUTION_API_URL", "EVOLUTION_API_KEY"),
-        optional=("N8N_CAMPAIGN_WEBHOOK_URL", "N8N_WEBHOOK_SECRET", "CHANNEL_PUBLICATIONS_QUEUE"),
+        required=("FIREBASE_CONFIG", "EVOLUTION_API_URL", "EVOLUTION_API_KEY"),
+        optional=("REDIS_URL", "N8N_CAMPAIGN_WEBHOOK_URL", "N8N_WEBHOOK_SECRET", "CHANNEL_PUBLICATIONS_QUEUE"),
     ),
     "channel_publication": ServiceProfile(
-        required=("FIREBASE_CONFIG", "REDIS_URL"),
-        optional=("CHANNEL_PUBLICATIONS_QUEUE", "CHANNEL_PUBLICATIONS_SCHEDULED_QUEUE"),
+        required=("FIREBASE_CONFIG",),
+        optional=("REDIS_URL", "CHANNEL_PUBLICATIONS_QUEUE", "CHANNEL_PUBLICATIONS_SCHEDULED_QUEUE"),
     ),
     "billing": ServiceProfile(
         required=("FIREBASE_CONFIG",),
