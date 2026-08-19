@@ -12,7 +12,7 @@ FROM python:3.11-slim
 WORKDIR /app
 RUN pip install --no-cache-dir Flask gunicorn requests
 
-COPY index.html platform.html assistant.html site_server.py ./
+COPY index.html platform.html assistant.html site_server.py tiktokoDTBw5Ntz98ZU3WlMhJdbTzyL0pFmdKH.txt ./
 COPY --from=frontend-build /build/platform-react/dist ./platform-react/dist
 
 RUN python -m py_compile site_server.py

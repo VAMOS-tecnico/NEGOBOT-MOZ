@@ -63,6 +63,11 @@ def legal_page():
     return _react_index()
 
 
+@app.get("/tiktokoDTBw5Ntz98ZU3WlMhJdbTzyL0pFmdKH.txt")
+def tiktok_url_verification():
+    return send_from_directory(SITE_ROOT, "tiktokoDTBw5Ntz98ZU3WlMhJdbTzyL0pFmdKH.txt", mimetype="text/plain")
+
+
 @app.get("/assets/<path:asset>")
 def public_asset(asset):
     return send_from_directory(REACT_DIST / "assets", asset)
