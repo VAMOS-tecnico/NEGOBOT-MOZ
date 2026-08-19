@@ -22,6 +22,7 @@ from services.evolution_service import send_whatsapp
 from services.group_automation_service import authorized_group_jids
 from services.n8n_service import dispatch_campaign_event
 from services.plan_service import entitlements_for_tenant
+from services.service_config import enforce_profile
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("negobot-campaign-worker")
@@ -361,6 +362,7 @@ def process_campaign(campaign_id: str, queue: Any) -> None:
 def main() -> None:
     import redis
 
+    enforce_profile("campaign")
     extensions.init_extensions()
     queue = redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379/1"), decode_responses=True)
     logger.info("Worker de campanhas iniciado; fila=%s", CAMPAIGN_QUEUE)

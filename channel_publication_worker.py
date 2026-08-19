@@ -5,12 +5,14 @@ import time
 
 import extensions
 from services.channel_publication_service import PUBLICATION_QUEUE, _redis_client, process_publication, promote_scheduled
+from services.service_config import enforce_profile
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("negobot-channel-publication-worker")
 
 
 def main() -> None:
+    enforce_profile("channel_publication")
     extensions.init_extensions()
     queue = _redis_client()
     queue.ping()

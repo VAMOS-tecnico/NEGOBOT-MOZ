@@ -9,6 +9,7 @@ import redis
 import requests
 
 from video_pipeline import render_job_with_tts
+from services.service_config import enforce_profile
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("negobot-video-worker")
@@ -47,6 +48,7 @@ def process(client, job: dict):
 
 
 def main():
+    enforce_profile("video")
     client = redis.from_url(REDIS_URL, decode_responses=True)
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     while True:

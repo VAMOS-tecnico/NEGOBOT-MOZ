@@ -9,6 +9,7 @@ load_dotenv()
 from flask import Flask
 from config import Config
 from extensions import init_extensions
+from services.service_config import enforce_profile
 from routes.webhook_routes import webhook_bp
 from routes.web_routes import web_bp
 from routes.platform_routes import platform_bp
@@ -26,6 +27,9 @@ def create_app():
     app.config["SESSION_REFRESH_EACH_REQUEST"] = True
     app.permanent_session_lifetime = timedelta(hours=12)
 
+    service_profile = os.getenv("NEGOBOT_SERVICE_PROFILE", "").strip()
+    if service_profile:
+        enforce_profile(service_profile)
     init_extensions(app)
 
     app.register_blueprint(webhook_bp)

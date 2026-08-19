@@ -15,6 +15,7 @@ except ImportError:  # instalado no container pelo requirements.txt
 
 from routes.webhook_routes import processar_webhook_background
 from services.incoming_queue import OMNICHANNEL_QUEUE_NAME, QUEUE_NAME
+from services.service_config import enforce_profile
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("negobot-incoming-worker")
@@ -95,6 +96,7 @@ def process_omnichannel_queue_item(item) -> bool:
 def main() -> None:
     if redis is None:
         raise RuntimeError("Biblioteca redis não instalada")
+    enforce_profile("whatsapp_ingress")
     _ensure_firestore()
     client = redis.from_url(REDIS_URL, decode_responses=True)
     client.ping()

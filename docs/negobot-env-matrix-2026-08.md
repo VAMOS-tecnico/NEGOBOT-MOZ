@@ -8,6 +8,7 @@ Este documento contém apenas nomes de variáveis encontrados no código; não c
 |---|
 | `ADMIN_TOKEN` |
 | `MAX_UPLOAD_BYTES` |
+| `NEGOBOT_SERVICE_PROFILE` |
 | `PLATFORM_SECRET_KEY` |
 | `PORT` |
 
@@ -197,6 +198,12 @@ Este documento contém apenas nomes de variáveis encontrados no código; não c
 | `ADMIN_TOKEN` |
 | `PLATFORM_SECRET_KEY` |
 | `TELEGRAM_TOKEN_ENCRYPTION_KEY` |
+
+## `services/service_config.py`
+
+| Variável |
+|---|
+| `NEGOBOT_SERVICE_PROFILE` |
 
 ## `site_server.py`
 

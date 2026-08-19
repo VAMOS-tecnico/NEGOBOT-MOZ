@@ -20,6 +20,7 @@ from firebase_admin import firestore
 
 from services.evolution_service import send_whatsapp
 from services.payment_service import identificar_plano_por_valor
+from services.service_config import enforce_profile
 
 LOGGER = logging.getLogger("autopay-sync")
 COLLECTION = os.getenv("AUTOPAY_COLLECTION", "transacoes_sucesso")
@@ -265,6 +266,7 @@ def _on_snapshot(col_snapshot, changes, read_time):
 
 def run_forever():
     logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    enforce_profile("billing")
     extensions.init_extensions()
     LOGGER.info("AutoPay Sync Worker iniciado; coleção=%s", COLLECTION)
     while True:
