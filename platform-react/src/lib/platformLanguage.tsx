@@ -1,4 +1,40 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { PLATFORM_TRANSLATIONS } from "./platformTranslations";
+
+const ORIGINAL_TEXT = new WeakMap<Text, string>();
+const ORIGINAL_ATTRIBUTES = new WeakMap<Element, Record<string, string>>();
+const TRANSLATABLE_ATTRIBUTES = ["placeholder", "title", "aria-label"];
+const ENGLISH_TO_PORTUGUESE = Object.fromEntries(Object.entries(PLATFORM_TRANSLATIONS).map(([portuguese, english]) => [english, portuguese]));
+
+function translatePlatformDom(language: PlatformLanguage) {
+  if (typeof document === "undefined" || !document.body) return;
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  let node: Node | null;
+  while ((node = walker.nextNode())) {
+    const textNode = node as Text;
+    if (!ORIGINAL_TEXT.has(textNode)) { const current = textNode.nodeValue || ""; const trimmedCurrent = current.trim(); ORIGINAL_TEXT.set(textNode, language === "en" ? (ENGLISH_TO_PORTUGUESE[trimmedCurrent] || current) : current); }
+    const original = ORIGINAL_TEXT.get(textNode) || "";
+    const trimmed = original.trim();
+    const translated = language === "en" ? PLATFORM_TRANSLATIONS[trimmed] : undefined;
+    if (translated) {
+      const leading = original.match(/^\s*/)?.[0] || "";
+      const trailing = original.match(/\s*$/)?.[0] || "";
+      textNode.nodeValue = `${leading}${translated}${trailing}`;
+    } else if (language === "pt") {
+      textNode.nodeValue = original;
+    }
+  }
+  document.body.querySelectorAll<HTMLElement>("[placeholder], [title], [aria-label]").forEach((element) => {
+    const existing = ORIGINAL_ATTRIBUTES.get(element) || {};
+    for (const attribute of TRANSLATABLE_ATTRIBUTES) {
+      const value = element.getAttribute(attribute);
+      if (value !== null && existing[attribute] === undefined) existing[attribute] = language === "en" ? (ENGLISH_TO_PORTUGUESE[value] || value) : value;
+      const original = existing[attribute];
+      if (original !== undefined) element.setAttribute(attribute, language === "en" ? (PLATFORM_TRANSLATIONS[original] || original) : original);
+    }
+    ORIGINAL_ATTRIBUTES.set(element, existing);
+  });
+}
 
 export type PlatformLanguage = "en" | "pt";
 
@@ -19,6 +55,10 @@ export function PlatformLanguageProvider({ children }: { children: ReactNode }) 
   useEffect(() => {
     window.localStorage.setItem(STORAGE_KEY, language);
     document.documentElement.lang = language === "en" ? "en" : "pt-MZ";
+    translatePlatformDom(language);
+    const observer = new MutationObserver(() => translatePlatformDom(language));
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: TRANSLATABLE_ATTRIBUTES });
+    return () => observer.disconnect();
   }, [language]);
 
   const value = useMemo(() => ({ language, setLanguage }), [language]);
@@ -29,6 +69,11 @@ export function usePlatformLanguage() {
   const context = useContext(PlatformLanguageContext);
   if (!context) throw new Error("usePlatformLanguage must be used inside PlatformLanguageProvider");
   return context;
+}
+
+export function usePlatformText() {
+  const { language } = usePlatformLanguage();
+  return (portuguese: string, english: string) => language === "en" ? english : portuguese;
 }
 
 export function LanguageToggle() {
