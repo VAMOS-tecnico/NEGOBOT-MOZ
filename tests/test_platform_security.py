@@ -174,6 +174,11 @@ class PlatformSecurityTests(unittest.TestCase):
         self.assertNotIn("token_ciphertext", body)
         self.assertNotIn("webhook_secret_ciphertext", body)
 
+    def test_admin_session_cannot_open_client_channels_without_tenant(self):
+        set_identity(self.client, {"id": "platform-owner", "name": "Administrador", "role": "owner", "tenant_id": None})
+        response = self.client.get("/api/platform/client/channels")
+        self.assertEqual(response.status_code, 403)
+
     def test_client_cannot_open_admin_endpoints(self):
         set_identity(self.client, {"id": "user-a", "name": "Cliente A", "role": "client", "tenant_id": "tenant-a", "tenant_role": "owner"})
         response = self.client.get("/api/platform/admin/overview")
