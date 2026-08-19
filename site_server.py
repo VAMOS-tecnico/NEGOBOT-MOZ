@@ -55,6 +55,14 @@ def assistant():
     return _react_index()
 
 
+@app.get("/terms")
+@app.get("/terms/")
+@app.get("/privacy")
+@app.get("/privacy/")
+def legal_page():
+    return _react_index()
+
+
 @app.get("/assets/<path:asset>")
 def public_asset(asset):
     return send_from_directory(REACT_DIST / "assets", asset)
