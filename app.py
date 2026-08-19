@@ -10,6 +10,7 @@ from flask import Flask
 from config import Config
 from extensions import init_extensions
 from services.service_config import enforce_profile
+from services.runtime_health import liveness_report, readiness_report
 from routes.webhook_routes import webhook_bp
 from routes.web_routes import web_bp
 from routes.platform_routes import platform_bp
@@ -36,6 +37,15 @@ def create_app():
     app.register_blueprint(web_bp)
     app.register_blueprint(platform_bp)
     app.register_blueprint(omnichannel_bp)
+
+    @app.get("/healthz")
+    def healthz():
+        return liveness_report(), 200
+
+    @app.get("/readyz")
+    def readyz():
+        report = readiness_report()
+        return report, 200 if report["status"] == "ready" else 503
 
     return app
 
