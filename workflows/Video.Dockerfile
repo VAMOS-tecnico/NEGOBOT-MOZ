@@ -10,6 +10,7 @@ COPY requirements-video.txt ./requirements-video.txt
 RUN pip install --no-cache-dir -r requirements-video.txt
 
 COPY video_service.py video_pipeline.py video_worker.py ./
+COPY services ./services
 
 RUN mkdir -p /var/lib/negobot/videos
 EXPOSE 8080
