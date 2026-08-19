@@ -125,7 +125,7 @@ O Telegram exige que `secret_token` tenha entre 1 e 256 caracteres e use apenas 
 
 ## 2. Cifrar o token por tenant
 
-Não guardar `bot_token` nem `webhook_secret` em texto simples no Firestore. Criar um cifrador de aplicação com uma chave configurada no Boomploy, por exemplo `TELEGRAM_TOKEN_ENCRYPTION_KEY`. A chave deve existir apenas no backend.
+Não guardar `bot_token` nem `webhook_secret` em texto simples no Firestore. O sistema aceita uma chave dedicada `TELEGRAM_TOKEN_ENCRYPTION_KEY`; se ela não existir, deriva automaticamente uma chave Fernet da chave de segurança existente `PLATFORM_SECRET_KEY` ou `ADMIN_TOKEN`. Em ambos os casos, a chave existe apenas no backend.
 
 Adicionar a dependência:
 
@@ -138,6 +138,8 @@ Criar `services/secret_store.py`:
 ```python
 from __future__ import annotations
 
+import base64
+import hashlib
 import os
 from cryptography.fernet import Fernet, InvalidToken
 
@@ -147,13 +149,19 @@ class SecretStoreError(RuntimeError):
 
 
 def _fernet() -> Fernet:
-    key = os.getenv("TELEGRAM_TOKEN_ENCRYPTION_KEY", "").strip().encode()
-    if not key:
-        raise SecretStoreError("TELEGRAM_TOKEN_ENCRYPTION_KEY não configurada")
+    explicit_key = os.getenv("TELEGRAM_TOKEN_ENCRYPTION_KEY", "").strip()
+    if explicit_key:
+        key = explicit_key.encode()
+    else:
+        platform_key = (os.getenv("PLATFORM_SECRET_KEY") or os.getenv("ADMIN_TOKEN") or "").strip()
+        if not platform_key:
+            raise SecretStoreError("Nenhuma chave de segurança do Backend está configurada")
+        digest = hashlib.sha256(f"negobot-telegram-secret-v1:{platform_key}".encode()).digest()
+        key = base64.urlsafe_b64encode(digest)
     try:
         return Fernet(key)
     except Exception as exc:
-        raise SecretStoreError("TELEGRAM_TOKEN_ENCRYPTION_KEY inválida") from exc
+        raise SecretStoreError("Chave de cifragem inválida") from exc
 
 
 def encrypt_secret(value: str) -> str:
@@ -167,14 +175,14 @@ def decrypt_secret(value: str) -> str:
         raise SecretStoreError("Segredo cifrado inválido") from exc
 ```
 
-Gerar uma chave uma única vez e colocá-la como variável secreta do backend:
+Se quiseres separar a chave Telegram da chave geral, podes gerar uma chave dedicada e colocá-la como variável secreta do backend:
 
 ```python
 from cryptography.fernet import Fernet
 print(Fernet.generate_key().decode())
 ```
 
-O valor gerado deve ser guardado no Boomploy, não no repositório GitHub.
+O valor gerado deve ser guardado no Boomploy, não no repositório GitHub. Esta variável é opcional porque o fallback automático já utiliza a chave existente do Backend.
 
 ## 3. Endpoint autenticado de ligação
 

@@ -153,6 +153,17 @@ class PlatformSecurityTests(unittest.TestCase):
         self.assertNotIn("123:SECRET", stored["token_ciphertext"])
         mock_set.assert_called_once()
 
+    def test_telegram_cipher_falls_back_to_existing_platform_key(self):
+        from services.secret_store import decrypt_secret, encrypt_secret
+        original = os.environ.pop("TELEGRAM_TOKEN_ENCRYPTION_KEY", None)
+        try:
+            encrypted = encrypt_secret("telegram-secret")
+            self.assertNotEqual(encrypted, "telegram-secret")
+            self.assertEqual(decrypt_secret(encrypted), "telegram-secret")
+        finally:
+            if original is not None:
+                os.environ["TELEGRAM_TOKEN_ENCRYPTION_KEY"] = original
+
     def test_telegram_status_does_not_return_secrets(self):
         self.db.collections["tenants"] = {"tenant-a": FakeSnapshot("tenant-a", {"tenant_id": "tenant-a", "channels": {"telegram": {"status": "connected", "token_ciphertext": "gAAAA-secret", "webhook_secret_ciphertext": "gAAAA-webhook", "bot_username": "cliente_bot"}}})}
         set_identity(self.client, {"id": "user-a", "name": "A", "role": "client", "tenant_id": "tenant-a", "tenant_role": "owner"})
