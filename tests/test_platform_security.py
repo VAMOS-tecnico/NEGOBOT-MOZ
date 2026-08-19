@@ -315,6 +315,33 @@ class PlatformSecurityTests(unittest.TestCase):
         self.assertEqual(response.status_code, 409)
         self.assertIn("Já existe", response.get_json()["error"])
 
+    def test_public_registration_rejects_email_with_case_or_whitespace_bypass(self):
+        email = "CaseUser@example.com"
+        canonical_id = platform_routes._doc_id(email)
+        self.db.collections["platform_users"] = {
+            canonical_id: FakeSnapshot(canonical_id, {"email": "caseuser@example.com", "status": "active"})
+        }
+        response = self.client.post(
+            "/api/platform/auth/register",
+            json={"name": "Duplicado", "email": "  caseuser@EXAMPLE.com  ", "password": "password-123"},
+        )
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("Já existe", response.get_json()["error"])
+
+    def test_public_registration_rejects_reserved_central_identity_without_user_document(self):
+        email = "reserved@example.com"
+        central_account_id = f"ca_{platform_routes._doc_id(email)[:24]}"
+        self.db.collections["central_trial_registry"] = {
+            central_account_id: FakeSnapshot(central_account_id, {"account_email": email, "trial_consumed": True})
+        }
+        response = self.client.post(
+            "/api/platform/auth/register",
+            json={"name": "Reservado", "email": email, "password": "password-123"},
+        )
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("Já existe", response.get_json()["error"])
+        self.assertFalse(any(snapshot.exists for snapshot in self.db.collections.get("tenants", {}).values()))
+
     def test_login_rate_limit_applies_before_credential_lookup(self):
         for _ in range(8):
             response = self.client.post("/api/platform/auth/login", json={"identifier": "admin", "password": "wrong-password"})

@@ -128,6 +128,93 @@ def _tenant_for_identity(identity: dict[str, Any]) -> str | None:
     return str(tenant_id) if tenant_id else None
 
 
+def _create_platform_account(
+    db: Any,
+    *,
+    name: str,
+    email: str,
+    password: str,
+    billing_region: str,
+    selected_plan: str,
+) -> dict[str, Any] | None:
+    """Create the account, tenant and trial registry as one uniqueness boundary.
+
+    The canonical platform user document is keyed by the normalized email hash.
+    In production, a Firestore transaction makes two simultaneous registrations
+    for the same email conflict instead of creating two tenants. Test doubles
+    without transaction support use the same deterministic document check.
+    """
+    user_ref = db.collection("platform_users").document(_doc_id(email))
+    central_account_id = f"ca_{user_ref.id[:24]}"
+    registry_ref = db.collection("central_trial_registry").document(central_account_id)
+    tenant_id = f"tnt_{secrets.token_urlsafe(8)}"
+    tenant_ref = db.collection("tenants").document(tenant_id)
+    now = _now()
+    password_hash = generate_password_hash(password)
+    tenant_fields = {
+        "name": name,
+        "email": email,
+        "account_email": email,
+        "central_account_id": central_account_id,
+        "central_identity_email_hash": _doc_id(email),
+        "empresa_nome": name,
+        "status": "active",
+        "plan": "demonstracao",
+        "plano": "demonstracao",
+        "nome_plano": "Demonstração",
+        "status_plano": "demonstracao",
+        "trial_status": "trial_pending_connection",
+        "trial_connection_confirmed": False,
+        "billing_region": billing_region,
+        "selected_plan": selected_plan or None,
+        "central_trial_status": PENDING_STATUS,
+        "onboarding_status": "incomplete",
+        "profile_completed": False,
+        "onboarding_step": "profile",
+        "created_at": now,
+        "limits": {"contacts": 500, "contact_limit": 500, "conversation_limit": 500, "campaigns_per_month": 2, "team_seats": 1, "messages_per_campaign": 100, "included_channels": ["whatsapp"], "additional_channel_slots": 0},
+    }
+    user_fields = {
+        "name": name,
+        "email": email,
+        "central_account_id": central_account_id,
+        "role": "client",
+        "tenant_id": tenant_id,
+        "tenant_role": "owner",
+        "status": "active",
+        "password_hash": password_hash,
+        "created_at": now,
+        "last_login_at": now,
+    }
+    registry_fields = pending_registry_fields(central_account_id, tenant_id, email=email, now=now)
+
+    transaction_factory = getattr(db, "transaction", None)
+    if not callable(transaction_factory):
+        if user_ref.get().exists or registry_ref.get().exists:
+            return None
+        tenant_ref.set(tenant_fields)
+        user_ref.set(user_fields)
+        registry_ref.set(registry_fields, merge=True)
+        return {"tenant_id": tenant_id, "central_account_id": central_account_id, "now": now}
+
+    last_error: Exception | None = None
+    for _attempt in range(3):
+        try:
+            transaction = transaction_factory()
+            existing_user = transaction.get(user_ref)
+            existing_registry = transaction.get(registry_ref)
+            if getattr(existing_user, "exists", False) or getattr(existing_registry, "exists", False):
+                return None
+            transaction.set(tenant_ref, tenant_fields)
+            transaction.set(user_ref, user_fields)
+            transaction.set(registry_ref, registry_fields, merge=True)
+            transaction.commit()
+            return {"tenant_id": tenant_id, "central_account_id": central_account_id, "now": now}
+        except Exception as exc:
+            last_error = exc
+    raise RuntimeError("Não foi possível criar a conta de forma segura.") from last_error
+
+
 def _tenant_data(tenant_id: str | None) -> dict[str, Any]:
     if not tenant_id:
         return {}
@@ -226,50 +313,22 @@ def register():
         return jsonify({"error": "Plano selecionado inválido."}), 400
     if not _login_allowed(email):
         return jsonify({"error": "Demasiadas tentativas. Aguarda alguns minutos antes de tentar novamente."}), 429
-    db = _db()
-    user_ref = db.collection("platform_users").document(_doc_id(email))
-    if user_ref.get().exists:
+    try:
+        created = _create_platform_account(
+            _db(),
+            name=name,
+            email=email,
+            password=password,
+            billing_region=billing_region,
+            selected_plan=selected_plan,
+        )
+    except RuntimeError:
+        return jsonify({"error": "Não foi possível criar a conta de forma segura neste momento."}), 503
+    if created is None:
         return jsonify({"error": "Já existe uma conta com este email. Usa a opção Entrar na plataforma."}), 409
-    tenant_id = f"tnt_{secrets.token_urlsafe(8)}"
-    central_account_id = f"ca_{user_ref.id[:24]}"
-    now = _now()
-    tenant_ref = db.collection("tenants").document(tenant_id)
-    tenant_ref.set({
-        "name": name,
-        "email": email,
-        "account_email": email,
-        "central_account_id": central_account_id,
-        "central_identity_email_hash": _doc_id(email),
-        "empresa_nome": name,
-        "status": "active",
-        "plan": "demonstracao",
-        "plano": "demonstracao",
-        "nome_plano": "Demonstração",
-        "status_plano": "demonstracao",
-        "trial_status": "trial_pending_connection",
-        "trial_connection_confirmed": False,
-        "billing_region": billing_region,
-        "selected_plan": selected_plan or None,
-        "central_trial_status": PENDING_STATUS,
-        "onboarding_status": "incomplete",
-        "profile_completed": False,
-        "onboarding_step": "profile",
-        "created_at": now,
-        "limits": {"contacts": 500, "contact_limit": 500, "conversation_limit": 500, "campaigns_per_month": 2, "team_seats": 1, "messages_per_campaign": 100, "included_channels": ["whatsapp"], "additional_channel_slots": 0},
-    })
-    user_ref.set({
-        "name": name,
-        "email": email,
-        "central_account_id": central_account_id,
-        "role": "client",
-        "tenant_id": tenant_id,
-        "tenant_role": "owner",
-        "status": "active",
-        "password_hash": generate_password_hash(password),
-        "created_at": now,
-        "last_login_at": now,
-    })
-    db.collection("central_trial_registry").document(central_account_id).set(pending_registry_fields(central_account_id, tenant_id, email=email, now=now), merge=True)
+    tenant_id = str(created["tenant_id"])
+    central_account_id = str(created["central_account_id"])
+    user_ref = _db().collection("platform_users").document(_doc_id(email))
     identity = {"id": user_ref.id, "name": name, "email": email, "central_account_id": central_account_id, "role": "client", "tenant_id": tenant_id, "tenant_role": "owner"}
     session.clear()
     session["platform_identity"] = identity
