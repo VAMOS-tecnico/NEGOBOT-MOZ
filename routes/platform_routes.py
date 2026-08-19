@@ -804,8 +804,18 @@ def create_campaign():
     scheduled_at = str(payload.get("scheduled_at") or "").strip()[:80] or None
     tenant_id = _tenant_for_identity(_identity())
     db = _db()
+    tenant_data = _tenant_data(tenant_id)
     entitlements = _current_entitlements(tenant_id)
-    channel_limit = plan_channel_limit(_tenant_data(tenant_id))
+    if not entitlements.get("mass_broadcast"):
+        return jsonify({"error": "O disparo em massa está disponível apenas durante o trial Premium ou no plano Premium activo."}), 403
+    authorized_instance = str(tenant_data.get("instance_name") or "").strip()
+    requested_instance = str(payload.get("instance_name") or "").strip()
+    if requested_instance and authorized_instance and requested_instance != authorized_instance:
+        return jsonify({"error": "A instância seleccionada não pertence a este tenant."}), 403
+    if not authorized_instance:
+        return jsonify({"error": "Liga primeiro o WhatsApp deste tenant antes de criar uma campanha."}), 409
+    instance_name = authorized_instance
+    channel_limit = plan_channel_limit(tenant_data)
     if len(channels) > channel_limit:
         return jsonify({"error": f"O teu plano permite até {channel_limit} canal(is) por campanha. Faz upgrade ou adiciona o Pacote Canais+."}), 403
     campaign_limit = entitlements.get("campaigns_per_month")
@@ -821,9 +831,18 @@ def create_campaign():
     if len(name) < 2 or not message or len(message) > 4000:
         return jsonify({"error": "Nome e mensagem são obrigatórios e a mensagem não pode exceder 4000 caracteres."}), 400
     segment_tags = sorted({str(item).strip().lower() for item in (payload.get("tags") or payload.get("segment_tags") or []) if str(item).strip()})[:20]
-    contacts = list(db.collection("contacts").where("tenant_id", "==", tenant_id).where("opt_in", "==", True).limit(1000).stream())
+    requested_limit_raw = payload.get("recipient_limit") or payload.get("max_recipients") or 0
+    try:
+        recipient_limit = int(requested_limit_raw) if requested_limit_raw else int(entitlements.get("contact_limit") or 1000)
+    except (TypeError, ValueError):
+        return jsonify({"error": "O limite de destinatários deve ser um número inteiro."}), 400
+    plan_contact_limit = int(entitlements.get("contact_limit") or 0)
+    if recipient_limit < 1 or (plan_contact_limit and recipient_limit > plan_contact_limit):
+        return jsonify({"error": f"O limite deve ficar entre 1 e {plan_contact_limit or 'o limite do plano'} contactos."}), 400
+    contacts = list(db.collection("contacts").where("tenant_id", "==", tenant_id).where("opt_in", "==", True).limit(min(recipient_limit, 5000)).stream())
     if segment_tags:
         contacts = [contact for contact in contacts if set(segment_tags).issubset(set((contact.to_dict() or {}).get("tags") or []))]
+    contacts = contacts[:recipient_limit]
     if not contacts:
         return jsonify({"error": "Adicione primeiro contactos com consentimento para receber mensagens."}), 400
     campaign_ref = db.collection("campaigns").document()
@@ -833,7 +852,7 @@ def create_campaign():
         "message": message,
         "template_id": template_id or None,
         "segment_tags": segment_tags,
-        "instance_name": str(payload.get("instance_name") or "").strip() or None,
+        "instance_name": instance_name,
         "channels": channels,
         "language": language,
         "tone": tone,

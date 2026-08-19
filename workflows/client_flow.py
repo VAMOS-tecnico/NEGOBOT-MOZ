@@ -89,6 +89,25 @@ def contem_palavra_exata(texto, lista_palavras):
             return True
     return False
 
+def marcar_opt_out_campanhas(tenant_id, phone_number, message_text):
+    """Revoga o consentimento de marketing no tenant correcto."""
+    if not tenant_id or not phone_number or not contem_palavra_exata(message_text, ("parar", "stop", "sair", "unsubscribe", "cancelar")):
+        return False
+    try:
+        numero = re.sub(r"\D", "", str(phone_number).split("@")[0])
+        if len(numero) < 8:
+            return False
+        contactos = extensions.db.collection("contacts").where("tenant_id", "==", tenant_id).where("phone", "==", numero).limit(20).stream()
+        changed = False
+        for contacto in contactos:
+            contacto.reference.set({"opt_in": False, "do_not_contact": True, "opt_out_at": datetime.now(timezone.utc), "opt_out_source": "whatsapp"}, merge=True)
+            changed = True
+        return changed
+    except Exception:
+        logger.exception("Falha ao registar opt-out para tenant=%s", tenant_id)
+        return False
+
+
 def checar_timeout_atendimento_humano(conversa_ref, conversa_dados, agora):
     """Verifica se o tempo limite de atendimento humano expirou."""
     if conversa_dados and conversa_dados.get("status_atendimento") == "humano":
@@ -182,6 +201,14 @@ def process_client_flow(
             return
 
         if not nome_instancia_atual or not clean_user_phone or clean_user_phone in ["None", "false", "true", ""]:
+            return
+
+        # O opt-out é processado antes do plano, da IA e de qualquer campanha.
+        tenant_lookup = extensions.db.collection("tenants").where("instance_name", "==", nome_instancia_atual).limit(1).stream()
+        tenant_doc = next(iter(tenant_lookup), None)
+        tenant_id_for_opt_out = tenant_doc.id if tenant_doc is not None else ""
+        if not is_from_me and marcar_opt_out_campanhas(tenant_id_for_opt_out, clean_user_phone, message_text):
+            logger.info("Opt-out de campanhas registado para tenant=%s telefone=%s", tenant_id_for_opt_out, clean_user_phone)
             return
 
         # Referências no Firestore

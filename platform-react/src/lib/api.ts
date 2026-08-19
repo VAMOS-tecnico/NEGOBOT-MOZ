@@ -164,6 +164,8 @@ export type Campaign = {
   offer?: string;
   scheduled_at?: string | null;
   orchestration_status?: string;
+  recipient_limit?: number;
+  skipped?: number;
 };
 
 export type CampaignTemplate = {
@@ -372,7 +374,7 @@ export const api = {
     templates: () => request<{ templates: CampaignTemplate[] }>("/api/platform/client/templates"),
     createTemplate: (name: string, body: string) => request<{ created: true; template: CampaignTemplate }>("/api/platform/client/templates", { method: "POST", body: JSON.stringify({ name, body }) }),
     updateTemplate: (id: string, fields: { name?: string; body?: string; status?: "active" | "archived" }) => request<{ updated: true }>(`/api/platform/client/templates/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(fields) }),
-    createCampaign: (name: string, message: string, options: { template_id?: string; tags?: string[]; channels?: string[]; language?: string; tone?: string; offer?: string; scheduled_at?: string } = {}) => request<{ created: true; campaign: Campaign }>("/api/platform/client/campaigns", { method: "POST", body: JSON.stringify({ name, message, ...options }) }),
+    createCampaign: (name: string, message: string, options: { template_id?: string; tags?: string[]; channels?: string[]; language?: string; tone?: string; offer?: string; scheduled_at?: string; recipient_limit?: number } = {}) => request<{ created: true; campaign: Campaign }>("/api/platform/client/campaigns", { method: "POST", body: JSON.stringify({ name, message, ...options }) }),
     campaignAction: (id: string, action: "pause" | "resume" | "cancel") => request<{ updated: true; status: string }>(`/api/platform/client/campaigns/${id}/actions/${action}`, { method: "POST" }),
     profile: () => request<BusinessProfile>("/api/platform/client/profile"),
     updateProfile: (profile: Partial<BusinessProfile>) => request<{ updated: true; fields: string[] }>("/api/platform/client/profile", { method: "PATCH", body: JSON.stringify(profile) }),
