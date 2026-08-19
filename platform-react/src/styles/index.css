@@ -258,3 +258,17 @@ select:focus { border-color: rgba(98, 226, 171, .7); box-shadow: 0 0 0 3px rgba(
 .spin { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (max-width: 560px) { .modal-backdrop { padding: 10px; } .channel-modal { padding: 17px; border-radius: 14px; } .modal-actions { flex-direction: column-reverse; } .modal-actions button { width: 100%; justify-content: center; } }
+
+/* Central account first-channel choice */
+.channel-choice-grid { display: grid; gap: 8px; }
+.channel-choice { display: flex; position: relative; align-items: center; gap: 10px; width: 100%; padding: 10px 11px; border: 1px solid rgba(117, 173, 148, .14); border-radius: 10px; color: #a4bcae; background: rgba(5, 15, 12, .38); text-align: left; cursor: pointer; transition: border-color .18s ease, background .18s ease, transform .18s ease; }
+.channel-choice:hover:not(:disabled) { border-color: rgba(98, 226, 171, .46); transform: translateY(-1px); }
+.channel-choice.selected { border-color: rgba(98, 226, 171, .7); color: #e1f7e8; background: rgba(67, 180, 127, .14); box-shadow: 0 0 0 2px rgba(98, 226, 171, .08); }
+.channel-choice.disabled { opacity: .55; cursor: not-allowed; }
+.channel-choice-icon { display: grid; width: 31px; height: 31px; flex: 0 0 auto; place-items: center; border-radius: 9px; color: #7ce0ae; background: rgba(98, 226, 171, .11); }
+.channel-choice > span:nth-child(2) { display: grid; gap: 2px; min-width: 0; }
+.channel-choice strong { color: inherit; font-size: 12px; }
+.channel-choice small { color: #8fac9d; font-size: 10px; line-height: 1.35; }
+.channel-choice em { margin-left: auto; color: #f2ce91; font-size: 9px; font-style: normal; white-space: nowrap; }
+.onboarding-channel-card { display: grid; gap: 12px; }
+.onboarding-channel-card .panel-heading { margin-bottom: 0; }

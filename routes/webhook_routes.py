@@ -9,6 +9,7 @@ import extensions
 from services.evolution_service import notificar_erro_admin, send_whatsapp, transcrever_audio_mensagem
 from services.incoming_queue import enqueue_incoming_event
 from services.trial_service import ACTIVE_STATUS, PENDING_STATUS, active_fields, is_paid_plan
+from services.central_account_service import central_account_id_for_tenant, claim_trial_for_account, registry_is_expired, registry_status, trial_fields_from_registry
 from workflows.central_flow import process_central_flow
 from workflows.client_flow import process_client_flow
 
@@ -126,10 +127,25 @@ def _mark_trial_connection_open(instance_name: str, data: dict) -> None:
         logger.info("CONNECTION_UPDATE ignorado para instância desconhecida=%s", instance_name)
         return
 
+    central_account_id = central_account_id_for_tenant(current)
+    primary_tenant_id = tenant_refs[0].id if tenant_refs else ""
+    registry = registry_status(extensions.db, central_account_id)
     if is_paid_plan(current):
         fields = {"evolution_state": "open", "instance_name": instance_name}
-    elif current.get("trial_connected_at") or current.get("trial_connection_confirmed") is True:
-        fields = {"evolution_state": "open", "trial_status": ACTIVE_STATUS}
+    elif registry_is_expired(registry) or str(registry.get("trial_status") or "").lower() == "trial_expired":
+        fields = {"evolution_state": "open", "trial_status": "trial_expired", "trial_access_level": "none", "central_account_id": central_account_id}
+    elif registry.get("trial_consumed"):
+        fields = trial_fields_from_registry(registry, "whatsapp", instance_name)
+        fields["evolution_state"] = "open"
+        fields["instance_name"] = instance_name
+    elif central_account_id:
+        claimed, registry = claim_trial_for_account(extensions.db, central_account_id, primary_tenant_id, "whatsapp", email=current.get("account_email") or current.get("email"), phone=digits or instance_name)
+        if registry.get("blocked_by_identity"):
+            fields = {"evolution_state": "open", "trial_status": "trial_expired", "trial_access_level": "none", "central_account_id": central_account_id}
+        else:
+            fields = trial_fields_from_registry(registry, "whatsapp", instance_name) if claimed or registry.get("trial_consumed") else active_fields(digits or instance_name)
+            fields["evolution_state"] = "open"
+            fields["instance_name"] = instance_name
     else:
         fields = active_fields(digits or instance_name)
 

@@ -153,6 +153,21 @@ class PlatformSecurityTests(unittest.TestCase):
         self.assertNotIn("123:SECRET", stored["token_ciphertext"])
         mock_set.assert_called_once()
 
+    @patch("routes.platform_routes.get_me")
+    @patch("routes.platform_routes.set_webhook")
+    @patch("routes.platform_routes.get_webhook_info")
+    def test_first_telegram_connection_claims_central_trial(self, mock_info, mock_set, mock_me):
+        self.db.collections["tenants"] = {"tenant-a": FakeSnapshot("tenant-a", {"tenant_id": "tenant-a", "account_email": "a@example.com", "central_account_id": "ca_a", "channels": {}})}
+        mock_me.return_value = {"id": 321, "username": "primeiro_bot", "first_name": "Primeiro"}
+        mock_info.return_value = {"url": "https://negobot-api.duckdns.org/api/omnichannel/telegram/tenant-a", "pending_update_count": 0}
+        set_identity(self.client, {"id": "user-a", "name": "A", "role": "client", "tenant_id": "tenant-a", "tenant_role": "owner"})
+        response = self.client.post("/api/platform/client/channels/telegram/connect", json={"bot_token": "321:SECRET"})
+        self.assertEqual(response.status_code, 200)
+        registry = self.db.collections["central_trial_registry"]["ca_a"].data
+        self.assertEqual(registry["started_channel"], "telegram")
+        self.assertTrue(registry["trial_consumed"])
+        self.assertEqual(self.db.collections["tenants"]["tenant-a"].data["trial_access_level"], "premium")
+
     def test_telegram_cipher_falls_back_to_existing_platform_key(self):
         from services.secret_store import decrypt_secret, encrypt_secret
         original = os.environ.pop("TELEGRAM_TOKEN_ENCRYPTION_KEY", None)

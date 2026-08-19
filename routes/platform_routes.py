@@ -16,7 +16,8 @@ from flask import Blueprint, jsonify, request, session
 from werkzeug.security import check_password_hash, generate_password_hash
 
 import extensions
-from services.trial_service import active_fields, is_expired as trial_is_expired, is_paid_plan, pending_fields
+from services.trial_service import ACTIVE_STATUS, PENDING_STATUS, active_fields, is_expired as trial_is_expired, is_paid_plan, pending_fields
+from services.central_account_service import central_account_id_for_tenant, claim_trial_for_account, pending_registry_fields, registry_is_expired, registry_status, trial_fields_from_registry
 from services.channel_registry import CHANNEL_STATUSES, client_channel_rows, ensure_channel
 from services.plan_service import entitlements_for_tenant, plan_channel_limit, public_plan_rows
 from services.secret_store import SecretStoreError, decrypt_secret, encrypt_secret
@@ -227,12 +228,15 @@ def register():
     if user_ref.get().exists:
         return jsonify({"error": "Já existe uma conta com este email. Usa a opção Entrar na plataforma."}), 409
     tenant_id = f"tnt_{secrets.token_urlsafe(8)}"
+    central_account_id = f"ca_{user_ref.id[:24]}"
     now = _now()
     tenant_ref = db.collection("tenants").document(tenant_id)
     tenant_ref.set({
         "name": name,
         "email": email,
         "account_email": email,
+        "central_account_id": central_account_id,
+        "central_identity_email_hash": _doc_id(email),
         "empresa_nome": name,
         "status": "active",
         "plan": "demonstracao",
@@ -243,6 +247,7 @@ def register():
         "trial_connection_confirmed": False,
         "billing_region": billing_region,
         "selected_plan": selected_plan or None,
+        "central_trial_status": PENDING_STATUS,
         "onboarding_status": "incomplete",
         "profile_completed": False,
         "onboarding_step": "profile",
@@ -252,6 +257,7 @@ def register():
     user_ref.set({
         "name": name,
         "email": email,
+        "central_account_id": central_account_id,
         "role": "client",
         "tenant_id": tenant_id,
         "tenant_role": "owner",
@@ -260,7 +266,8 @@ def register():
         "created_at": now,
         "last_login_at": now,
     })
-    identity = {"id": user_ref.id, "name": name, "email": email, "role": "client", "tenant_id": tenant_id, "tenant_role": "owner"}
+    db.collection("central_trial_registry").document(central_account_id).set(pending_registry_fields(central_account_id, tenant_id, email=email, now=now), merge=True)
+    identity = {"id": user_ref.id, "name": name, "email": email, "central_account_id": central_account_id, "role": "client", "tenant_id": tenant_id, "tenant_role": "owner"}
     session.clear()
     session["platform_identity"] = identity
     session.permanent = True
@@ -320,12 +327,15 @@ def create_tenant():
     if user_ref.get().exists:
         return jsonify({"error": "Já existe uma conta com este email."}), 409
     tenant_id = f"tnt_{secrets.token_urlsafe(8)}"
+    central_account_id = f"ca_{user_ref.id[:24]}"
     now = _now()
     tenant_ref = db.collection("tenants").document(tenant_id)
     tenant_ref.set({
         "name": name,
         "email": email,
         "account_email": email,
+        "central_account_id": central_account_id,
+        "central_identity_email_hash": _doc_id(email),
         "empresa_nome": name,
         "status": "active",
         "plan": "demonstracao",
@@ -340,6 +350,7 @@ def create_tenant():
     user_ref.set({
         "name": name,
         "email": email,
+        "central_account_id": central_account_id,
         "role": "client",
         "tenant_id": tenant_id,
         "tenant_role": "owner",
@@ -348,6 +359,7 @@ def create_tenant():
         "created_at": now,
         "last_login_at": None,
     })
+    db.collection("central_trial_registry").document(central_account_id).set(pending_registry_fields(central_account_id, tenant_id, email=email, now=now), merge=True)
     return jsonify({"created": True, "tenant": {"id": tenant_id, "name": name, "plan": "demonstracao"}}), 201
 
 
@@ -481,6 +493,7 @@ def get_client_profile():
         "status_conexao": tenant.get("evolution_state", "desconectado"),
         "billing_region": tenant.get("billing_region", "mozambique"),
         "selected_plan": tenant.get("selected_plan"),
+        "preferred_trial_channel": tenant.get("preferred_trial_channel", "whatsapp"),
         "onboarding_status": tenant.get("onboarding_status", "incomplete"),
         "profile_completed": bool(tenant.get("profile_completed", False)),
     })
@@ -522,6 +535,11 @@ def update_client_profile():
         if selected_plan and selected_plan not in {"basico", "medio", "premium"}:
             return jsonify({"error": "Plano seleccionado inválido."}), 400
         changes["selected_plan"] = selected_plan or None
+    if "preferred_trial_channel" in payload:
+        preferred_channel = str(payload.get("preferred_trial_channel") or "").strip().lower()
+        if preferred_channel not in {"whatsapp", "telegram", "instagram", "facebook"}:
+            return jsonify({"error": "Canal de teste inválido."}), 400
+        changes["preferred_trial_channel"] = preferred_channel
     if not changes:
         return jsonify({"error": "Nenhuma alteração de perfil foi enviada."}), 400
     changes["updated_at"] = _now()
@@ -1703,6 +1721,23 @@ def connect_telegram():
         return jsonify({"error": "O Telegram não confirmou o URL do webhook."}), 502
     tenant_ref = _db().collection("tenants").document(tenant_id)
     tenant = tenant_ref.get().to_dict() or {}
+    central_account_id = central_account_id_for_tenant(tenant)
+    registry = registry_status(_db(), central_account_id)
+    if not is_paid_plan(tenant):
+        if central_account_id:
+            if registry_is_expired(registry) or str(registry.get("trial_status") or "").lower() == "trial_expired":
+                return jsonify({"error": "A demonstração terminou. Escolhe um plano pago para ligar outro canal."}), 403
+            if not registry.get("trial_consumed"):
+                claimed, registry = claim_trial_for_account(_db(), central_account_id, tenant_id, "telegram", email=tenant.get("account_email") or tenant.get("email"))
+                if not claimed and registry.get("blocked_by_identity"):
+                    return jsonify({"error": "Esta identidade já utilizou a demonstração. Escolhe um plano pago para ligar este canal."}), 403
+                if not claimed:
+                    registry = registry_status(_db(), central_account_id)
+            tenant_trial_fields = trial_fields_from_registry(registry, "telegram", bot.get("username") or str(bot.get("id")))
+        else:
+            tenant_trial_fields = active_fields(str(tenant.get("instance_name") or tenant_id))
+    else:
+        tenant_trial_fields = {}
     channels = dict(tenant.get("channels") or {}) if isinstance(tenant.get("channels"), dict) else {}
     channels["telegram"] = {
         "status": "connected",
@@ -1718,8 +1753,8 @@ def connect_telegram():
         "connected_at": _now(),
         "updated_at": _now(),
     }
-    tenant_ref.set({"channels": channels, "updated_at": _now()}, merge=True)
-    _audit("telegram_webhook_connected", _identity(), tenant_id, {"bot_id": str(bot.get("id"))})
+    tenant_ref.set({"channels": channels, **tenant_trial_fields, "central_account_id": central_account_id, "updated_at": _now()}, merge=True)
+    _audit("telegram_webhook_connected", _identity(), tenant_id, {"bot_id": str(bot.get("id")), "trial_started_channel": tenant_trial_fields.get("trial_started_channel")})
     return jsonify({"connected": True, "channel": "telegram", "bot": {"id": bot.get("id"), "username": bot.get("username"), "name": bot.get("first_name")}, "webhook_url": webhook_url, "pending_update_count": info.get("pending_update_count", 0)})
 
 

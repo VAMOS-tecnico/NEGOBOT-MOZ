@@ -247,6 +247,7 @@ export type BusinessProfile = {
   status_conexao?: string;
   billing_region?: "mozambique" | "international" | string;
   selected_plan?: string | null;
+  preferred_trial_channel?: "whatsapp" | "telegram" | "instagram" | "facebook" | string;
   onboarding_status?: "incomplete" | "completed" | string;
   profile_completed?: boolean;
 };
