@@ -40,6 +40,25 @@ class ServiceConfigTests(unittest.TestCase):
             from services.service_config import current_profile
             self.assertEqual(current_profile(), "api")
 
+    def test_new_worker_profiles_have_explicit_runtime_contracts(self):
+        for profile in ("ai", "image", "audio", "mailer"):
+            report = environment_report(profile, {})
+            self.assertFalse(report["ok"])
+            self.assertEqual(report["required_missing"], ["REDIS_URL"])
+        social = environment_report("social", {})
+        self.assertFalse(social["ok"])
+        self.assertEqual(social["required_missing"], ["REDIS_URL"])
+
+    def test_ai_profile_reports_presence_only(self):
+        report = environment_report("ai", {"REDIS_URL": "redis://secret", "GROQ_API_KEY": "provider-secret"})
+        self.assertTrue(report["ok"])
+        self.assertTrue(report["configured"]["GROQ_API_KEY"])
+        self.assertNotIn("provider-secret", repr(report))
+
+    def test_video_requires_internal_service_token(self):
+        self.assertFalse(environment_report("video", {"REDIS_URL": "redis://test"})["ok"])
+        self.assertTrue(environment_report("video", {"REDIS_URL": "redis://test", "VIDEO_SERVICE_TOKEN": "token"})["ok"])
+
 
 if __name__ == "__main__":
     unittest.main()

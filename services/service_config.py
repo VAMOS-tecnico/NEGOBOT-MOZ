@@ -40,8 +40,49 @@ PROFILES: dict[str, ServiceProfile] = {
         optional=("REDIS_URL", "EVOLUTION_API_URL", "EVOLUTION_API_KEY", "LEMONSQUEEZY_API_KEY", "LEMONSQUEEZY_STORE_ID", "LEMONSQUEEZY_WEBHOOK_SECRET"),
     ),
     "video": ServiceProfile(
+        required=("REDIS_URL", "VIDEO_SERVICE_TOKEN"),
+        optional=("VIDEO_QUEUE", "VIDEO_OUTPUT_DIR"),
+    ),
+    "ai": ServiceProfile(
         required=("REDIS_URL",),
-        optional=("VIDEO_QUEUE", "VIDEO_SERVICE_TOKEN", "VIDEO_OUTPUT_DIR"),
+        optional=(
+            "AI_QUEUE",
+            "AI_PRIMARY_TIMEOUT",
+            "AI_FALLBACK_TIMEOUT",
+            "AI_QUEUE_MAX_PER_SECOND",
+            "GROQ_API_KEY",
+            "GROQ_MODEL",
+            "CEREBRAS_API_KEY",
+            "CEREBRAS_MODEL",
+            "SAMBANOVA_API_KEY",
+            "SAMBANOVA_MODEL",
+            "GEMINI_API_KEY",
+            "GEMINI_API_KEY_2",
+            "GEMINI_MODEL",
+            "GEMINI_MODEL_2",
+            "GITHUB_MODELS_TOKEN",
+            "GITHUB_MODELS_MODEL",
+            "MISTRAL_API_KEY",
+            "MISTRAL_MODEL",
+            "OPENROUTER_API_KEY",
+            "OPENROUTER_MODEL",
+        ),
+    ),
+    "image": ServiceProfile(
+        required=("REDIS_URL",),
+        optional=("IMAGE_QUEUE", "IMAGE_PROVIDER", "IMAGE_CALLBACK_URL"),
+    ),
+    "audio": ServiceProfile(
+        required=("REDIS_URL",),
+        optional=("AUDIO_QUEUE", "AUDIO_PROVIDER", "AUDIO_OUTPUT_DIR", "ELEVENLABS_API_KEY", "AZURE_SPEECH_KEY", "AZURE_SPEECH_REGION"),
+    ),
+    "social": ServiceProfile(
+        required=("REDIS_URL",),
+        optional=("FIREBASE_CONFIG", "SOCIAL_QUEUE", "SOCIAL_CALLBACK_URL"),
+    ),
+    "mailer": ServiceProfile(
+        required=("REDIS_URL",),
+        optional=("MAIL_QUEUE", "SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASSWORD", "SMTP_FROM", "SMTP_USE_TLS", "SMTP_TIMEOUT_SECONDS"),
     ),
 }
 

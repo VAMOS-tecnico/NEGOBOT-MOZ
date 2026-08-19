@@ -12,7 +12,14 @@ import redis
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
 
+from services.service_config import enforce_profile
+
 app = FastAPI(title="NEGOBOT Video Service", version="1.0.0")
+
+
+@app.on_event("startup")
+def validate_environment() -> None:
+    enforce_profile("video")
 QUEUE = os.getenv("VIDEO_QUEUE", "negobot:video_jobs")
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/1")
 

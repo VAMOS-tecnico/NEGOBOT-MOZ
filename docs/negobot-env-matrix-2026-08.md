@@ -235,3 +235,94 @@ Este documento contém apenas nomes de variáveis encontrados no código; não c
 | `ADMIN_PHONES` |
 | `EVOLUTION_GLOBAL_APIKEY` |
 
+
+
+## Workers de microserviços faseados — 2026-08
+
+### `ai_worker.py`
+
+| Variável |
+|---|
+| `NEGOBOT_SERVICE_PROFILE` |
+| `NEGOBOT_ENV_FILE` |
+| `REDIS_URL` |
+| `AI_QUEUE` |
+| `AI_PRIMARY_TIMEOUT` |
+| `AI_FALLBACK_TIMEOUT` |
+| `AI_QUEUE_MAX_PER_SECOND` |
+| `GROQ_API_KEY` |
+| `GROQ_MODEL` |
+| `CEREBRAS_API_KEY` |
+| `CEREBRAS_MODEL` |
+| `SAMBANOVA_API_KEY` |
+| `SAMBANOVA_MODEL` |
+| `GEMINI_API_KEY` |
+| `GEMINI_API_KEY_2` |
+| `GEMINI_MODEL` |
+| `GEMINI_MODEL_2` |
+| `GITHUB_MODELS_TOKEN` |
+| `GITHUB_MODELS_MODEL` |
+| `MISTRAL_API_KEY` |
+| `MISTRAL_MODEL` |
+| `OPENROUTER_API_KEY` |
+| `OPENROUTER_MODEL` |
+
+### `image_worker.py`
+
+| Variável |
+|---|
+| `NEGOBOT_SERVICE_PROFILE` |
+| `NEGOBOT_ENV_FILE` |
+| `REDIS_URL` |
+| `IMAGE_QUEUE` |
+| `IMAGE_PROVIDER` |
+| `IMAGE_CALLBACK_URL` |
+
+### `audio_worker.py`
+
+| Variável |
+|---|
+| `NEGOBOT_SERVICE_PROFILE` |
+| `NEGOBOT_ENV_FILE` |
+| `REDIS_URL` |
+| `AUDIO_QUEUE` |
+| `AUDIO_PROVIDER` |
+| `AUDIO_OUTPUT_DIR` |
+| `ELEVENLABS_API_KEY` |
+| `AZURE_SPEECH_KEY` |
+| `AZURE_SPEECH_REGION` |
+
+### `social_poster_worker.py`
+
+| Variável |
+|---|
+| `NEGOBOT_SERVICE_PROFILE` |
+| `NEGOBOT_ENV_FILE` |
+| `REDIS_URL` |
+| `SOCIAL_QUEUE` |
+| `SOCIAL_CALLBACK_URL` |
+| `FIREBASE_CONFIG` |
+
+### `mailer_worker.py` / `services/mailer_service.py`
+
+| Variável |
+|---|
+| `NEGOBOT_SERVICE_PROFILE` |
+| `NEGOBOT_ENV_FILE` |
+| `REDIS_URL` |
+| `MAIL_QUEUE` |
+| `SMTP_HOST` |
+| `SMTP_PORT` |
+| `SMTP_USER` |
+| `SMTP_PASSWORD` |
+| `SMTP_FROM` |
+| `SMTP_USE_TLS` |
+| `SMTP_TIMEOUT_SECONDS` |
+
+### `services/job_runtime.py`
+
+| Variável |
+|---|
+| `REDIS_URL` |
+| `NEGOBOT_SERVICE_PROFILE` |
+| fila definida pelo worker |

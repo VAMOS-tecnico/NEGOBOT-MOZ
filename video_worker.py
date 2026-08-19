@@ -7,6 +7,9 @@ import time
 
 import redis
 import requests
+from dotenv import load_dotenv
+
+load_dotenv(os.getenv("NEGOBOT_ENV_FILE", "/run/negobot-env/.env"), override=False)
 
 from video_pipeline import render_job_with_tts
 from services.service_config import enforce_profile
@@ -51,7 +54,9 @@ def main():
     enforce_profile("video")
     client = redis.from_url(REDIS_URL, decode_responses=True)
     os.makedirs(OUTPUT_DIR, exist_ok=True)
+    heartbeat_key = "negobot:worker:heartbeat:video"
     while True:
+        client.setex(heartbeat_key, 90, str(time.time()))
         item = client.blpop(QUEUE, timeout=30)
         if not item:
             continue

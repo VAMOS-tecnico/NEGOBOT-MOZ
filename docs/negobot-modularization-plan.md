@@ -41,3 +41,34 @@ Cada etapa terá testes unitários, testes de contrato dos envelopes, teste de i
 A modularização não altera a regra de trial único, não cria QR adicional, não permite campanhas sem `opt_in`, não relaxa STOP/PARAR/SAIR e não permite grupos sem autorização e privilégio de administrador. Todos os webhooks continuam a exigir assinatura/secret próprio e os dados continuam filtrados por `tenant_id`.
 
 A migração para Dokploy só será feita como projecto separado, depois de a arquitectura estabilizar no Boomploy. Fazer as duas mudanças ao mesmo tempo dificultaria distinguir falhas de aplicação de falhas da plataforma de deploy.
+
+
+## Extensão da arquitectura para os domínios de produto solicitados
+
+A divisão seguinte é uma extensão progressiva do desenho anterior. Um serviço só será activado quando existir um entrypoint funcional, uma fila ou API interna definida, um contrato de ambiente e um health check. Não serão criados containers “decorativos” que apenas mantêm um processo Python ocioso.
+
+| Serviço alvo | Responsabilidade isolada | Entrada principal | Variáveis exclusivas | Estado inicial |
+|---|---|---|---|---|
+| `negobot-core` | API Gateway, autenticação, tenants, planos, comandos e health | HTTP público | Firebase, Redis, sessão, URLs públicas e contratos internos | migrar primeiro |
+| `negobot-campaign-worker` | Campanhas, opt-in, STOP/PARAR/SAIR, limites, atrasos e agendamento | `negobot:campaigns` | Firebase, Redis, Evolution, n8n opcional | existente |
+| `negobot-incoming-worker` | Webhooks Evolution, deduplicação, CONNECTION_UPDATE e normalização WhatsApp | `whatsapp_incoming_queue`, `omnichannel_incoming_queue` | Firebase, Redis, Evolution e IA de conversação durante a transição | existente |
+| `negobot-ai-worker` | Pool LLM, respostas assistidas e roteiros | `negobot:ai_jobs` | Redis, modelos/chaves de IA e limites | criar com feature flag |
+| `negobot-image-worker` | Jobs de imagens e edição | `negobot:image_jobs` | Redis e credenciais de fornecedor configuradas | disabled até existir adapter |
+| `negobot-video-worker` | API e renderização de vídeo/avatar | `negobot:video_jobs` | Redis, token interno, output e FFmpeg | código existente; ligar depois |
+| `negobot-audio-worker` | TTS e áudio | `negobot:audio_jobs` | Redis, Edge TTS ou fornecedor de voz configurado | criar após contrato |
+| `negobot-social-poster` | Publicações autorizadas em redes sociais | `negobot:social_jobs` | Redis, OAuth cifrado/adaptadores e scopes | pending approval |
+| `negobot-mailer` | E-mail transaccional e alertas | `negobot:mail_jobs` | Redis, SMTP e TTL de reset | extrair depois de estabilizar reset |
+
+Durante a transição, o Core poderá conservar temporariamente uma variável de integração que ainda seja necessária pelas rotas existentes. A redução para aproximadamente dez variáveis só será declarada concluída depois de as chamadas directas a Evolution, IA, vídeo e SMTP terem sido substituídas por comandos internos ou jobs idempotentes.
+
+### Contrato comum de jobs
+
+Cada job deve conter `job_id`, `tenant_id`, `request_id`, `idempotency_key`, `created_at`, `attempt`, `kind`, `payload` e `callback`. O worker deve validar o tenant antes de ler ou escrever dados, persistir o estado `queued` antes do processamento, usar uma chave de deduplicação e publicar estados `processing`, `completed` ou `failed` sem revelar segredos. Jobs desconhecidos são rejeitados e enviados para uma fila de erro, nunca executados silenciosamente.
+
+### Política de activação
+
+Os novos serviços serão adicionados inicialmente com `profiles: ["microservices-stage"]` ou equivalente, sem serem iniciados no deploy normal. Depois de os `.env` isolados serem preenchidos no Boomploy e os testes de contrato passarem, cada serviço será activado individualmente. O Core, Redis, PostgreSQL, Evolution e volumes persistentes não serão reiniciados por causa de um worker que ainda esteja em validação.
+
+### Dimensionamento conservador
+
+A VPS actual tem 2 vCPU e aproximadamente 3,7 GiB de RAM. A arquitectura não deve iniciar nove processos concorrentes por defeito. Os workers CPU-heavy terão concorrência 1, os workers de I/O terão um processo com polling bloqueante e os jobs de vídeo/imagem serão limitados por fila. A primeira versão deve preferir serviços sob demanda e limites explícitos a uma multiplicação indiscriminada de containers.
