@@ -1,3 +1,8 @@
+"""Worker legado aposentado; não iniciar em produção.
+
+A fila `negobot:campaigns` pertence exclusivamente a `campaign_worker.py`.
+"""
+
 import json
 import logging
 import os
@@ -119,17 +124,7 @@ def process_campaign(campaign_id: str, queue):
 
 
 def main():
-    extensions.init_extensions()
-    queue = redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379/1"), decode_responses=True)
-    while True:
-        job = queue.blpop(QUEUE, timeout=30)
-        if not job:
-            continue
-        try:
-            process_campaign(job[1], queue)
-        except Exception:
-            logger.exception("Erro ao processar campanha %s", job[1])
-            extensions.db.collection("campaigns").document(job[1]).set({"status": "failed", "updated_at": now()}, merge=True)
+    raise RuntimeError("platform_worker.py foi aposentado; use campaign_worker.py como consumidor único")
 
 
 if __name__ == "__main__":
