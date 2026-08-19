@@ -55,6 +55,7 @@ export type Plan = {
 };
 
 export type PlanAddon = {
+  id: string;
   name: string;
   description: string;
   price_mt: number;
@@ -299,6 +300,7 @@ export type LemonSqueezyStatus = {
   configured: boolean;
   currency?: string;
   plans: Record<string, boolean>;
+  addons?: Record<string, boolean>;
 };
 
 export type LemonSqueezyCheckout = {
@@ -473,10 +475,11 @@ export const api = {
     updateProfile: (profile: Partial<BusinessProfile>) => request<{ updated: true; fields: string[] }>("/api/platform/client/profile", { method: "PATCH", body: JSON.stringify(profile) }),
     assistant: () => request<AssistantSettings>("/api/platform/client/assistant"),
     updateAssistant: (settings: Partial<AssistantSettings>) => request<{ updated: true }>("/api/platform/client/assistant", { method: "PATCH", body: JSON.stringify(settings) }),
-    verifyPayment: (messageText: string, clientPhone: string) => request<{ processed: true; response: string; state?: string; instance_name?: string | null; qrcode?: string | null }>("/api/platform/client/payments/mpesa/verify", { method: "POST", body: JSON.stringify({ message_text: messageText, client_phone: clientPhone }) }),
+    verifyPayment: (messageText: string, clientPhone: string, addonId?: string) => request<{ processed: true; response: string; state?: string; instance_name?: string | null; qrcode?: string | null }>("/api/platform/client/payments/mpesa/verify", { method: "POST", body: JSON.stringify({ message_text: messageText, client_phone: clientPhone, ...(addonId ? { addon_id: addonId } : {}) }) }),
     paymentHistory: () => request<{ payments: PaymentRecord[] }>("/api/platform/client/payments/history"),
     lemonSqueezyStatus: () => request<LemonSqueezyStatus>("/api/platform/client/payments/lemonsqueezy/status"),
     createLemonSqueezyCheckout: (planId: string) => request<LemonSqueezyCheckout>("/api/platform/client/payments/lemonsqueezy/checkout", { method: "POST", body: JSON.stringify({ plan_id: planId }) }),
+    createLemonSqueezyAddonCheckout: (addonId: string) => request<LemonSqueezyCheckout & { addon_id: string }>("/api/platform/client/payments/lemonsqueezy/addon-checkout", { method: "POST", body: JSON.stringify({ addon_id: addonId }) }),
     evolutionQr: (phone: string) => request<{ state: string; instance_name: string; qrcode?: string | null }>("/api/platform/client/evolution/qr", { method: "POST", body: JSON.stringify({ phone }) }),
   },
 };

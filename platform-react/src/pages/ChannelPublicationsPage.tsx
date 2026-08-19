@@ -1,6 +1,8 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { AlertTriangle, CalendarClock, ExternalLink, Link2, Megaphone, RefreshCw, Send, ShieldCheck, XCircle } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { api, type ChannelPublication, type WhatsAppChannelCapability } from "../lib/api";
+import { usePlatformLanguage } from "../lib/platformLanguage";
 
 function formatDate(value?: string | number | null) {
   if (!value) return "—";
@@ -17,6 +19,9 @@ function statusLabel(publication: ChannelPublication) {
 }
 
 export function ChannelPublicationsPage() {
+  const navigate = useNavigate();
+  const { language } = usePlatformLanguage();
+  const english = language === "en";
   const [capability, setCapability] = useState<WhatsAppChannelCapability | null>(null);
   const [publications, setPublications] = useState<ChannelPublication[]>([]);
   const [title, setTitle] = useState("");
@@ -56,9 +61,10 @@ export function ChannelPublicationsPage() {
 
   return <div className="content-stack">
     <section className="hero-panel"><div><span className="eyebrow">WHATSAPP CHANNELS</span><h1>Publicações para o teu canal</h1><p>Prepara anúncios, promoções e conteúdos informativos com CTA para atendimento privado ou checkout.</p></div><div className="hero-orb"><Megaphone size={54} /></div></section>
-    <section className="alert warning"><AlertTriangle size={18} /><div><strong>Entrega nativa ainda não autorizada</strong><span>{capability?.reason || "A Evolution API actual ainda não confirma publicação em WhatsApp Channels."} O editor e a agenda estão preparados, mas nenhuma publicação será enviada para um JID <code>@newsletter</code> sem verificação de administrador e adaptador compatível.</span></div></section>
+    <section className="alert warning"><AlertTriangle size={18} /><div><strong>{english ? "Native delivery is not authorised yet" : "Entrega nativa ainda não autorizada"}</strong><span>{capability?.reason || (english ? "The current Evolution API does not yet confirm WhatsApp Channels publishing." : "A Evolution API actual ainda não confirma publicação em WhatsApp Channels.")} {english ? "The editor and schedule are ready, but no @newsletter JID will receive a message until administrator verification and a compatible adapter exist." : "O editor e a agenda estão preparados, mas nenhum JID @newsletter receberá mensagens sem verificação de administrador e adaptador compatível."}</span></div><button className="secondary-button compact" type="button" onClick={() => navigate("/campanhas")}>{english ? "Use Campaigns now" : "Usar Campanhas agora"}<Send size={15} /></button></section>
     {error && <div className="alert error"><XCircle size={17} />{error}</div>}
     {notice && <div className="alert success"><ShieldCheck size={17} />{notice}</div>}
+    <section className="channel-alternative"><Megaphone size={18} /><div><strong>{english ? "Need to send a promotion today?" : "Precisas de enviar uma promoção hoje?"}</strong><span>{english ? "Use the Campaigns module for opted-in contacts or verified own groups while native Channels delivery remains pending." : "Usa o módulo de Campanhas para contactos com opt-in ou grupos próprios verificados enquanto a entrega nativa dos Canais continua pendente."}</span></div><button className="secondary-button compact" type="button" onClick={() => navigate("/campanhas")}>{english ? "Open Campaigns" : "Abrir Campanhas"}</button></section>
     <section className="two-column-grid">
       <article className="panel-card"><div className="section-heading compact"><div><span className="eyebrow">EDITOR</span><h3>Nova publicação</h3></div><Send size={20} /></div><form className="stack-form" onSubmit={submit}>
         <label>Título<input value={title} onChange={(event) => setTitle(event.target.value)} minLength={2} maxLength={160} required placeholder="Promoção desta semana" /></label>

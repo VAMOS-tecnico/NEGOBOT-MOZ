@@ -21,6 +21,48 @@ def identificar_plano_por_valor(valor_pago):
     return None
 
 
+def validar_e_ativar_extra_mpesa(tenant_id, client_phone, message_text, addon_id):
+    """Valida um extra mensal via AutoPay sem alterar o plano base do tenant."""
+    from services.plan_service import ADDONS
+
+    addon = ADDONS.get(str(addon_id or "").strip().lower())
+    if not addon:
+        return "Extra não encontrado."
+    tx_id = extrair_codigo_mpesa(message_text)
+    if not tx_id:
+        return "Código M-Pesa não identificado. Cole o SMS completo ou o ID da transacção."
+    dados_sms = extrair_dados_sms_cliente_transferiste(message_text)
+    if dados_sms and NUMERO_RECEBEDOR_OFICIAL not in dados_sms.get("destino_telefone", ""):
+        return "A transferência não foi feita para o número oficial 855000929."
+    pagamento_ref, dados_pago = _buscar_registo_autopay(tx_id)
+    if pagamento_ref is None or dados_pago is None:
+        return f"A aguardar confirmação do AutoPay para a transacção {tx_id}. Aguarde 30 segundos e tente novamente."
+    if dados_pago.get("status") not in {"pago", "paid", "confirmado", "confirmed"}:
+        return f"O AutoPay ainda não confirmou a transacção {tx_id}."
+    if dados_pago.get("usado") is True:
+        return f"A transacção M-Pesa {tx_id} já foi utilizada."
+    sender_phone = re.sub(r"\D", "", str(dados_pago.get("remetente_telefone") or ""))
+    requested_phone = re.sub(r"\D", "", str(client_phone or ""))
+    if sender_phone and requested_phone and sender_phone[-9:] != requested_phone[-9:]:
+        return "O número do pagador não coincide com o número indicado."
+    amount = float(dados_pago.get("valor", 0))
+    if amount < float(addon["price_mt"]):
+        return f"Valor insuficiente: o extra {addon['name']} requer pelo menos {addon['price_mt']:.0f} MT."
+    now = datetime.now(timezone.utc)
+    pagamento_ref.set({"usado": True, "usado_por_tenant": tenant_id, "usado_por_extra": addon_id, "data_ativacao": now}, merge=True)
+    extensions.db.collection("tenants").document(tenant_id).collection("addons").document(addon_id).set({
+        "addon_id": addon_id,
+        "name": addon["name"],
+        "status": "active",
+        "provider": "mpesa_autopay",
+        "transaction_id": tx_id,
+        "amount_mt": amount,
+        "activated_at": now,
+        "updated_at": now,
+    }, merge=True)
+    return f"Extra {addon['name']} activado com sucesso através do M-Pesa AutoPay."
+
+
 def extrair_dados_sms_cliente_transferiste(sms_texto):
     """Extrai os dados da mensagem 'Transferiste...' colada pelo cliente no WhatsApp."""
     if not sms_texto or not isinstance(sms_texto, str):

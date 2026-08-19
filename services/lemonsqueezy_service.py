@@ -25,6 +25,14 @@ def variant_for_plan(plan_id: str) -> str:
     return value
 
 
+def variant_for_addon(addon_id: str) -> str:
+    key = f"LEMONSQUEEZY_VARIANT_ADDON_{str(addon_id).strip().upper()}"
+    value = os.getenv(key, "").strip()
+    if not value.isdigit():
+        raise ValueError(f"Variant Lemon Squeezy não configurada para o extra {addon_id}.")
+    return value
+
+
 def configured() -> bool:
     return bool(
         os.getenv("LEMONSQUEEZY_STORE_ID", "").strip()
@@ -60,19 +68,12 @@ def _checkout_payload(store_id: str, variant_id: str, custom_data: dict[str, Any
     }
 
 
-def create_checkout(*, plan_id: str, tenant_id: str, payment_intent_id: str, email: str | None = None, name: str | None = None) -> dict[str, Any]:
+def _create_checkout(*, variant_id: str, custom_data: dict[str, Any], email: str | None = None, name: str | None = None) -> dict[str, Any]:
     api_key = os.getenv("LEMONSQUEEZY_API_KEY", "").strip()
     store_id = os.getenv("LEMONSQUEEZY_STORE_ID", "").strip()
     if not api_key or not store_id:
         raise RuntimeError("Lemon Squeezy ainda não está configurada.")
-    variant_id = variant_for_plan(plan_id)
-    payload = _checkout_payload(
-        store_id,
-        variant_id,
-        {"tenant_id": str(tenant_id), "payment_intent_id": str(payment_intent_id), "plan_id": str(plan_id)},
-        email,
-        name,
-    )
+    payload = _checkout_payload(store_id, variant_id, custom_data, email, name)
     response = requests.post(
         f"{LEMONSQUEEZY_API_URL}/checkouts",
         headers={
@@ -91,6 +92,26 @@ def create_checkout(*, plan_id: str, tenant_id: str, payment_intent_id: str, ema
     if not checkout_url.startswith("https://"):
         raise RuntimeError("Lemon Squeezy não devolveu um URL de checkout válido.")
     return {"url": checkout_url, "variant_id": variant_id, "store_id": store_id}
+
+
+def create_checkout(*, plan_id: str, tenant_id: str, payment_intent_id: str, email: str | None = None, name: str | None = None) -> dict[str, Any]:
+    variant_id = variant_for_plan(plan_id)
+    return _create_checkout(
+        variant_id=variant_id,
+        custom_data={"tenant_id": str(tenant_id), "payment_intent_id": str(payment_intent_id), "plan_id": str(plan_id), "purchase_type": "plan"},
+        email=email,
+        name=name,
+    )
+
+
+def create_addon_checkout(*, addon_id: str, tenant_id: str, payment_intent_id: str, email: str | None = None, name: str | None = None) -> dict[str, Any]:
+    variant_id = variant_for_addon(addon_id)
+    return _create_checkout(
+        variant_id=variant_id,
+        custom_data={"tenant_id": str(tenant_id), "payment_intent_id": str(payment_intent_id), "addon_id": str(addon_id), "purchase_type": "addon"},
+        email=email,
+        name=name,
+    )
 
 
 def event_key(payload: dict[str, Any]) -> str:

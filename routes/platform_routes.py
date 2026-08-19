@@ -1401,9 +1401,42 @@ def verify_mpesa_payment():
     payload = request.get_json(silent=True) or {}
     message_text = str(payload.get("message_text") or "").strip()
     client_phone = str(payload.get("client_phone") or "").strip()
+    addon_id = str(payload.get("addon_id") or "").strip().lower()
     if not message_text:
         return jsonify({"error": "Introduza o código ou SMS do M-Pesa."}), 400
     tenant_id = _tenant_for_identity(_identity())
+    if addon_id:
+        try:
+            from services.plan_service import ADDONS
+            from services.payment_service import extrair_codigo_mpesa, validar_e_ativar_extra_mpesa
+            addon = ADDONS.get(addon_id)
+            if not addon:
+                return jsonify({"error": "Extra não encontrado."}), 400
+            tenant_document = _db().collection("tenants").document(tenant_id).get()
+            tenant_data = tenant_document.to_dict() or {}
+            if tenant_data.get("billing_region", "mozambique") == "international":
+                return jsonify({"error": "Esta conta está configurada para pagamento internacional. Usa o checkout Lemon Squeezy."}), 403
+            tx_id = extrair_codigo_mpesa(message_text)
+            intent_ref = _db().collection("payment_intents").document()
+            intent_ref.set({
+                "tenant_id": tenant_id,
+                "client_phone": re.sub(r"\D", "", client_phone),
+                "transaction_id": tx_id,
+                "addon_id": addon_id,
+                "addon_name": addon["name"],
+                "purchase_type": "addon",
+                "status": "pending",
+                "source": "platform_verify",
+                "created_at": _now(),
+            })
+            response = validar_e_ativar_extra_mpesa(tenant_id, client_phone, message_text, addon_id)
+            confirmed = "activado com sucesso" in response.lower()
+            intent_ref.set({"status": "confirmed" if confirmed else "pending_validation", "transaction_id": tx_id, "updated_at": _now()}, merge=True)
+            if confirmed:
+                _audit("mpesa_addon_confirmed", _identity(), tenant_id, {"addon_id": addon_id, "transaction_id": tx_id})
+            return jsonify({"processed": True, "response": response, "addon_id": addon_id})
+        except Exception:
+            return jsonify({"error": "O serviço de pagamentos está temporariamente indisponível."}), 503
     tenant_document = _db().collection("tenants").document(tenant_id).get()
     tenant_data = tenant_document.to_dict() or {}
     if tenant_data.get("billing_region", "mozambique") == "international":
@@ -1553,8 +1586,10 @@ def _apply_lemon_plan(tenant_id: str, plan_id: str, attributes: dict[str, Any], 
 def lemonsqueezy_status():
     from services.lemonsqueezy_service import configured
     from services.payment_service import TABELA_PLANOS
+    from services.plan_service import ADDONS
     plans = {data["id"]: bool(os.getenv(f"LEMONSQUEEZY_VARIANT_{str(data['id']).upper()}", "").strip()) for data in TABELA_PLANOS.values()}
-    return jsonify({"configured": configured(), "currency": os.getenv("LEMONSQUEEZY_CURRENCY", "USD"), "plans": plans})
+    addons = {addon_id: bool(os.getenv(f"LEMONSQUEEZY_VARIANT_ADDON_{addon_id.upper()}", "").strip()) for addon_id in ADDONS}
+    return jsonify({"configured": configured(), "currency": os.getenv("LEMONSQUEEZY_CURRENCY", "USD"), "plans": plans, "addons": addons})
 
 
 @platform_bp.post("/client/payments/lemonsqueezy/checkout")
@@ -1601,6 +1636,51 @@ def create_lemonsqueezy_checkout():
     return jsonify({"created": True, "payment_intent_id": intent_ref.id, "checkout_url": checkout["url"], "plan_id": plan_id}), 201
 
 
+@platform_bp.post("/client/payments/lemonsqueezy/addon-checkout")
+@_require_roles("client", "operator")
+def create_lemonsqueezy_addon_checkout():
+    from services.lemonsqueezy_service import create_addon_checkout
+    from services.plan_service import ADDONS
+    payload = request.get_json(silent=True) or {}
+    addon_id = str(payload.get("addon_id") or "").strip().lower()
+    addon = ADDONS.get(addon_id)
+    if not addon:
+        return jsonify({"error": "Extra não encontrado."}), 400
+    tenant_id = _tenant_for_identity(_identity())
+    if not tenant_id:
+        return jsonify({"error": "Tenant não encontrado na sessão."}), 400
+    tenant_doc = _db().collection("tenants").document(tenant_id).get()
+    tenant = tenant_doc.to_dict() or {}
+    if tenant.get("billing_region", "mozambique") != "international":
+        return jsonify({"error": "Esta conta está configurada para M-Pesa. Usa a validação AutoPay para extras."}), 403
+    intent_ref = _db().collection("payment_intents").document()
+    intent_ref.set({
+        "tenant_id": tenant_id,
+        "provider": "lemonsqueezy",
+        "payment_provider": "lemonsqueezy",
+        "purchase_type": "addon",
+        "addon_id": addon_id,
+        "addon_name": addon["name"],
+        "status": "pending_checkout",
+        "created_at": _now(),
+    })
+    identity = _identity() or {}
+    try:
+        checkout = create_addon_checkout(
+            addon_id=addon_id,
+            tenant_id=tenant_id,
+            payment_intent_id=intent_ref.id,
+            email=str(identity.get("email") or tenant.get("email") or "").strip() or None,
+            name=str(identity.get("name") or tenant.get("name") or "").strip() or None,
+        )
+    except (RuntimeError, ValueError, requests.RequestException) as exc:
+        intent_ref.set({"status": "checkout_failed", "error": str(exc), "updated_at": _now()}, merge=True)
+        return jsonify({"error": "O checkout do extra ainda não está disponível. Usa M-Pesa ou tenta novamente mais tarde."}), 503
+    intent_ref.set({"status": "pending", "checkout_url": checkout["url"], "variant_id": checkout["variant_id"], "updated_at": _now()}, merge=True)
+    _audit("lemonsqueezy_addon_checkout_created", _identity(), tenant_id, {"payment_intent_id": intent_ref.id, "addon_id": addon_id})
+    return jsonify({"created": True, "payment_intent_id": intent_ref.id, "checkout_url": checkout["url"], "addon_id": addon_id}), 201
+
+
 @platform_bp.post("/webhooks/lemonsqueezy")
 def lemonsqueezy_webhook():
     from services.lemonsqueezy_service import event_key, extract_event, verify_signature
@@ -1626,6 +1706,47 @@ def lemonsqueezy_webhook():
     if not intent_doc.exists or str(intent.get("tenant_id") or "") != tenant_id:
         event_ref.set({"status": "tenant_mismatch"}, merge=True)
         return jsonify({"received": True, "linked": False})
+    purchase_type = str(custom.get("purchase_type") or intent.get("purchase_type") or "plan").strip().lower()
+    if purchase_type == "addon":
+        from services.lemonsqueezy_service import variant_for_addon
+        from services.plan_service import ADDONS
+        addon_id = str(custom.get("addon_id") or intent.get("addon_id") or "").strip().lower()
+        addon = ADDONS.get(addon_id)
+        expected_variant = ""
+        try:
+            expected_variant = variant_for_addon(addon_id) if addon else ""
+        except ValueError:
+            expected_variant = ""
+        if not addon or not expected_variant or str(event["variant_id"]) != expected_variant:
+            intent_ref.set({"status": "manual_review", "provider_event": event["event_name"], "updated_at": _now()}, merge=True)
+            event_ref.set({"status": "manual_review", "tenant_id": tenant_id, "payment_intent_id": intent_id}, merge=True)
+            return jsonify({"received": True, "linked": True, "status": "manual_review"})
+        event_name = event["event_name"]
+        attributes = event["attributes"]
+        active_event = event_name in {"subscription_created", "subscription_payment_success", "subscription_payment_recovered"} or (event_name == "subscription_updated" and str(attributes.get("status") or "").lower() == "active")
+        if active_event:
+            _db().collection("tenants").document(tenant_id).collection("addons").document(addon_id).set({
+                "addon_id": addon_id,
+                "name": addon["name"],
+                "status": "active",
+                "provider": "lemonsqueezy",
+                "variant_id": expected_variant,
+                "subscription_id": attributes.get("subscription_id") or event["object_id"],
+                "updated_at": _now(),
+            }, merge=True)
+            intent_ref.set({"status": "confirmed", "provider_event": event_name, "confirmed_at": _now(), "updated_at": _now()}, merge=True)
+            result_status = "confirmed"
+        elif event_name in {"subscription_payment_failed", "subscription_cancelled", "subscription_expired", "order_refunded"}:
+            state = "payment_failed" if event_name == "subscription_payment_failed" else ("cancelled" if "cancel" in event_name else "expired")
+            _db().collection("tenants").document(tenant_id).collection("addons").document(addon_id).set({"status": state, "updated_at": _now()}, merge=True)
+            intent_ref.set({"status": state, "provider_event": event_name, "updated_at": _now()}, merge=True)
+            result_status = state
+        else:
+            intent_ref.set({"status": "received", "provider_event": event_name, "updated_at": _now()}, merge=True)
+            result_status = "received"
+        event_ref.set({"status": result_status, "tenant_id": tenant_id, "payment_intent_id": intent_id, "processed_at": _now()}, merge=True)
+        _audit(f"lemonsqueezy_addon_{result_status}", None, tenant_id, {"event_name": event_name, "payment_intent_id": intent_id, "addon_id": addon_id, "object_id": event["object_id"]})
+        return jsonify({"received": True, "linked": True, "status": result_status})
     plan_id = _lemon_plan_from_variant(event["variant_id"], str(custom.get("plan_id") or intent.get("plan_id") or ""))
     if not plan_id:
         intent_ref.set({"status": "manual_review", "provider_event": event["event_name"], "updated_at": _now()}, merge=True)
@@ -1688,7 +1809,7 @@ def client_plans_catalog():
     from services.plan_service import ADDONS
     return jsonify({
         "plans": public_plan_rows(),
-        "addons": list(ADDONS.values()),
+        "addons": [{"id": addon_id, **data} for addon_id, data in ADDONS.items()],
         "trial_days": 2,
         "mpesa_number": "855000929",
         "mpesa_name": "Abel Francisco",

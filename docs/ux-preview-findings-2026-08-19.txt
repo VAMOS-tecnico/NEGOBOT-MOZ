@@ -1,0 +1,8 @@
+NEGOBOT-MOZ UX preview — 2026-08-19
+
+- Vite preview served platform-react successfully on the temporary port.
+- /plataforma-react/login loaded without a blank state after initialization.
+- Default language was English; PT/EN toggle visible.
+- Login fields and Forgot password / Start trial links rendered.
+- No browser console errors were observed.
+- No production deploy or persistent volume operation was performed.
