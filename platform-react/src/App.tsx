@@ -11,6 +11,7 @@ import { OnboardingPage } from "./pages/OnboardingPage";
 import { GroupsPage } from "./pages/GroupsPage";
 import { LanguageToggle, PlatformLanguageProvider, usePlatformLanguage } from "./lib/platformLanguage";
 import { ChannelPublicationsPage } from "./pages/ChannelPublicationsPage";
+import { LegalPage } from "./pages/LegalPage";
 
 type AuthContextValue = { auth: AuthState; refresh: () => Promise<void>; logout: () => Promise<void> };
 const defaultAuth: AuthState = { authenticated: false, user: null };
@@ -121,6 +122,8 @@ function PlatformAppInner() {
 export default function App() {
   const path = window.location.pathname;
   if (path === "/assistente" || path === "/assistente/") return <PublicAssistantPage />;
+  if (path === "/terms" || path === "/terms/") return <LegalPage kind="terms" />;
+  if (path === "/privacy" || path === "/privacy/") return <LegalPage kind="privacy" />;
   if (!path.startsWith("/plataforma")) return <PublicSite />;
   return <PlatformApp />;
 }
