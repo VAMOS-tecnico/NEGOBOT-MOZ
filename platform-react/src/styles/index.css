@@ -323,3 +323,55 @@ select:focus { border-color: rgba(98, 226, 171, .7); box-shadow: 0 0 0 3px rgba(
 .status-badge.warning { color: #f6d58c; border-color: rgba(245,193,91,.35); background: rgba(245,193,91,.09); }
 @media (max-width: 860px) { .two-column-grid { grid-template-columns: 1fr; } }
 @media (max-width: 560px) { .form-grid-two, .table-row { grid-template-columns: 1fr; } }
+
+.platform-language-toggle,
+.public-language-switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+  padding: 0.22rem 0.35rem;
+  color: rgba(255, 255, 255, 0.68);
+  background: rgba(255, 255, 255, 0.06);
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+}
+.platform-language-toggle button,
+.public-language-switcher button {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  border-radius: 999px;
+  padding: 0.25rem 0.45rem;
+  font: inherit;
+  cursor: pointer;
+}
+.platform-language-toggle button.active,
+.public-language-switcher button.active {
+  color: #10251d;
+  background: #8ce7b8;
+}
+.auth-language {
+  display: flex;
+  justify-content: flex-end;
+  margin: -0.35rem 0 0.9rem;
+}
+.topbar .platform-language-toggle {
+  border-color: rgba(16, 37, 29, 0.12);
+  color: #52635c;
+  background: rgba(16, 37, 29, 0.04);
+}
+.topbar .platform-language-toggle button.active {
+  color: #ffffff;
+  background: #173b2b;
+}
+.destination-fieldset {
+  display: grid;
+  gap: 0.65rem;
+  min-width: 0;
+  border: 1px solid rgba(20, 52, 38, 0.12);
+  border-radius: 0.85rem;
+  padding: 0.9rem;
+}
+.destination-fieldset legend { padding: 0 0.35rem; font-weight: 700; }

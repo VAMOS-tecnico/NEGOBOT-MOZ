@@ -76,10 +76,10 @@ const COPY: Record<Language, PublicCopy> = {
 
 function useLanguage() {
   const [language, setLanguage] = useState<Language>(() => {
-    if (typeof window === "undefined") return "pt";
-    return window.localStorage.getItem("negobot-public-language") === "en" ? "en" : "pt";
+    if (typeof window === "undefined") return "en";
+    return window.localStorage.getItem("negobot-public-language-v2") === "pt" ? "pt" : "en";
   });
-  useEffect(() => { window.localStorage.setItem("negobot-public-language", language); document.documentElement.lang = language; }, [language]);
+  useEffect(() => { window.localStorage.setItem("negobot-public-language-v2", language); document.documentElement.lang = language; }, [language]);
   return { language, setLanguage, copy: COPY[language] };
 }
 
