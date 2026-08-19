@@ -293,11 +293,30 @@ def _webhook_payload(webhook_target_url):
             "events": [
                 "MESSAGES_UPSERT",
                 "CHATS_UPSERT",
-                "CONNECTION_UPDATE"
+                "CONNECTION_UPDATE",
+                "GROUPS_UPSERT",
+                "GROUPS_UPDATE",
+                "GROUP_PARTICIPANTS_UPDATE"
             ],
-            "groupsIgnore": True
+            "groupsIgnore": False
         }
     }
+
+
+def ensure_group_webhook(instance_name):
+    """Activa eventos de grupos na instância existente sem recriar a sessão."""
+    webhook_target_url = getattr(Config, "WEBHOOK_URL", None)
+    if not webhook_target_url:
+        return False
+    try:
+        url = f"{str(Config.EVOLUTION_API_URL).rstrip('/')}/webhook/set/{quote(str(instance_name).strip())}"
+        response = requests.post(url, headers={"apikey": Config.EVOLUTION_API_KEY, "Content-Type": "application/json"}, json=_webhook_payload(webhook_target_url), timeout=30)
+        response.raise_for_status()
+        logger.info("Webhook de grupos configurado para %s", instance_name)
+        return True
+    except Exception:
+        logger.exception("Não foi possível configurar webhook de grupos para %s", instance_name)
+        return False
 
 
 def criar_e_configurar_instancia_automatica(phone_number):
@@ -352,7 +371,7 @@ def criar_e_configurar_instancia_automatica(phone_number):
             payload_settings = {
                 "reject_call": True,
                 "msg_call": "",
-                "groups_ignore": True,
+                "groups_ignore": False,
                 "always_online": False,
                 "read_messages": True,
                 "read_status": False,
@@ -502,102 +521,27 @@ def extrair_contactos_conversas(tenant_id, instance_name):
 
 
 def extrair_contactos_grupos(tenant_id, instance_name):
-    import extensions
-    clean_instance = _get_clean_instance(instance_name)
-    headers = {"apikey": Config.EVOLUTION_API_KEY, "Content-Type": "application/json"}
-    base_url = Config.EVOLUTION_API_URL.rstrip('/')
-    
-    novos_contactos = 0
-    tenant_ref = extensions.db.collection('clientes_bot').document(tenant_id)
-    contactos_col = tenant_ref.collection('base_contactos')
-
-    try:
-        url_groups = f"{base_url}/group/fetchAllGroups/{clean_instance}?getParticipants=true"
-        res_groups = requests.get(url_groups, headers=headers, timeout=25)
-
-        if res_groups.status_code == 200:
-            grupos = res_groups.json()
-            if isinstance(grupos, list):
-                for grupo in grupos:
-                    participants = grupo.get("participants", [])
-                    grupo_nome = grupo.get("subject", "Grupo WhatsApp")
-                    for p in participants:
-                        p_jid = p.get("id") or p.get("jid", "")
-                        if p_jid and p_jid.endswith("@s.whatsapp.net"):
-                            phone = _limpar_numero(p_jid)
-                            if phone and len(phone) >= 8:
-                                contactos_col.document(phone).set({
-                                    "phone": phone,
-                                    "nome": "Membro de Grupo",
-                                    "origem": f"grupo_{grupo_nome}",
-                                    "atualizado_em": time.time()
-                                }, merge=True)
-                                novos_contactos += 1
-
-        return (
-            f"✅ *Membros dos Grupos Sincronizados!*\n\n"
-            f"• Total de membros de grupos guardados: *{novos_contactos}*\n\n"
-            f"Já pode enviar a sua campanha privada enviando:\n`#disparo <sua mensagem>`"
-        )
-    except Exception as e:
-        logger.error(f"Erro ao extrair grupos para tenant {tenant_id}: {e}", exc_info=True)
-        return f"❌ Erro ao sincronizar membros de grupos: {str(e)}"
+    """Compatibilidade histórica sem importar participantes para marketing."""
+    logger.info("Importação de membros de grupos bloqueada tenant=%s instance=%s", tenant_id, instance_name)
+    return "ℹ️ A importação de membros de grupos está desactivada por segurança. Sincroniza apenas os teus Grupos Próprios no painel."
 
 
 def sincronizar_grupos_destino(tenant_id, instance_name):
-    import extensions
-    clean_instance = _get_clean_instance(instance_name)
-    headers = {"apikey": Config.EVOLUTION_API_KEY, "Content-Type": "application/json"}
-    base_url = Config.EVOLUTION_API_URL.rstrip('/')
-    
-    tenant_ref = extensions.db.collection('clientes_bot').document(tenant_id)
-    grupos_col = tenant_ref.collection('base_grupos')
-
+    """Compatibilidade histórica: sincroniza apenas grupos próprios verificados."""
     try:
-        url_groups = f"{base_url}/group/fetchAllGroups/{clean_instance}?getParticipants=false"
-        res_groups = requests.get(url_groups, headers=headers, timeout=25)
-
-        total_grupos = 0
-        if res_groups.status_code == 200:
-            grupos = res_groups.json()
-            if isinstance(grupos, list):
-                for grupo in grupos:
-                    group_jid = grupo.get("id") or grupo.get("jid", "")
-                    group_nome = grupo.get("subject", "Grupo Sem Nome")
-                    
-                    if group_jid and group_jid.endswith("@g.us"):
-                        doc_id = group_jid.replace('@', '_').replace('.', '_')
-                        grupos_col.document(doc_id).set({
-                            "jid": group_jid,
-                            "nome": group_nome,
-                            "atualizado_em": time.time()
-                        }, merge=True)
-                        total_grupos += 1
-
-        return (
-            f"✅ *Grupos Mapeados com Sucesso!*\n\n"
-            f"• Total de grupos prontos para receber mensagens: *{total_grupos}*\n\n"
-            f"Para enviar uma mensagem direta nestes grupos, use:\n"
-            f"`#disparo_grupos <sua mensagem>`"
-        )
-    except Exception as e:
-        logger.error(f"Erro ao mapear grupos para tenant {tenant_id}: {e}", exc_info=True)
-        return f"❌ Erro ao mapear grupos: {str(e)}"
+        from services.group_automation_service import sync_groups_for_tenant
+        result = sync_groups_for_tenant(tenant_id, instance_name)
+        return f"✅ Grupos próprios verificados: {result.get('verified', 0)} de {result.get('total', 0)}. Nenhum membro foi importado."
+    except Exception as exc:
+        logger.error("Erro ao sincronizar grupos próprios tenant=%s: %s", tenant_id, exc, exc_info=True)
+        return "❌ Não foi possível verificar os grupos próprios."
 
 
 def extrair_e_salvar_contactos_auto(tenant_id, instance_name):
-    """Executa a sincronização completa de conversas, membros de grupos e mapeamento."""
+    """Sincroniza conversas privadas e grupos próprios, sem importar participantes."""
     extrair_contactos_conversas(tenant_id, instance_name)
-    extrair_contactos_grupos(tenant_id, instance_name)
-    sincronizar_grupos_destino(tenant_id, instance_name)
-
-    return (
-        f"✅ *Sincronização Completa Concluída!*\n\n"
-        f"• As suas conversas privadas, contactos de grupos e a lista de grupos foram atualizadas.\n\n"
-        f"Comandos disponíveis:\n"
-        f"• `#disparo <mensagem>` -> Envia no privado.\n"
-        f"• `#disparo_grupos <mensagem>` -> Publica nos grupos."
-    )
+    group_result = sincronizar_grupos_destino(tenant_id, instance_name)
+    return f"✅ *Sincronização concluída!*\n\n{group_result}\n\nOs membros dos grupos não são usados como contactos privados."
 
 
 # ==========================================================
@@ -646,31 +590,24 @@ def enviar_disparo_privado(tenant_id, instance_name, mensagem):
 
 
 def _worker_disparo_grupos(tenant_id, instance_name, mensagem):
-    """Worker executado em thread separada para envios em grupo."""
+    """Worker legado que publica somente em grupos próprios verificados."""
     import extensions
+    from services.group_automation_service import authorized_group_jids
     clean_instance = _get_clean_instance(instance_name)
-    tenant_ref = extensions.db.collection('clientes_bot').document(tenant_id)
-    grupos = list(tenant_ref.collection('base_grupos').stream())
-
+    grupos = authorized_group_jids(tenant_id, clean_instance)
     sucessos = 0
     falhas = 0
 
-    for doc in grupos:
-        dados = doc.to_dict()
-        group_jid = dados.get("jid")
-        if not group_jid:
-            continue
-
+    for group_jid in grupos:
         if send_whatsapp(group_jid, mensagem, instance_name=clean_instance):
             sucessos += 1
         else:
             falhas += 1
-
         time.sleep(random.uniform(5.0, 10.0))
 
     relatorio = (
         f"🚀 *Disparo em Grupos Finalizado!*\n\n"
-        f"✅ Publicado em: *{sucessos} grupos*\n"
+        f"✅ Publicado em: *{sucessos} grupos próprios*\n"
         f"❌ Falhas: *{falhas}*"
     )
     send_whatsapp(tenant_id, relatorio, instance_name=clean_instance)

@@ -12,6 +12,7 @@ from services.trial_service import ACTIVE_STATUS, PENDING_STATUS, active_fields,
 from services.central_account_service import central_account_id_for_tenant, claim_trial_for_account, registry_is_expired, registry_status, trial_fields_from_registry
 from workflows.central_flow import process_central_flow
 from workflows.client_flow import process_client_flow
+from services.group_automation_service import GROUP_EVENTS, handle_group_event
 
 logger = logging.getLogger(__name__)
 
@@ -191,6 +192,10 @@ def processar_webhook_background(data):
 
         event_name = data.get('event', '').lower()
 
+        if event_name in GROUP_EVENTS:
+            handle_group_event(data)
+            return
+
         if event_name in {"connection.update", "connection_update"}:
             _handle_connection_update(data)
             return
@@ -212,8 +217,11 @@ def processar_webhook_background(data):
 
         remote_jid = key.get('remoteJid', '') or ''
 
-        # 🚫 3. Ignorar Grupos de WhatsApp e Canais (Newsletters)
-        if '@g.us' in remote_jid or '@newsletter' in remote_jid or data_payload.get('isGroup') is True:
+        # Grupos só entram no módulo próprio; os restantes continuam bloqueados.
+        if '@g.us' in remote_jid or data_payload.get('isGroup') is True:
+            handle_group_event(data)
+            return
+        if '@newsletter' in remote_jid:
             return
 
         # 🚫 4. Trava contra duplicados por ID de mensagem

@@ -168,6 +168,30 @@ export type Campaign = {
   skipped?: number;
 };
 
+export type GroupKeyword = { trigger: string; response: string };
+
+export type WhatsAppGroup = {
+  id: string;
+  tenant_id?: string;
+  instance_name?: string;
+  group_jid: string;
+  name: string;
+  bot_jid?: string;
+  bot_is_admin?: boolean;
+  admin_verified?: boolean;
+  authorization_reason?: string;
+  status?: "active" | "rejected" | string;
+  automation_enabled?: boolean;
+  mention_required?: boolean;
+  welcome_enabled?: boolean;
+  welcome_message?: string;
+  keywords?: GroupKeyword[];
+  participant_count?: number;
+  last_synced_at?: string | number | null;
+  last_event_at?: string | number | null;
+  last_error?: string | null;
+};
+
 export type CampaignTemplate = {
   id: string;
   name: string;
@@ -331,11 +355,13 @@ export const api = {
       }),
     logout: () => request<{ authenticated: false }>("/api/platform/auth/logout", { method: "POST" }),
   },
-  admin: {
+      admin: {
+
     overview: () => request<Overview>("/api/platform/admin/overview"),
     tenants: () => request<{ tenants: Tenant[] }>("/api/platform/admin/tenants"),
     createTenant: (name: string, email: string, password: string) => request<{ created: true; tenant: Tenant }>("/api/platform/admin/tenants", { method: "POST", body: JSON.stringify({ name, email, password }) }),
     health: () => request<{ services: Record<string, string>; worker?: string }>("/api/platform/admin/health"),
+    groups: () => request<{ groups: WhatsAppGroup[] }>("/api/platform/admin/groups"),
     audit: () => request<{ events: AuditEvent[] }>("/api/platform/admin/audit"),
     metrics: () => request<AdminMetrics>("/api/platform/admin/metrics"),
     supportTickets: () => request<{ tickets: SupportTicket[] }>("/api/platform/admin/support/tickets"),
@@ -349,6 +375,9 @@ export const api = {
     plan: () => request<ClientPlan>("/api/platform/client/plan"),
     integrationStatus: () => request<IntegrationStatus>("/api/platform/client/integration/status"),
     channels: () => request<{ tenant_id?: string; channels: ClientChannel[] }>("/api/platform/client/channels"),
+    groups: () => request<{ tenant_id?: string; groups: WhatsAppGroup[] }>("/api/platform/client/groups"),
+    syncGroups: () => request<{ groups: WhatsAppGroup[]; total: number; verified: number; webhook_configured?: boolean }>("/api/platform/client/groups/sync", { method: "POST" }),
+    updateGroup: (id: string, fields: Partial<Pick<WhatsAppGroup, "automation_enabled" | "mention_required" | "welcome_enabled" | "welcome_message" | "keywords">>) => request<{ updated: true; group_id: string; changes: Partial<WhatsAppGroup> }>(`/api/platform/client/groups/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(fields) }),
     updateChannel: (channel: string, status: "disabled" | "not_configured") => request<{ updated: true; channel: string; status: string }>(`/api/platform/client/channels/${encodeURIComponent(channel)}`, { method: "PATCH", body: JSON.stringify({ status }) }),
     telegramStatus: () => request<TelegramChannelInfo>("/api/platform/client/channels/telegram"),
     connectTelegram: (botToken: string) => request<{ connected: true; channel: "telegram"; bot: TelegramChannelInfo["bot"]; webhook_url: string; pending_update_count: number }>("/api/platform/client/channels/telegram/connect", { method: "POST", body: JSON.stringify({ bot_token: botToken }) }),

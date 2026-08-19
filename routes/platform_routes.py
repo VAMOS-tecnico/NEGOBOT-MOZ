@@ -22,6 +22,7 @@ from services.channel_registry import CHANNEL_STATUSES, client_channel_rows, ens
 from services.plan_service import entitlements_for_tenant, plan_channel_limit, public_plan_rows
 from services.secret_store import SecretStoreError, decrypt_secret, encrypt_secret
 from services.telegram_service import TelegramApiError, delete_webhook, get_me, get_webhook_info, set_webhook
+from services.group_automation_service import group_document_id, sync_groups_for_tenant
 
 platform_bp = Blueprint("platform", __name__, url_prefix="/api/platform")
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -718,6 +719,93 @@ def update_campaign_template(template_id: str):
     reference.set(changes, merge=True)
     _audit("campaign_template_updated", _identity(), tenant_id, {"template_id": template_id, "fields": sorted(changes)})
     return jsonify({"updated": True, "template_id": template_id, "fields": sorted(changes)})
+
+
+@platform_bp.get("/client/groups")
+@_require_roles("client", "operator")
+def client_groups():
+    tenant_id = _tenant_for_identity(_identity())
+    documents = _db().collection("whatsapp_groups").where("tenant_id", "==", tenant_id).limit(500).stream()
+    rows = []
+    for document in documents:
+        data = document.to_dict() or {}
+        data["id"] = document.id
+        rows.append(data)
+    rows.sort(key=lambda item: str(item.get("name") or item.get("group_jid") or "").lower())
+    return jsonify({"tenant_id": tenant_id, "groups": rows})
+
+
+@platform_bp.post("/client/groups/sync")
+@_require_tenant_roles("owner", "operator")
+def sync_client_groups():
+    tenant_id = _tenant_for_identity(_identity())
+    tenant = _tenant_data(tenant_id)
+    instance_name = str(tenant.get("instance_name") or "").strip()
+    if not instance_name:
+        return jsonify({"error": "Liga primeiro o WhatsApp deste tenant."}), 409
+    try:
+        result = sync_groups_for_tenant(tenant_id, instance_name)
+        return jsonify(result)
+    except PermissionError as exc:
+        return jsonify({"error": str(exc)}), 403
+    except requests.RequestException:
+        return jsonify({"error": "A Evolution API não respondeu à sincronização de grupos."}), 502
+    except Exception:
+        return jsonify({"error": "Não foi possível sincronizar os grupos deste tenant."}), 503
+
+
+@platform_bp.patch("/client/groups/<group_id>")
+@_require_tenant_roles("owner", "operator")
+def update_client_group(group_id: str):
+    tenant_id = _tenant_for_identity(_identity())
+    reference = _db().collection("whatsapp_groups").document(group_id)
+    document = reference.get()
+    data = document.to_dict() if document.exists else {}
+    if not document.exists or data.get("tenant_id") != tenant_id:
+        return jsonify({"error": "Grupo não encontrado."}), 404
+    payload = request.get_json(silent=True) or {}
+    allowed = {"automation_enabled", "mention_required", "welcome_enabled", "welcome_message", "keywords"}
+    changes = {key: payload[key] for key in allowed if key in payload}
+    if not changes:
+        return jsonify({"error": "Nenhuma configuração reconhecida."}), 400
+    if changes.get("automation_enabled") and not (data.get("admin_verified") and data.get("bot_is_admin") and data.get("status") == "active"):
+        return jsonify({"error": "Só podes activar automação num grupo onde a instância esteja verificada como administradora."}), 403
+    if "welcome_message" in changes:
+        changes["welcome_message"] = str(changes["welcome_message"] or "").strip()[:1000]
+    if "mention_required" in changes:
+        changes["mention_required"] = bool(changes["mention_required"])
+    if "welcome_enabled" in changes:
+        changes["welcome_enabled"] = bool(changes["welcome_enabled"])
+    if "automation_enabled" in changes:
+        changes["automation_enabled"] = bool(changes["automation_enabled"])
+    if "keywords" in changes:
+        raw_keywords = changes["keywords"]
+        if not isinstance(raw_keywords, list) or len(raw_keywords) > 30:
+            return jsonify({"error": "Define até 30 keywords."}), 400
+        normalized_keywords = []
+        for item in raw_keywords:
+            if not isinstance(item, dict):
+                continue
+            trigger = str(item.get("trigger") or item.get("keyword") or "").strip()[:80]
+            response = str(item.get("response") or item.get("text") or "").strip()[:1500]
+            if trigger and response:
+                normalized_keywords.append({"trigger": trigger, "response": response})
+        changes["keywords"] = normalized_keywords
+    reference.set({**changes, "updated_at": _now()}, merge=True)
+    return jsonify({"updated": True, "group_id": group_id, "changes": changes})
+
+
+@platform_bp.get("/admin/groups")
+@_require_roles("owner", "admin")
+def admin_groups():
+    documents = _db().collection("whatsapp_groups").limit(1000).stream()
+    rows = []
+    for document in documents:
+        data = document.to_dict() or {}
+        data["id"] = document.id
+        rows.append(data)
+    rows.sort(key=lambda item: str(item.get("last_synced_at") or 0), reverse=True)
+    return jsonify({"groups": rows})
 
 
 @platform_bp.get("/client/campaigns")
