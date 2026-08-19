@@ -994,7 +994,7 @@ def import_contacts():
             skipped += 1
             continue
         ref = db.collection("contacts").document()
-        batch.set(ref, {"tenant_id": tenant_id, "name": name, "phone": phone, "opt_in": str(normalized.get("opt_in") or normalized.get("consentimento") or "true").lower() not in {"false", "0", "nao", "não"}, "tags": [], "created_at": _now()})
+        batch.set(ref, {"tenant_id": tenant_id, "name": name, "phone": phone, "opt_in": str(normalized.get("opt_in") or normalized.get("consentimento") or "false").lower() in {"true", "1", "sim", "yes"}, "tags": [], "created_at": _now()})
         existing.add(phone)
         imported += 1
         if imported % 400 == 0:
