@@ -398,6 +398,16 @@ export const api = {
         method: "POST",
         body: JSON.stringify({ identifier, password }),
       }),
+    forgotPassword: (email: string) =>
+      request<{ accepted: true; message_en: string; message_pt: string }>("/api/platform/auth/forgot-password", {
+        method: "POST",
+        body: JSON.stringify({ email }),
+      }),
+    resetPassword: (token: string, password: string) =>
+      request<{ reset: true; message_en: string; message_pt: string }>("/api/platform/auth/reset-password", {
+        method: "POST",
+        body: JSON.stringify({ token, password }),
+      }),
     logout: () => request<{ authenticated: false }>("/api/platform/auth/logout", { method: "POST" }),
   },
       admin: {

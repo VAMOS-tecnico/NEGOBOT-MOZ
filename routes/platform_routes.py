@@ -25,6 +25,7 @@ from services.telegram_service import TelegramApiError, delete_webhook, get_me, 
 from services.group_automation_service import authorized_group_jids, group_document_id, sync_groups_for_tenant
 from services.channel_publication_service import channel_capability, create_publication_data, enqueue_publication
 from services.channel_oauth_service import complete_oauth, disconnect_oauth, provider_config, start_oauth
+from services.password_reset_service import consume_password_reset, request_password_reset
 
 platform_bp = Blueprint("platform", __name__, url_prefix="/api/platform")
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -291,6 +292,39 @@ def login():
     session.permanent = True
     document.reference.set({"last_login_at": _now()}, merge=True)
     return jsonify({"authenticated": True, "user": identity})
+
+
+@platform_bp.post("/auth/forgot-password")
+def forgot_password():
+    payload = request.get_json(silent=True) or {}
+    email = str(payload.get("email") or "").strip().lower()
+    frontend = str(os.getenv("PUBLIC_APP_BASE_URL") or "https://app-negobotmoz.duckdns.org/plataforma").rstrip("/")
+    try:
+        request_password_reset(_db(), email, frontend)
+    except Exception:
+        # Keep the same public response for unknown accounts and delivery errors.
+        pass
+    return jsonify({
+        "accepted": True,
+        "message_en": "If an account exists with this email, you will receive a password reset link.",
+        "message_pt": "Se existir uma conta com esse email, receberás uma ligação para trocar a palavra-passe.",
+    })
+
+
+@platform_bp.post("/auth/reset-password")
+def reset_password():
+    payload = request.get_json(silent=True) or {}
+    token = str(payload.get("token") or "").strip()
+    password = str(payload.get("password") or "")
+    if len(password) < 8:
+        return jsonify({"error": "A nova palavra-passe deve ter pelo menos 8 caracteres."}), 400
+    if not consume_password_reset(_db(), token, password):
+        return jsonify({"error": "A ligação é inválida, já foi usada ou expirou."}), 400
+    return jsonify({
+        "reset": True,
+        "message_en": "Password changed. You can now sign in to the platform.",
+        "message_pt": "Palavra-passe alterada. Já podes entrar na plataforma.",
+    })
 
 
 @platform_bp.post("/auth/register")

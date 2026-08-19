@@ -6,7 +6,9 @@ import sys
 import types
 import unittest
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
+from urllib.parse import parse_qs, urlparse
 
 sys.modules.setdefault("edge_tts", types.ModuleType("edge_tts"))
 dotenv_stub = types.ModuleType("dotenv")
@@ -20,6 +22,7 @@ import extensions
 extensions.init_extensions = lambda _app: None
 from app import app
 import routes.platform_routes as platform_routes
+from services.password_reset_service import consume_password_reset, request_password_reset, token_digest
 
 
 @dataclass
@@ -341,6 +344,40 @@ class PlatformSecurityTests(unittest.TestCase):
         self.assertEqual(response.status_code, 409)
         self.assertIn("Já existe", response.get_json()["error"])
         self.assertFalse(any(snapshot.exists for snapshot in self.db.collections.get("tenants", {}).values()))
+
+    def test_password_reset_token_is_single_use_and_changes_password(self):
+        email = "reset@example.com"
+        user_id = platform_routes._doc_id(email)
+        self.db.collections["platform_users"] = {
+            user_id: FakeSnapshot(user_id, {"email": email, "status": "active", "password_hash": "old-hash"})
+        }
+        with patch("services.password_reset_service._send_email") as send_email:
+            self.assertTrue(request_password_reset(self.db, email, "https://app-negobotmoz.duckdns.org/plataforma"))
+            reset_url = send_email.call_args.args[1]
+        token = parse_qs(urlparse(reset_url).query)["token"][0]
+        self.assertTrue(self.db.collections["password_resets"][token_digest(token)].exists)
+        self.assertTrue(consume_password_reset(self.db, token, "new-password-123"))
+        self.assertFalse(consume_password_reset(self.db, token, "another-password-123"))
+        self.assertNotEqual(self.db.collections["platform_users"][user_id].data["password_hash"], "old-hash")
+        self.assertIsNotNone(self.db.collections["password_resets"][token_digest(token)].data["used_at"])
+
+    def test_password_reset_rejects_expired_token(self):
+        email = "expired@example.com"
+        user_id = platform_routes._doc_id(email)
+        token = "expired-token"
+        self.db.collections["platform_users"] = {user_id: FakeSnapshot(user_id, {"email": email, "status": "active", "password_hash": "old-hash"})}
+        self.db.collections["password_resets"] = {
+            token_digest(token): FakeSnapshot(token_digest(token), {"user_id": user_id, "email": email, "expires_at": datetime.now(timezone.utc) - timedelta(minutes=1), "used_at": None})
+        }
+        self.assertFalse(consume_password_reset(self.db, token, "new-password-123"))
+        self.assertEqual(self.db.collections["platform_users"][user_id].data["password_hash"], "old-hash")
+
+    def test_forgot_password_response_does_not_reveal_account_existence(self):
+        known = self.client.post("/api/platform/auth/forgot-password", json={"email": "known@example.com"})
+        unknown = self.client.post("/api/platform/auth/forgot-password", json={"email": "unknown@example.com"})
+        self.assertEqual(known.status_code, 200)
+        self.assertEqual(unknown.status_code, 200)
+        self.assertEqual(known.get_json(), unknown.get_json())
 
     def test_login_rate_limit_applies_before_credential_lookup(self):
         for _ in range(8):
