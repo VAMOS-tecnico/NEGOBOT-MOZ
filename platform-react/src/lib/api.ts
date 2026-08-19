@@ -170,6 +170,39 @@ export type Campaign = {
 
 export type GroupKeyword = { trigger: string; response: string };
 
+export type WhatsAppChannelCapability = {
+  key: "whatsapp_newsletter" | string;
+  label: string;
+  status: "pending_authorization" | "connected" | "error" | string;
+  provider: string;
+  adapter_configured: boolean;
+  administrator_verification: boolean;
+  can_publish: boolean;
+  reason?: string;
+};
+
+export type ChannelPublication = {
+  id: string;
+  tenant_id?: string;
+  channel_type: string;
+  channel_jid?: string | null;
+  channel_name?: string | null;
+  title: string;
+  body: string;
+  rendered_body?: string;
+  cta_url?: string | null;
+  cta_label?: string | null;
+  scheduled_at?: string | null;
+  timezone?: string;
+  status?: "draft" | "scheduled" | "blocked" | "published" | "cancelled" | string;
+  delivery_status?: string;
+  adapter_status?: string;
+  authorization_status?: string;
+  last_error?: string | null;
+  created_at?: string | number | null;
+  published_at?: string | number | null;
+};
+
 export type WhatsAppGroup = {
   id: string;
   tenant_id?: string;
@@ -362,6 +395,7 @@ export const api = {
     createTenant: (name: string, email: string, password: string) => request<{ created: true; tenant: Tenant }>("/api/platform/admin/tenants", { method: "POST", body: JSON.stringify({ name, email, password }) }),
     health: () => request<{ services: Record<string, string>; worker?: string }>("/api/platform/admin/health"),
     groups: () => request<{ groups: WhatsAppGroup[] }>("/api/platform/admin/groups"),
+    channelPublications: () => request<{ publications: ChannelPublication[]; capability: WhatsAppChannelCapability }>("/api/platform/admin/channel-publications"),
     audit: () => request<{ events: AuditEvent[] }>("/api/platform/admin/audit"),
     metrics: () => request<AdminMetrics>("/api/platform/admin/metrics"),
     supportTickets: () => request<{ tickets: SupportTicket[] }>("/api/platform/admin/support/tickets"),
@@ -376,6 +410,10 @@ export const api = {
     integrationStatus: () => request<IntegrationStatus>("/api/platform/client/integration/status"),
     channels: () => request<{ tenant_id?: string; channels: ClientChannel[] }>("/api/platform/client/channels"),
     groups: () => request<{ tenant_id?: string; groups: WhatsAppGroup[] }>("/api/platform/client/groups"),
+    whatsappChannelCapability: () => request<WhatsAppChannelCapability>("/api/platform/client/whatsapp-channels/capability"),
+    channelPublications: () => request<{ publications: ChannelPublication[]; capability: WhatsAppChannelCapability }>("/api/platform/client/channel-publications"),
+    createChannelPublication: (payload: { title: string; body: string; channel_jid?: string; channel_name?: string; cta_url?: string; cta_label?: string; scheduled_at?: string; timezone?: string }) => request<{ created: true; publication: ChannelPublication; capability: WhatsAppChannelCapability }>("/api/platform/client/channel-publications", { method: "POST", body: JSON.stringify(payload) }),
+    channelPublicationAction: (id: string, action: "cancel" | "retry") => request<{ updated: true; publication_id: string; status: string }>(`/api/platform/client/channel-publications/${encodeURIComponent(id)}/actions/${action}`, { method: "POST" }),
     syncGroups: () => request<{ groups: WhatsAppGroup[]; total: number; verified: number; webhook_configured?: boolean }>("/api/platform/client/groups/sync", { method: "POST" }),
     updateGroup: (id: string, fields: Partial<Pick<WhatsAppGroup, "automation_enabled" | "mention_required" | "welcome_enabled" | "welcome_message" | "keywords">>) => request<{ updated: true; group_id: string; changes: Partial<WhatsAppGroup> }>(`/api/platform/client/groups/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(fields) }),
     updateChannel: (channel: string, status: "disabled" | "not_configured") => request<{ updated: true; channel: string; status: string }>(`/api/platform/client/channels/${encodeURIComponent(channel)}`, { method: "PATCH", body: JSON.stringify({ status }) }),

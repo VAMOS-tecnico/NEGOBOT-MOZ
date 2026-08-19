@@ -23,6 +23,7 @@ from services.plan_service import entitlements_for_tenant, plan_channel_limit, p
 from services.secret_store import SecretStoreError, decrypt_secret, encrypt_secret
 from services.telegram_service import TelegramApiError, delete_webhook, get_me, get_webhook_info, set_webhook
 from services.group_automation_service import group_document_id, sync_groups_for_tenant
+from services.channel_publication_service import channel_capability, create_publication_data, enqueue_publication
 
 platform_bp = Blueprint("platform", __name__, url_prefix="/api/platform")
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -806,6 +807,93 @@ def admin_groups():
         rows.append(data)
     rows.sort(key=lambda item: str(item.get("last_synced_at") or 0), reverse=True)
     return jsonify({"groups": rows})
+
+
+@platform_bp.get("/client/whatsapp-channels/capability")
+@_require_roles("client", "operator")
+def client_whatsapp_channel_capability():
+    return jsonify(channel_capability())
+
+
+@platform_bp.get("/client/channel-publications")
+@_require_roles("client", "operator")
+def list_channel_publications():
+    tenant_id = _tenant_for_identity(_identity())
+    rows = []
+    for document in _db().collection("channel_publications").where("tenant_id", "==", tenant_id).limit(200).stream():
+        item = document.to_dict() or {}
+        item["id"] = document.id
+        rows.append(item)
+    rows.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
+    return jsonify({"publications": rows, "capability": channel_capability()})
+
+
+@platform_bp.post("/client/channel-publications")
+@_require_tenant_roles("owner", "operator")
+def create_channel_publication():
+    tenant_id = _tenant_for_identity(_identity())
+    entitlements = _current_entitlements(tenant_id)
+    if not entitlements.get("mass_broadcast"):
+        return jsonify({"error": "As publicações agendadas estão disponíveis durante o trial Premium ou num plano Premium activo."}), 403
+    payload = request.get_json(silent=True) or {}
+    try:
+        data = create_publication_data(payload, tenant_id or "")
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    if data.get("status") == "scheduled" and not data.get("channel_jid"):
+        return jsonify({"error": "Uma publicação agendada precisa do JID do canal terminado em @newsletter."}), 400
+    reference = _db().collection("channel_publications").document()
+    reference.set(data)
+    if data.get("status") == "scheduled":
+        try:
+            queue_result = enqueue_publication(reference.id, data.get("scheduled_at"))
+        except Exception:
+            reference.set({"status": "draft", "delivery_status": "queue_unavailable", "last_error": "Fila Redis indisponível", "updated_at": _now()}, merge=True)
+            return jsonify({"error": "Não foi possível agendar a publicação porque a fila está indisponível."}), 503
+    else:
+        queue_result = {"queued": False, "scheduled": False}
+    _audit("channel_publication_created", _identity(), tenant_id, {"publication_id": reference.id, "scheduled": data.get("status") == "scheduled"})
+    response_data = {"id": reference.id, **data, "queue": queue_result}
+    return jsonify({"created": True, "publication": response_data, "capability": channel_capability()}), 201
+
+
+@platform_bp.post("/client/channel-publications/<publication_id>/actions/<action>")
+@_require_tenant_roles("owner", "operator")
+def channel_publication_action(publication_id: str, action: str):
+    tenant_id = _tenant_for_identity(_identity())
+    reference = _db().collection("channel_publications").document(publication_id)
+    document = reference.get()
+    data = document.to_dict() if document.exists else {}
+    if not document.exists or data.get("tenant_id") != tenant_id:
+        return jsonify({"error": "Publicação não encontrada."}), 404
+    if action not in {"cancel", "retry"}:
+        return jsonify({"error": "Acção não suportada."}), 400
+    if action == "cancel":
+        reference.set({"status": "cancelled", "delivery_status": "cancelled", "updated_at": _now()}, merge=True)
+        try:
+            import redis
+            redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379/1"), decode_responses=True).set(f"negobot:channel-publication:{publication_id}:control", "cancel", ex=86400)
+        except Exception:
+            pass
+        return jsonify({"updated": True, "publication_id": publication_id, "status": "cancelled"})
+    reference.set({"status": "scheduled", "delivery_status": "queued", "last_error": None, "updated_at": _now()}, merge=True)
+    try:
+        queue_result = enqueue_publication(publication_id)
+    except Exception:
+        return jsonify({"error": "Fila Redis indisponível."}), 503
+    return jsonify({"updated": True, "publication_id": publication_id, "status": "scheduled", "queue": queue_result})
+
+
+@platform_bp.get("/admin/channel-publications")
+@_require_roles("owner", "admin")
+def admin_channel_publications():
+    rows = []
+    for document in _db().collection("channel_publications").limit(1000).stream():
+        item = document.to_dict() or {}
+        item["id"] = document.id
+        rows.append(item)
+    rows.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
+    return jsonify({"publications": rows, "capability": channel_capability()})
 
 
 @platform_bp.get("/client/campaigns")
