@@ -76,3 +76,9 @@ O Backend e o Incoming Worker regressaram a `running` sem `EnvironmentContractEr
 ## Diagnóstico do traceback do Incoming
 
 A linha de traceback apresentada pelo painel era anterior ao redeploy (`22:36:05Z`). O final do log actual contém uma inicialização normal às `23:03:47Z`, com Firebase inicializado e consumidor online nas filas `whatsapp_incoming_queue,omnichannel_incoming_queue`; o cartão permanece `running`. Não foi necessária alteração de Redis nem rollback.
+
+## Validação final da migração permanente
+
+A suite completa terminou com `130 tests ... OK`. Em produção, `/healthz` devolveu `{"status":"ok"}` e `/readyz` devolveu `{"status":"ready","checks":{"firebase":"online","redis":"online"}}`. O Assistente público respondeu depois de o Backend ficar sem as chaves dos fornecedores, confirmando o percurso Backend -> `negobot:ai_jobs` -> AI Worker.
+
+O AI Worker foi redeployado depois do commit `343299b` para carregar o handler `audio_transcription`; o cartão Boomploy está `running` e o log actual não contém `Traceback` nem `EnvironmentContractError`. Os artefactos não relacionados que estavam no working tree não foram incluídos nos commits desta migração.
