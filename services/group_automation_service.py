@@ -18,7 +18,7 @@ import requests
 
 import extensions
 from config import Config
-from services.ai_pool_service import generate_text
+from services.ai_queue_service import AIQueueError, request_ai_text
 from services.evolution_service import ensure_group_webhook, send_whatsapp
 
 logger = logging.getLogger("negobot-group-automation")
@@ -318,14 +318,24 @@ def handle_group_message(payload: dict[str, Any]) -> bool:
     response = _keyword_response(prompt_text, group.get("keywords"))
     provider = "keyword"
     if not response and prompt_text:
-        ai_result = generate_text([{"role": "user", "content": prompt_text}], system_prompt=(
-            "És o assistente de um grupo comercial próprio do negócio. Responde em Português de Moçambique, "
-            "com brevidade e profissionalismo. Não inventes preços, stock, links ou políticas. "
-            "Se não souberes, encaminha para a equipa. Nunca envies mensagens privadas nem peças dados sensíveis.\n\n"
-            + _clean(tenant.get("diretrizes_corporativas"))[:5000]
-        ), request_id=event_id)
-        response = _clean(ai_result.get("text"))[:1500]
-        provider = _clean(ai_result.get("provider")) or "ai"
+        try:
+            ai_result = request_ai_text(
+                tenant_id=tenant_id,
+                messages=[{"role": "user", "content": prompt_text}],
+                system_prompt=(
+                    "És o assistente de um grupo comercial próprio do negócio. Responde em Português de Moçambique, "
+                    "com brevidade e profissionalismo. Não inventes preços, stock, links ou políticas. "
+                    "Se não souberes, encaminha para a equipa. Nunca envies mensagens privadas nem peças dados sensíveis.\n\n"
+                    + _clean(tenant.get("diretrizes_corporativas"))[:5000]
+                ),
+                request_id=event_id,
+            )
+            response = _clean(ai_result.get("text"))[:1500]
+            provider = _clean(ai_result.get("provider")) or "ai_worker"
+        except AIQueueError as exc:
+            logger.warning("AI Worker indisponível para grupo tenant=%s reason=%s", tenant_id, exc)
+            response = ""
+            provider = "ai_worker_unavailable"
     if not response:
         return True
     sent = bool(send_whatsapp(group_jid, response, instance_name=instance_name))

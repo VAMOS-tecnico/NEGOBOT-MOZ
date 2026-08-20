@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from config import Config
 import extensions
 from database.chat_repo import get_chat_history, save_chat_history
-from services.groq_service import chamar_groq_rest
+from services.ai_queue_service import AIQueueError, request_ai_text
 from services.evolution_service import (
     send_whatsapp, 
     send_media, 
@@ -225,7 +225,16 @@ Finalize sempre reforçando que o cliente não paga nada agora e pode testar qua
 - LINGUAGEM: Português de Moçambique, tom profissional, comercial, claro e direto.
 """
 
-    response_text = chamar_groq_rest(contents, system_prompt=sys_instruction)
+    try:
+        ai_result = request_ai_text(
+            tenant_id=f"cliente_{clean_phone}",
+            messages=contents,
+            system_prompt=sys_instruction,
+        )
+        response_text = str(ai_result.get("text") or "").strip()
+    except AIQueueError as exc:
+        logger.warning("AI Worker indisponível para tenant=%s reason=%s", clean_phone, exc)
+        response_text = "Neste momento o assistente está a processar muitas mensagens. Tente novamente dentro de instantes."
     if response_text:
         save_chat_history(clean_phone, "assistant", response_text)
         send_whatsapp(clean_phone, response_text, instance_name=central_instance)

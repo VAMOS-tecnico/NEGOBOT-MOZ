@@ -26,6 +26,7 @@ from services.group_automation_service import authorized_group_jids, group_docum
 from services.channel_publication_service import channel_capability, create_publication_data, enqueue_publication
 from services.channel_oauth_service import complete_oauth, disconnect_oauth, provider_config, start_oauth
 from services.password_reset_service import consume_password_reset, request_password_reset
+from services.ai_queue_service import AIQueueError, request_ai_text
 
 platform_bp = Blueprint("platform", __name__, url_prefix="/api/platform")
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -1902,9 +1903,14 @@ def public_assistant_chat():
         answer = _public_plan_answer()
     else:
         try:
-            from services.groq_service import chamar_groq_rest
-            answer = chamar_groq_rest([{"role": "user", "content": message}], system_prompt=prompt)
-        except Exception:
+            public_tenant = "public:" + hashlib.sha256(visitor.encode("utf-8")).hexdigest()[:24]
+            ai_result = request_ai_text(
+                tenant_id=public_tenant,
+                messages=[{"role": "user", "content": message}],
+                system_prompt=prompt,
+            )
+            answer = str(ai_result.get("text") or "").strip()
+        except AIQueueError:
             answer = "Posso ajudar com os planos, pagamentos M-Pesa, ligação do WhatsApp e demonstração de 2 dias."
         if not answer or "processar muitas mensagens" in answer.casefold():
             answer = "Posso ajudar com os planos, pagamentos M-Pesa, ligação do WhatsApp e demonstração de 2 dias. Escreve 'planos' para veres a tabela completa."

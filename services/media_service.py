@@ -3,7 +3,7 @@ import requests
 import urllib.parse
 from pypdf import PdfReader
 import pandas as pd
-from services.groq_service import chamar_groq_rest
+from services.ai_queue_service import AIQueueError, request_ai_text
 
 def extrair_texto_pdf_url(pdf_url):
     try:
@@ -36,7 +36,7 @@ def extrair_texto_excel_url(excel_url):
         print(f"❌ Erro ao ler Excel da URL {excel_url}: {e}")
     return ""
 
-def criar_prompt_profissional_groq(pedido_utilizador):
+def criar_prompt_profissional_groq(pedido_utilizador, tenant_id="system:image_prompt"):
     try:
         sys_instruction = (
             "Você é um especialista em Engenharia de Prompts para geração de imagens publicitárias. "
@@ -45,10 +45,13 @@ def criar_prompt_profissional_groq(pedido_utilizador):
             "'professional marketing banner, microfinance Mozambique context, bright clean lighting, photorealistic, 8k'. "
             "Responda APENAS com o prompt em inglês, sem saudações."
         )
-        contents = [{"parts": [{"text": pedido_utilizador}]}]
-        resultado = chamar_groq_rest(contents, system_instruction=sys_instruction, temperature=0.7)
-        return resultado if resultado else pedido_utilizador
-    except Exception as e:
+        resultado = request_ai_text(
+            tenant_id=tenant_id,
+            messages=[{"role": "user", "content": str(pedido_utilizador)}],
+            system_prompt=sys_instruction,
+        )
+        return str(resultado.get("text") or "").strip() or pedido_utilizador
+    except AIQueueError as e:
         print(f"❌ Erro ao otimizar prompt no Groq: {e}")
         return pedido_utilizador
 

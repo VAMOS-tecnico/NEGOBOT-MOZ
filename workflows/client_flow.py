@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from firebase_admin import firestore
 from config import Config
 import extensions
-from services.groq_service import chamar_groq_rest
+from services.ai_queue_service import AIQueueError, request_ai_text
 from services.evolution_service import send_whatsapp
 from services.trial_service import PENDING_STATUS, is_expired as trial_is_expired
 from services.plan_service import entitlements_for_tenant
@@ -497,9 +497,14 @@ REGRA DE ATENDIMENTO:
         # 10. RESPOSTA DA GROQ COM FALLBACK DE SEGURANÇA
         response_text = None
         try:
-            response_text = chamar_groq_rest(contents, system_prompt=sys_instruction)
-        except Exception as err_groq:
-            logger.error(f"Erro ao chamar Groq: {err_groq}")
+            ai_result = request_ai_text(
+                tenant_id=f"cliente_{clean_user_phone}",
+                messages=contents,
+                system_prompt=sys_instruction,
+            )
+            response_text = str(ai_result.get("text") or "").strip()
+        except AIQueueError as exc:
+            logger.warning("AI Worker indisponível para tenant=%s reason=%s", clean_user_phone, exc)
 
         if not response_text:
             response_text = "Olá! 👋 O nosso sistema está a processar a sua mensagem. Em que posso ser útil neste momento?"
