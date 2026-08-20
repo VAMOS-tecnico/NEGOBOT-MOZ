@@ -30,7 +30,7 @@ class PlanCatalogTests(unittest.TestCase):
         self.assertTrue(premium["mass_broadcast"])
 
     def test_active_trial_gets_temporary_premium_entitlements(self):
-        connected_at = datetime(2026, 8, 18, 12, 0, tzinfo=timezone.utc)
+        connected_at = datetime.now(timezone.utc) - timedelta(hours=1)
         trial = active_fields("258840000000", connected_at)
         entitlements = entitlements_for_tenant(trial)
         self.assertTrue(entitlements["trial_access"])

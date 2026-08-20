@@ -62,3 +62,17 @@ O painel confirmou 53 variáveis carregadas, todas com valor, sendo 46 não-SMTP
 ## Validação após remoção de SMTP
 
 O redeploy do Backend foi concluído pelo cartão Boomploy. Os endpoints confirmaram `GET /healthz -> {"status":"ok"}` e `GET /readyz -> {"status":"ready","checks":{"firebase":"online","redis":"online"}}`. A recuperação de palavra-passe agora apenas publica jobs para o Mailer Worker; o Backend não lê nem envia SMTP directamente.
+
+## IA removida do Backend e Incoming
+
+Depois da migração de texto e áudio, o Boomploy guardou o Backend sem as chaves/modelos de Groq, Cerebras, SambaNova, Gemini, GitHub Models, Mistral e OpenRouter. O cartão confirmou `saved=true`, `keyCount=30` e nenhuma das chaves-alvo permaneceu. O Incoming Worker foi guardado sem `GROQ_API_KEY` e `OPENROUTER_API_KEY`, com `keyCount=8`; ambos aguardam apenas o redeploy automático/separado para carregar os novos ambientes.
+
+O AI Worker continua a ser o único serviço com as chaves de fornecedores de IA. As chaves SMTP continuam exclusivamente no Mailer Worker.
+
+## Pós-redeploy de IA
+
+O Backend e o Incoming Worker regressaram a `running` sem `EnvironmentContractError`. O Backend não apresenta traceback. O painel ainda sinaliza `traceback=true` no cartão Incoming; esse indicador pode incluir linhas antigas, por isso o log actual será lido antes de qualquer rollback ou nova alteração.
+
+## Diagnóstico do traceback do Incoming
+
+A linha de traceback apresentada pelo painel era anterior ao redeploy (`22:36:05Z`). O final do log actual contém uma inicialização normal às `23:03:47Z`, com Firebase inicializado e consumidor online nas filas `whatsapp_incoming_queue,omnichannel_incoming_queue`; o cartão permanece `running`. Não foi necessária alteração de Redis nem rollback.
