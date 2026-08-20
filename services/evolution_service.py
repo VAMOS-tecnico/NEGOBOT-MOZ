@@ -187,7 +187,7 @@ def _normalizar_audio_para_whisper(media_bytes):
 def transcrever_audio_mensagem(data_payload, instance_name=None):
     """Obtém um áudio recebido pela Evolution, normaliza-o e transcreve-o com o Whisper da Groq."""
     try:
-        from services.groq_service import transcrever_audio_groq
+        from services.ai_queue_service import request_ai_transcription
 
         if not isinstance(data_payload, dict):
             return ""
@@ -201,6 +201,8 @@ def transcrever_audio_mensagem(data_payload, instance_name=None):
         webhook_base64 = audio.get("base64") or message.get("base64") or data_payload.get("base64")
         headers = {"apikey": Config.EVOLUTION_API_KEY, "Content-Type": "application/json"}
         clean_instance = _get_clean_instance(instance_name)
+        message_key = data_payload.get("key") or {}
+        message_id = str(message_key.get("id") or "")
 
         if webhook_base64:
             encoded = str(webhook_base64)
@@ -213,7 +215,6 @@ def transcrever_audio_mensagem(data_payload, instance_name=None):
             response.raise_for_status()
             media_bytes = response.content
         else:
-            message_key = data_payload.get("key") or {}
             request_payload = {
                 "message": {
                     "key": {
@@ -241,13 +242,13 @@ def transcrever_audio_mensagem(data_payload, instance_name=None):
         media_bytes = normalized_audio
 
         logger.warning("Áudio preparado para Whisper: bytes=%s magic=%s mimetype=%s", len(media_bytes), media_bytes[:12].hex(), "audio/wav")
-        suffix = ".wav"
-        with tempfile.NamedTemporaryFile(prefix="negobot-audio-", suffix=suffix, delete=True) as temporary:
-            temporary.write(media_bytes)
-            temporary.flush()
-            with open(temporary.name, "rb") as audio_file:
-                transcript = transcrever_audio_groq(audio_file)
-        return str(transcript or "").strip()
+        transcript_result = request_ai_transcription(
+            tenant_id=f"whatsapp_instance:{clean_instance}",
+            audio_bytes=media_bytes,
+            filename="audio.wav",
+            request_id=f"audio:{message_id}" if message_id else None,
+        )
+        return str(transcript_result.get("text") or "").strip()
     except Exception as exc:
         logger.error("Erro ao obter/transcrever áudio da Evolution: %s", exc)
         return ""

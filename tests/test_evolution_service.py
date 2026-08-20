@@ -133,7 +133,7 @@ class TestEvolutionService(unittest.TestCase):
         invalid_ogg = b"OggS" + b"audio-test"
         self.assertEqual(_normalizar_audio_para_whisper(invalid_ogg), b"")
 
-    @patch("services.groq_service.transcrever_audio_groq", return_value="Olá transcrito")
+    @patch("services.ai_queue_service.request_ai_transcription", return_value={"text": "Olá transcrito", "provider": "groq-whisper"})
     @patch("services.evolution_service.requests.post")
     def test_recupera_midia_por_id_normaliza_e_transcreve(self, post, transcribe):
         encoded = base64.b64encode(_valid_wav_bytes()).decode()
@@ -149,12 +149,13 @@ class TestEvolutionService(unittest.TestCase):
         self.assertEqual(request_payload["message"]["key"]["id"], "msg-audio-001")
         self.assertTrue(request_payload["convertToMp4"])
         transcribe.assert_called_once()
-        transcribed_file = transcribe.call_args.args[0]
-        self.assertEqual(transcribed_file.name.endswith(".wav"), True)
+        self.assertEqual(transcribe.call_args.kwargs["tenant_id"], "whatsapp_instance:assistente_negobot")
+        self.assertEqual(transcribe.call_args.kwargs["request_id"], "audio:msg-audio-001")
+        self.assertEqual(transcribe.call_args.kwargs["filename"], "audio.wav")
 
-    @patch("services.groq_service.transcrever_audio_groq")
+    @patch("services.ai_queue_service.request_ai_transcription")
     @patch("services.evolution_service.requests.post")
-    def test_nao_envia_audio_invalido_ao_groq(self, post, transcribe):
+    def test_nao_envia_audio_invalido_ao_ai_worker(self, post, transcribe):
         invalid_ogg = b"OggS" + b"audio-test"
         encoded = base64.b64encode(invalid_ogg).decode()
         post.return_value = FakeResponse(200, {"base64": encoded})

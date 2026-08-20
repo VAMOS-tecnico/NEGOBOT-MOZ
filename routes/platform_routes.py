@@ -1247,7 +1247,7 @@ def campaign_action(campaign_id: str, action: str):
 
 _INTEGRATION_DEFAULTS = {
     "evolution": {"label": "Evolution API", "kind": "WhatsApp e webhooks", "env": "EVOLUTION_API_KEY"},
-    "groq": {"label": "Groq AI", "kind": "Conversação, Whisper e Vision", "env": "GROQ_API_KEY"},
+    "ai_worker": {"label": "AI Worker", "kind": "Conversação, transcrição e geração via fila", "env": "REDIS_URL"},
     "firebase": {"label": "Firebase Firestore", "kind": "Dados e histórico", "env": "FIREBASE_CONFIG"},
     "redis": {"label": "Redis Queue", "kind": "Fila de campanhas", "env": "REDIS_URL"},
     "n8n": {"label": "n8n Automations", "kind": "Workflows e automações", "env": "N8N_HOST"},
@@ -1263,7 +1263,7 @@ def list_integrations():
     rows = []
     for key, default in _INTEGRATION_DEFAULTS.items():
         item = {"key": key, **default, **stored.get(key, {})}
-        configured = bool(os.getenv(default["env"], "").strip()) if default["env"] != "REDIS_URL" else True
+        configured = True if key in {"redis", "ai_worker"} else bool(os.getenv(default["env"], "").strip())
         item["configured"] = configured
         item.pop("env", None)
         rows.append(item)
@@ -1315,7 +1315,7 @@ def get_assistant_settings():
         "diretrizes_corporativas": data.get("diretrizes_corporativas", ""),
         "base_conhecimento_documentos": data.get("base_conhecimento_documentos", ""),
         "timeout_humano_minutos": data.get("timeout_humano_minutos", 15),
-        "models": {"text": os.getenv("GROQ_MODEL", "configured"), "vision": os.getenv("GROQ_VISION_MODEL", "configured")},
+        "models": {"text": "AI Worker", "vision": "Image Worker"},
     })
 
 

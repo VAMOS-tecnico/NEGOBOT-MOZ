@@ -50,3 +50,15 @@ Antes do redeploy do AI Worker, o painel Boomploy mostrou Backend, AI Worker, In
 ## Smoke test da fila AI
 
 Foi executado um POST para `https://negobot-api.duckdns.org/api/platform/public/assistant/chat` com uma pergunta não determinística sobre o NEGOBOT-MOZ. O endpoint devolveu HTTP bem-sucedido com uma resposta gerada, indicando que o Backend publicou o job, o AI Worker processou a mensagem e o resultado foi devolvido ao cliente. O teste não expôs chaves nem valores de ambiente.
+
+## Remoção de SMTP do Backend
+
+Depois do commit `9fb0da9`, a auditoria do cartão Backend no Boomploy encontrou as sete variáveis SMTP (`SMTP_FROM`, `SMTP_HOST`, `SMTP_PASSWORD`, `SMTP_PORT`, `SMTP_TIMEOUT_SECONDS`, `SMTP_USER`, `SMTP_USE_TLS`). O cartão não apresenta botão individual de remoção. Não será feita uma gravação destrutiva por manipulação visual até confirmar, no código do painel, se “Guardar variáveis” substitui o ficheiro completo ou apenas faz merge; o objectivo é não apagar variáveis não relacionadas.
+
+## SMTP removido do Backend
+
+O painel confirmou 53 variáveis carregadas, todas com valor, sendo 46 não-SMTP e 7 SMTP. Foi guardado no cartão `negobot-backend` exactamente o mapa não-SMTP. A resposta do painel confirmou `saved=true`, `keyCount=46` e `removedSmtp=true`; a operação não marcou `applied` porque o endpoint de guardar apenas escreve o `.env` e pede reinício separado. O Mailer Worker mantém o seu contrato SMTP próprio.
+
+## Validação após remoção de SMTP
+
+O redeploy do Backend foi concluído pelo cartão Boomploy. Os endpoints confirmaram `GET /healthz -> {"status":"ok"}` e `GET /readyz -> {"status":"ready","checks":{"firebase":"online","redis":"online"}}`. A recuperação de palavra-passe agora apenas publica jobs para o Mailer Worker; o Backend não lê nem envia SMTP directamente.

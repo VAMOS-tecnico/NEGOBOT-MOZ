@@ -5,6 +5,7 @@ em Redis e aguarda apenas o resultado identificado pelo mesmo job_id e tenant_id
 """
 from __future__ import annotations
 
+import base64
 import json
 import os
 import time
@@ -78,6 +79,57 @@ def request_ai_text(
     except Exception as exc:
         raise AIQueueError("ai_queue_unavailable") from exc
 
+    deadline = time.monotonic() + timeout
+    key = _result_key(job_id)
+    while time.monotonic() < deadline:
+        raw = client.get(key)
+        if raw:
+            try:
+                result = json.loads(raw)
+            except (TypeError, json.JSONDecodeError) as exc:
+                raise AIQueueError("ai_result_invalid") from exc
+            if str(result.get("job_id") or "") != job_id or str(result.get("tenant_id") or "") != tenant:
+                raise AIQueueError("ai_result_tenant_mismatch")
+            return result
+        time.sleep(0.2)
+    raise AIQueueError("ai_timeout")
+
+
+def request_ai_transcription(
+    *,
+    tenant_id: str,
+    audio_bytes: bytes,
+    filename: str = "audio.wav",
+    request_id: str | None = None,
+    timeout_seconds: float | None = None,
+) -> dict[str, Any]:
+    """Enfileira áudio para transcrição no AI Worker."""
+    tenant = str(tenant_id or "").strip()[:160]
+    if not tenant:
+        raise AIQueueError("tenant_id_obrigatorio")
+    if not isinstance(audio_bytes, (bytes, bytearray)) or not audio_bytes:
+        raise AIQueueError("audio_obrigatorio")
+    job_id = str(request_id or uuid.uuid4().hex).strip()[:160]
+    try:
+        timeout = float(timeout_seconds if timeout_seconds is not None else os.getenv("AI_RESPONSE_TIMEOUT_SECONDS", "30"))
+    except (TypeError, ValueError):
+        timeout = 30.0
+    timeout = max(2.0, min(timeout, 60.0))
+    envelope = {
+        "job_id": job_id,
+        "tenant_id": tenant,
+        "kind": "audio_transcription",
+        "attempt": 1,
+        "payload": {
+            "audio_base64": base64.b64encode(bytes(audio_bytes)).decode("ascii"),
+            "filename": str(filename or "audio.wav")[:160],
+        },
+    }
+    try:
+        client = _client()
+        client.rpush(AI_QUEUE, json.dumps(envelope, ensure_ascii=False, separators=(",", ":")))
+    except Exception as exc:
+        raise AIQueueError("ai_queue_unavailable") from exc
     deadline = time.monotonic() + timeout
     key = _result_key(job_id)
     while time.monotonic() < deadline:
