@@ -40,3 +40,13 @@ O Incoming Worker continua em `restarting`. O log mostrado pelo painel termina �
 ## Health checks finais
 
 Os endpoints públicos confirmaram `GET /healthz -> {"status":"ok"}` e `GET /readyz -> {"status":"ready","checks":{"firebase":"online","redis":"online"}` após os redeploys isolados. Não foram reiniciados volumes persistentes, Evolution API, PostgreSQL ou Redis por uma acção manual de migração.
+
+## Início da migração permanente de IA
+
+O commit `64f589a` substitui as chamadas directas de geração de texto por jobs em `negobot:ai_jobs`, com resultados em `negobot:ai:result:<job_id>` e validação de `tenant_id`. O Backend continua a usar temporariamente chaves de IA para transcrição de áudio e compatibilidade, mas já não há chamadas directas de geração de texto nos fluxos WhatsApp, grupos, cliente, Assistente público ou helper de prompts de imagem.
+
+Antes do redeploy do AI Worker, o painel Boomploy mostrou Backend, AI Worker, Incoming, Campaign, Channel Publication, AutoPay, Mailer, Image, Audio, Social, Video Service e Video Worker em `running`; PostgreSQL, Redis, Evolution e n8n também estavam `running`. O próximo passo operacional é redeployar apenas o AI Worker para carregar a versão que consome o contrato de jobs.
+
+## Smoke test da fila AI
+
+Foi executado um POST para `https://negobot-api.duckdns.org/api/platform/public/assistant/chat` com uma pergunta não determinística sobre o NEGOBOT-MOZ. O endpoint devolveu HTTP bem-sucedido com uma resposta gerada, indicando que o Backend publicou o job, o AI Worker processou a mensagem e o resultado foi devolvido ao cliente. O teste não expôs chaves nem valores de ambiente.

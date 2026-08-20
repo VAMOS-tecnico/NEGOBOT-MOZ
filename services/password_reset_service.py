@@ -3,12 +3,11 @@ from __future__ import annotations
 import hashlib
 import os
 import secrets
-import smtplib
 from datetime import datetime, timedelta, timezone
-from email.message import EmailMessage
 from typing import Any
 from urllib.parse import quote
 
+from services.mail_queue_service import MailQueueError, enqueue_email
 from werkzeug.security import generate_password_hash
 
 
@@ -42,40 +41,8 @@ def _is_expired(value: Any, now: datetime | None = None) -> bool:
     return expiry is None or expiry <= (now or _now())
 
 
-def _smtp_config() -> dict[str, Any] | None:
-    host = str(os.getenv("SMTP_HOST") or "").strip()
-    sender = str(os.getenv("SMTP_FROM") or os.getenv("SMTP_USER") or "").strip()
-    if not host or not sender:
-        return None
-    try:
-        port = int(os.getenv("SMTP_PORT", "587"))
-    except ValueError:
-        port = 587
-    use_tls = str(os.getenv("SMTP_USE_TLS", "true")).strip().lower() not in {"0", "false", "no"}
-    try:
-        timeout = max(5, min(int(os.getenv("SMTP_TIMEOUT_SECONDS", "20")), 60))
-    except ValueError:
-        timeout = 20
-    return {
-        "host": host,
-        "port": port,
-        "user": str(os.getenv("SMTP_USER") or "").strip(),
-        "password": str(os.getenv("SMTP_PASSWORD") or ""),
-        "sender": sender,
-        "use_tls": use_tls,
-        "timeout": timeout,
-    }
-
-
-def _send_email(recipient: str, reset_url: str) -> None:
-    config = _smtp_config()
-    if config is None:
-        raise RuntimeError("SMTP não configurado para recuperação de palavra-passe")
-    message = EmailMessage()
-    message["Subject"] = "NEGOBOT-MOZ — Password reset / Recuperação de palavra-passe"
-    message["From"] = config["sender"]
-    message["To"] = recipient
-    message.set_content(
+def _reset_email_body(reset_url: str) -> str:
+    return (
         "Olá,\n\n"
         "Recebemos um pedido para alterar a palavra-passe da tua conta NEGOBOT-MOZ. "
         "Abre esta ligação dentro de 30 minutos para definir uma nova palavra-passe:\n\n"
@@ -87,17 +54,6 @@ def _send_email(recipient: str, reset_url: str) -> None:
         "Use the link above within 30 minutes to choose a new password. "
         "If you did not request this, ignore this email."
     )
-    if config["use_tls"]:
-        with smtplib.SMTP(config["host"], config["port"], timeout=config["timeout"]) as smtp:
-            smtp.starttls()
-            if config["user"]:
-                smtp.login(config["user"], config["password"])
-            smtp.send_message(message)
-    else:
-        with smtplib.SMTP(config["host"], config["port"], timeout=config["timeout"]) as smtp:
-            if config["user"]:
-                smtp.login(config["user"], config["password"])
-            smtp.send_message(message)
 
 
 def request_password_reset(db: Any, email: str, frontend_base_url: str) -> bool:
@@ -132,9 +88,15 @@ def request_password_reset(db: Any, email: str, frontend_base_url: str) -> bool:
     base = str(frontend_base_url or "").rstrip("/")
     reset_url = f"{base}/reset-password?token={quote(token)}"
     try:
-        _send_email(canonical_email, reset_url)
-    except Exception:
-        # Do not expose SMTP state to the requester. The token is harmless
+        enqueue_email(
+            tenant_id=str(user.get("tenant_id") or f"user:{user_ref.id}"),
+            recipient=canonical_email,
+            subject="NEGOBOT-MOZ — Password reset / Recuperação de palavra-passe",
+            body=_reset_email_body(reset_url),
+            request_id=f"password-reset:{token_digest(token)}",
+        )
+    except MailQueueError:
+        # Do not expose queue state to the requester. The token is harmless
         # without delivery and expires quickly.
         return False
     return True

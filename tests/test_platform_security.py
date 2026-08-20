@@ -351,9 +351,13 @@ class PlatformSecurityTests(unittest.TestCase):
         self.db.collections["platform_users"] = {
             user_id: FakeSnapshot(user_id, {"email": email, "status": "active", "password_hash": "old-hash"})
         }
-        with patch("services.password_reset_service._send_email") as send_email:
+        with patch("services.password_reset_service.enqueue_email") as enqueue_email:
             self.assertTrue(request_password_reset(self.db, email, "https://app-negobotmoz.duckdns.org/plataforma"))
-            reset_url = send_email.call_args.args[1]
+            payload = enqueue_email.call_args.kwargs
+            reset_url = next(line for line in payload["body"].splitlines() if "/reset-password?token=" in line)
+            self.assertEqual(payload["tenant_id"], f"user:{user_id}")
+            self.assertEqual(payload["recipient"], email)
+            self.assertEqual(payload["request_id"].split(":", 1)[0], "password-reset")
         token = parse_qs(urlparse(reset_url).query)["token"][0]
         self.assertTrue(self.db.collections["password_resets"][token_digest(token)].exists)
         self.assertTrue(consume_password_reset(self.db, token, "new-password-123"))
