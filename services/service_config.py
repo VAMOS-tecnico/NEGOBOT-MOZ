@@ -41,7 +41,7 @@ PROFILES: dict[str, ServiceProfile] = {
     ),
     "video": ServiceProfile(
         required=("REDIS_URL", "VIDEO_SERVICE_TOKEN"),
-        optional=("VIDEO_QUEUE", "VIDEO_OUTPUT_DIR", "VIDEO_RETENTION_DAYS"),
+        optional=("VIDEO_QUEUE", "VIDEO_OUTPUT_DIR", "VIDEO_RETENTION_DAYS", "PEXELS_API_KEY", "PEXELS_PER_PAGE", "PEXELS_TIMEOUT_SECONDS"),
     ),
     "ai": ServiceProfile(
         required=("REDIS_URL",),

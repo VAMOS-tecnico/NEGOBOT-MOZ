@@ -101,6 +101,9 @@ class VideoJobRequest(BaseModel):
     language: str = Field(default="pt-MZ", min_length=2, max_length=20)
     voice: str | None = Field(default=None, max_length=100)
     subtitles: bool = True
+    narracao: str | None = Field(default=None, max_length=5000)
+    palavras_chave: list[str] = Field(default_factory=list, max_length=8)
+    background_keywords: list[str] = Field(default_factory=list, max_length=8)
     callback_url: str | None = Field(default=None, max_length=2000)
 
     @field_validator("callback_url")

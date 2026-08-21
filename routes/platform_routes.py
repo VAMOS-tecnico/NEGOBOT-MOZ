@@ -2198,7 +2198,7 @@ def create_video_job():
     if not 2 <= len(title) <= 160 or not isinstance(scenes, list) or not 1 <= len(scenes) <= 20:
         return jsonify({"error": "Indica um título e pelo menos uma cena válida."}), 400
     tenant_id = _tenant_for_identity(_identity())
-    outgoing = {"tenant_id": tenant_id, "title": title, "scenes": scenes, "language": str(payload.get("language") or "pt-MZ"), "voice": payload.get("voice"), "subtitles": bool(payload.get("subtitles", True))}
+    outgoing = {"tenant_id": tenant_id, "title": title, "scenes": scenes, "language": str(payload.get("language") or "pt-MZ"), "voice": payload.get("voice"), "subtitles": bool(payload.get("subtitles", True)), "narracao": payload.get("narracao"), "palavras_chave": payload.get("palavras_chave") or [], "background_keywords": payload.get("background_keywords") or []}
     try:
         response = requests.post(f"{base_url}/api/video/jobs", json=outgoing, headers={"X-Video-Service-Token": service_token}, timeout=20)
     except requests.RequestException:
