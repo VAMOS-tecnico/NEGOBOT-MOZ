@@ -263,7 +263,7 @@ export type TenantMetrics = {
 
 export type VideoScene = { text: string; duration_seconds?: number; asset_url?: string };
 
-export type VideoJob = { id: string; tenant_id?: string; title: string; scenes?: VideoScene[]; status?: "queued" | "processing" | "completed" | "failed"; progress?: number; output_url?: string; error?: string; created_at?: string };
+export type VideoJob = { id: string; tenant_id?: string; title: string; scenes?: VideoScene[]; status?: "queued" | "processing" | "completed" | "deleted" | "failed"; progress?: number; output_available?: boolean; output_url?: string; error?: string; created_at?: string; deleted_at?: string; deletion_reason?: string };
 
 export type SupportTicket = {
   id: string;
@@ -473,6 +473,19 @@ export const api = {
     updateSupportTicket: (id: string, fields: { message?: string; status?: "open" | "closed" }) => request<{ updated: true }>(`/api/platform/client/support/tickets/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(fields) }),
     createVideoJob: (payload: { title: string; scenes: VideoScene[]; language?: string; voice?: string; subtitles?: boolean }) => request<{ accepted: true; job: VideoJob }>("/api/platform/client/videos/jobs", { method: "POST", body: JSON.stringify(payload) }),
     videoJob: (id: string) => request<{ job: VideoJob }>(`/api/platform/client/videos/jobs/${encodeURIComponent(id)}`),
+    downloadVideoJob: async (id: string) => {
+      const response = await fetch(`/api/platform/client/videos/jobs/${encodeURIComponent(id)}/download`, { credentials: "same-origin" });
+      if (!response.ok) {
+        const contentType = response.headers.get("content-type") || "";
+        const body = contentType.includes("application/json") ? await response.json() : await response.text();
+        const message = typeof body === "object" && body?.error ? body.error : `Download refused (${response.status})`;
+        throw new ApiError(message, response.status);
+      }
+      const disposition = response.headers.get("content-disposition") || "";
+      const match = disposition.match(/filename="?([^";]+)"?/i);
+      return { blob: await response.blob(), filename: match?.[1] || `negobot-video-${id.slice(0, 8)}.mp4` };
+    },
+    deleteVideoJob: (id: string) => request<{ deleted: true; job_id: string }>(`/api/platform/client/videos/jobs/${encodeURIComponent(id)}`, { method: "DELETE" }),
     templates: () => request<{ templates: CampaignTemplate[] }>("/api/platform/client/templates"),
     createTemplate: (name: string, body: string) => request<{ created: true; template: CampaignTemplate }>("/api/platform/client/templates", { method: "POST", body: JSON.stringify({ name, body }) }),
     updateTemplate: (id: string, fields: { name?: string; body?: string; status?: "active" | "archived" }) => request<{ updated: true }>(`/api/platform/client/templates/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(fields) }),

@@ -4,12 +4,25 @@ import json
 import logging
 import os
 import time
+from datetime import datetime, timezone
+from pathlib import Path
 
 import redis
 import requests
 from dotenv import load_dotenv
 
-load_dotenv(os.getenv("NEGOBOT_ENV_FILE", "/run/negobot-env/.env"), override=False)
+def _load_environment():
+    path = os.getenv("NEGOBOT_ENV_FILE", "/run/negobot-env/.env")
+    try:
+        load_dotenv(path, override=False)
+    except TypeError:
+        try:
+            load_dotenv(path)
+        except TypeError:
+            load_dotenv()
+
+
+_load_environment()
 
 from video_pipeline import render_job_with_tts
 from services.service_config import enforce_profile
@@ -19,11 +32,55 @@ logger = logging.getLogger("negobot-video-worker")
 QUEUE = os.getenv("VIDEO_QUEUE", "negobot:video_jobs")
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/1")
 OUTPUT_DIR = os.getenv("VIDEO_OUTPUT_DIR", "/tmp/negobot-videos")
+RETENTION_DAYS = max(1, int(os.getenv("VIDEO_RETENTION_DAYS", "7")))
+CLEANUP_INTERVAL_SECONDS = 300
 
 
 def update(client, job: dict, status: str, progress: int, **fields):
     values = {"status": status, "progress": str(max(0, min(100, progress))), "updated_at": time.time(), **{key: str(value) for key, value in fields.items()}}
     client.hset(f"negobot:video:job:{job['id']}", mapping=values)
+
+
+def _safe_output_path(value: str) -> Path | None:
+    candidate = Path(value)
+    root = Path(OUTPUT_DIR).resolve()
+    if not candidate.is_absolute():
+        candidate = root / candidate
+    try:
+        resolved = candidate.resolve()
+        resolved.relative_to(root)
+    except (OSError, ValueError):
+        return None
+    return resolved
+
+
+def cleanup_expired_outputs(client):
+    cutoff = time.time() - (RETENTION_DAYS * 86400)
+    removed = 0
+    for key in client.scan_iter(match="negobot:video:job:*"):
+        data = client.hgetall(key)
+        if data.get("status") != "completed" or not data.get("output_path"):
+            continue
+        path = _safe_output_path(data["output_path"])
+        if path is None or not path.is_file():
+            continue
+        try:
+            reference_time = path.stat().st_mtime
+            if data.get("updated_at"):
+                try:
+                    reference_time = datetime.fromisoformat(data["updated_at"].replace("Z", "+00:00")).timestamp()
+                except ValueError:
+                    pass
+            if reference_time > cutoff:
+                continue
+            path.unlink()
+            client.hset(key, mapping={"status": "deleted", "progress": "100", "output_path": "", "deleted_at": datetime.now(timezone.utc).isoformat(), "updated_at": datetime.now(timezone.utc).isoformat(), "deletion_reason": "retention"})
+            removed += 1
+        except OSError:
+            logger.warning("Não foi possível limpar o vídeo expirado key=%s", key)
+    if removed:
+        logger.info("Limpeza de vídeos: %s output(s) removido(s)", removed)
+    return removed
 
 
 def callback(job: dict, result: dict):
@@ -55,8 +112,12 @@ def main():
     client = redis.from_url(REDIS_URL, decode_responses=True)
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     heartbeat_key = "negobot:worker:heartbeat:video"
+    last_cleanup = 0.0
     while True:
         client.setex(heartbeat_key, 90, str(time.time()))
+        if time.time() - last_cleanup >= CLEANUP_INTERVAL_SECONDS:
+            cleanup_expired_outputs(client)
+            last_cleanup = time.time()
         item = client.blpop(QUEUE, timeout=30)
         if not item:
             continue

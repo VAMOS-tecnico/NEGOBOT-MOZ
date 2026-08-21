@@ -12,7 +12,7 @@ from typing import Any, Callable
 from urllib.parse import quote, urlparse
 
 import requests
-from flask import Blueprint, jsonify, redirect, request, session
+from flask import Blueprint, Response, jsonify, redirect, request, session, stream_with_context
 from werkzeug.security import check_password_hash, generate_password_hash
 
 import extensions
@@ -2227,15 +2227,84 @@ def get_video_job(job_id: str):
     if not base_url or not service_token:
         return jsonify({"error": "O motor de vídeos ainda não está configurado."}), 503
     try:
-        response = requests.get(f"{base_url}/api/video/jobs/{quote(job_id)}", headers={"X-Video-Service-Token": service_token}, timeout=15)
+        response = requests.get(f"{base_url}/api/video/jobs/{quote(job_id)}", headers={"X-Video-Service-Token": service_token, "X-Video-Tenant-Id": tenant_id}, timeout=15)
     except requests.RequestException:
         return jsonify({"error": "O motor de vídeos está temporariamente indisponível."}), 503
     if not response.ok:
         return jsonify({"error": "Não foi possível obter o estado do vídeo."}), 502
     data = response.json()
     job = data.get("job") or {}
-    _db().collection("video_jobs").document(job_id).set({"status": job.get("status"), "progress": job.get("progress", 0), "updated_at": _now(), "output_path": job.get("output_path")}, merge=True)
+    _db().collection("video_jobs").document(job_id).set({"status": job.get("status"), "progress": job.get("progress", 0), "updated_at": _now(), "output_available": bool(job.get("output_available"))}, merge=True)
     return jsonify({"job": job})
+
+
+@platform_bp.get("/client/videos/jobs/<job_id>/download")
+@_require_roles("client", "operator")
+def download_video_job(job_id: str):
+    base_url = str(os.getenv("VIDEO_SERVICE_URL", "")).rstrip("/")
+    service_token = os.getenv("VIDEO_SERVICE_TOKEN", "").strip()
+    tenant_id = _tenant_for_identity(_identity())
+    document = _db().collection("video_jobs").document(job_id).get()
+    if not document.exists or (document.to_dict() or {}).get("tenant_id") != tenant_id:
+        return jsonify({"error": "Job de vídeo não encontrado."}), 404
+    if not base_url or not service_token:
+        return jsonify({"error": "O motor de vídeos ainda não está configurado."}), 503
+    try:
+        upstream = requests.get(
+            f"{base_url}/api/video/jobs/{quote(job_id)}/download",
+            headers={"X-Video-Service-Token": service_token, "X-Video-Tenant-Id": tenant_id},
+            stream=True,
+            timeout=(10, 120),
+        )
+    except requests.RequestException:
+        return jsonify({"error": "O motor de vídeos está temporariamente indisponível."}), 503
+    if not upstream.ok:
+        try:
+            detail = (upstream.json() or {}).get("detail")
+        except ValueError:
+            detail = None
+        upstream.close()
+        return jsonify({"error": detail or "O vídeo já não está disponível para download."}), upstream.status_code if upstream.status_code in {404, 409} else 502
+
+    def relay():
+        try:
+            for chunk in upstream.iter_content(chunk_size=1024 * 1024):
+                if chunk:
+                    yield chunk
+        finally:
+            upstream.close()
+
+    headers = {"Cache-Control": "no-store", "X-Accel-Buffering": "no"}
+    for key in ("Content-Length", "Content-Disposition"):
+        if upstream.headers.get(key):
+            headers[key] = upstream.headers[key]
+    return Response(stream_with_context(relay()), status=200, mimetype=upstream.headers.get("Content-Type", "video/mp4"), headers=headers)
+
+
+@platform_bp.delete("/client/videos/jobs/<job_id>")
+@_require_roles("client", "operator")
+def delete_video_job(job_id: str):
+    base_url = str(os.getenv("VIDEO_SERVICE_URL", "")).rstrip("/")
+    service_token = os.getenv("VIDEO_SERVICE_TOKEN", "").strip()
+    tenant_id = _tenant_for_identity(_identity())
+    document = _db().collection("video_jobs").document(job_id).get()
+    if not document.exists or (document.to_dict() or {}).get("tenant_id") != tenant_id:
+        return jsonify({"error": "Job de vídeo não encontrado."}), 404
+    if not base_url or not service_token:
+        return jsonify({"error": "O motor de vídeos ainda não está configurado."}), 503
+    try:
+        response = requests.delete(f"{base_url}/api/video/jobs/{quote(job_id)}", headers={"X-Video-Service-Token": service_token, "X-Video-Tenant-Id": tenant_id}, timeout=20)
+    except requests.RequestException:
+        return jsonify({"error": "O motor de vídeos está temporariamente indisponível."}), 503
+    if not response.ok:
+        try:
+            detail = (response.json() or {}).get("detail")
+        except ValueError:
+            detail = None
+        return jsonify({"error": detail or "Não foi possível apagar o vídeo."}), response.status_code if response.status_code in {404, 409} else 502
+    _db().collection("video_jobs").document(job_id).set({"status": "deleted", "output_available": False, "deleted_at": _now(), "deletion_reason": "manual"}, merge=True)
+    _audit("video_job_deleted", _identity(), tenant_id, {"job_id": job_id, "reason": "manual"})
+    return jsonify({"deleted": True, "job_id": job_id})
 
 
 @platform_bp.get("/client/channels")
