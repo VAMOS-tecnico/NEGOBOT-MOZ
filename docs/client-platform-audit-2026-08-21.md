@@ -33,3 +33,7 @@ O teste visual do selector PT/EN na pré-visualização mostrou o estado PT acti
 O diagnóstico do preview confirmou `localStorage = pt`, mas o texto do registo permaneceu em inglês depois do clique. A causa provável é o mecanismo actual de tradução DOM/estado, não o armazenamento da preferência. A solução deve garantir re-renderização React explícita quando o idioma muda, em vez de depender apenas do MutationObserver.
 
 Após adicionar as entradas de login/registo ao dicionário, a pré-visualização confirmou as duas direcções: com a preferência PT, o registo aparece em português; ao alternar para EN, volta a aparecer em inglês. Nenhum formulário foi submetido.
+
+## Publicação
+
+O commit `53789ca` foi publicado no GitHub e o serviço gerido `negobot-site` foi redeployado pela rota própria do Boomploy, com sincronização do repositório e build do frontend. A validação confirmou o novo asset `index-DQ00Ygbr.js` em `https://app-negobotmoz.duckdns.org/plataforma/register`, com marcadores do onboarding em inglês, português e trial para todos. O container `negobot-site` está `running`; `/healthz` e `/readyz` do Backend responderam HTTP 200. Nenhum Backend, Redis, PostgreSQL, Evolution ou worker foi reiniciado neste redeploy.
