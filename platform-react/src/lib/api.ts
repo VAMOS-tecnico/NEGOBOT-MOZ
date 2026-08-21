@@ -140,6 +140,8 @@ export type Conversation = {
   name?: string;
   last_message?: string;
   updated_at?: string;
+  last_interaction?: string | null;
+  contact_id?: string;
   status?: string;
   status_atendimento?: string;
 };
@@ -170,6 +172,9 @@ export type Campaign = {
   scheduled_at?: string | null;
   orchestration_status?: string;
   recipient_limit?: number;
+  include_contacts?: boolean;
+  include_conversations?: boolean;
+  conversation_count?: number;
   skipped?: number;
 };
 
@@ -451,6 +456,7 @@ export const api = {
     createOperator: (name: string, email: string, password: string) => request<{ created: true; user: TeamMember }>("/api/platform/client/team", { method: "POST", body: JSON.stringify({ name, email, password }) }),
     updateTeamMember: (id: string, fields: { status?: "active" | "suspended"; tenant_role?: "operator" | "viewer" }) => request<{ updated: true }>(`/api/platform/client/team/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(fields) }),
     conversations: () => request<{ conversations: Conversation[] }>("/api/platform/client/conversations"),
+    campaignConversationAudience: () => request<{ conversations: Conversation[]; count: number; eligibility: string }>("/api/platform/client/campaign-audience/conversations"),
     handoff: (phone: string, mode: "bot" | "humano") => request<{ updated: true }>(`/api/platform/client/conversations/${encodeURIComponent(phone)}/handoff`, { method: "POST", body: JSON.stringify({ mode }) }),
     contacts: (filters: { search?: string; tag?: string; opt_in?: "true" | "false" } = {}) => { const query = new URLSearchParams(); if (filters.search) query.set("search", filters.search); if (filters.tag) query.set("tag", filters.tag); if (filters.opt_in) query.set("opt_in", filters.opt_in); const suffix = query.toString() ? `?${query.toString()}` : ""; return request<{ contacts: Contact[]; count?: number }>(`/api/platform/client/contacts${suffix}`); },
     createContact: (name: string, phone: string, tags: string[] = []) => request<{ created: true; contact: Contact }>("/api/platform/client/contacts", { method: "POST", body: JSON.stringify({ name, phone, tags, opt_in: true }) }),
@@ -470,7 +476,7 @@ export const api = {
     templates: () => request<{ templates: CampaignTemplate[] }>("/api/platform/client/templates"),
     createTemplate: (name: string, body: string) => request<{ created: true; template: CampaignTemplate }>("/api/platform/client/templates", { method: "POST", body: JSON.stringify({ name, body }) }),
     updateTemplate: (id: string, fields: { name?: string; body?: string; status?: "active" | "archived" }) => request<{ updated: true }>(`/api/platform/client/templates/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(fields) }),
-    createCampaign: (name: string, message: string, options: { template_id?: string; tags?: string[]; channels?: string[]; language?: string; tone?: string; offer?: string; scheduled_at?: string; recipient_limit?: number; include_contacts?: boolean; consent_confirmed?: boolean; group_jids?: string[]; group_authorization_confirmed?: boolean } = {}) => request<{ created: true; campaign: Campaign }>("/api/platform/client/campaigns", { method: "POST", body: JSON.stringify({ name, message, ...options }) }),
+    createCampaign: (name: string, message: string, options: { template_id?: string; tags?: string[]; channels?: string[]; language?: string; tone?: string; offer?: string; scheduled_at?: string; recipient_limit?: number; include_contacts?: boolean; include_conversations?: boolean; consent_confirmed?: boolean; group_jids?: string[]; group_authorization_confirmed?: boolean } = {}) => request<{ created: true; campaign: Campaign }>("/api/platform/client/campaigns", { method: "POST", body: JSON.stringify({ name, message, ...options }) }),
     campaignAction: (id: string, action: "pause" | "resume" | "cancel") => request<{ updated: true; status: string }>(`/api/platform/client/campaigns/${id}/actions/${action}`, { method: "POST" }),
     profile: () => request<BusinessProfile>("/api/platform/client/profile"),
     updateProfile: (profile: Partial<BusinessProfile>) => request<{ updated: true; fields: string[] }>("/api/platform/client/profile", { method: "PATCH", body: JSON.stringify(profile) }),

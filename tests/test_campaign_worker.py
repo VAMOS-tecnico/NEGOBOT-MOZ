@@ -10,7 +10,37 @@ from campaign_worker import (
     _recipient_allowed,
     _group_recipient_allowed,
     _delivery_delays,
+    _contact_for_recipient,
 )
+
+
+class _ContactDocument:
+    exists = True
+
+    def __init__(self, data):
+        self.data = data
+
+    def to_dict(self):
+        return dict(self.data)
+
+    def get(self):
+        return self
+
+
+class _ContactCollection:
+    def __init__(self, document):
+        self.document_value = document
+
+    def document(self, _contact_id):
+        return self.document_value
+
+
+class _ContactDB:
+    def __init__(self, document):
+        self.collection_value = _ContactCollection(document)
+
+    def collection(self, _name):
+        return self.collection_value
 
 
 class CampaignWorkerPolicyTests(unittest.TestCase):
@@ -50,6 +80,11 @@ class CampaignWorkerPolicyTests(unittest.TestCase):
         self.assertTrue(_recipient_allowed({"opt_in": True}))
         self.assertFalse(_recipient_allowed({"opt_in": False}))
         self.assertFalse(_recipient_allowed({"opt_in": True, "do_not_contact": True}))
+
+    def test_recipient_contact_must_belong_to_campaign_tenant(self):
+        db = _ContactDB(_ContactDocument({"tenant_id": "tenant-b", "opt_in": True}))
+        self.assertEqual(_contact_for_recipient(db, {"contact_id": "contact-b"}, "tenant-a"), {})
+        self.assertEqual(_contact_for_recipient(db, {"contact_id": "contact-b"}, "tenant-b")["tenant_id"], "tenant-b")
 
     @patch("campaign_worker.time.sleep")
     @patch("campaign_worker.send_whatsapp", side_effect=[False, False, True])

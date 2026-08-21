@@ -85,6 +85,8 @@ export function CampaignsPage() {
   const [recipientLimit, setRecipientLimit] = useState(200);
   const [consentConfirmed, setConsentConfirmed] = useState(false);
   const [includeContacts, setIncludeContacts] = useState(true);
+  const [includeConversations, setIncludeConversations] = useState(false);
+  const [conversationAudience, setConversationAudience] = useState<Conversation[]>([]);
   const [groups, setGroups] = useState<WhatsAppGroup[]>([]);
   const [selectedGroupJids, setSelectedGroupJids] = useState<string[]>([]);
   const [groupAuthorizationConfirmed, setGroupAuthorizationConfirmed] = useState(false);
@@ -113,12 +115,13 @@ export function CampaignsPage() {
     setBusy(true);
     setError("");
     try {
-      const [campaignResult, templateResult, groupResult, settingsResult] = await Promise.all([
-        api.client.campaigns(), api.client.templates(), api.client.groups(), api.client.campaignSettings(),
+      const [campaignResult, templateResult, groupResult, settingsResult, audienceResult] = await Promise.all([
+        api.client.campaigns(), api.client.templates(), api.client.groups(), api.client.campaignSettings(), api.client.campaignConversationAudience(),
       ]);
       setCampaigns(campaignResult.campaigns || []);
       setTemplates(templateResult.templates || []);
       setGroups(groupResult.groups || []);
+      setConversationAudience(audienceResult.conversations || []);
       setCampaignSettings(settingsResult);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Não foi possível carregar campanhas.");
@@ -134,13 +137,13 @@ export function CampaignsPage() {
       await api.client.createCampaign(name, message, {
         ...(templateId ? { template_id: templateId } : {}), ...(tags.length ? { tags } : {}),
         channels, language, tone, offer, recipient_limit: recipientLimit,
-        include_contacts: includeContacts, consent_confirmed: consentConfirmed,
+        include_contacts: includeContacts, include_conversations: includeConversations, consent_confirmed: consentConfirmed,
         group_jids: selectedGroupJids, group_authorization_confirmed: groupAuthorizationConfirmed,
         ...(scheduledAt ? { scheduled_at: scheduledAt } : {}),
       });
       setName(""); setMessage(""); setTemplateId(""); setSegmentTags(""); setChannels(["whatsapp"]);
       setOffer(""); setScheduledAt(""); setRecipientLimit(200); setConsentConfirmed(false);
-      setIncludeContacts(true); setSelectedGroupJids([]); setGroupAuthorizationConfirmed(false);
+      setIncludeContacts(true); setIncludeConversations(false); setSelectedGroupJids([]); setGroupAuthorizationConfirmed(false);
       setNotice("Campanha validada e colocada na fila persistente.");
       await load();
     } catch (reason) {
@@ -171,6 +174,7 @@ export function CampaignsPage() {
           <label>Canais de publicação<div className="channel-grid">{channelOptions.map((channel) => <label className="check-card" key={channel.id}><input type="checkbox" checked={channels.includes(channel.id)} onChange={() => setChannels((current) => current.includes(channel.id) ? current.filter((item) => item !== channel.id) : [...current, channel.id])} />{channel.label}</label>)}</div></label>
           <fieldset className="destination-fieldset"><legend>{english ? "Sending destinations" : "Destinos de envio"}</legend><small className="muted">{english ? <>Contacts use only <code>opt_in=true</code>. Groups receive the message directly; members are never extracted for marketing.</> : <>Contactos usam apenas <code>opt_in=true</code>. Grupos recebem a mensagem directamente; os membros nunca são extraídos para marketing.</>}</small>
             <label className="check-card"><input type="checkbox" checked={includeContacts} onChange={(event) => setIncludeContacts(event.target.checked)} />{english ? "Opted-in contacts" : "Contactos autorizados"}</label>
+            <label className="check-card"><input type="checkbox" checked={includeConversations} onChange={(event) => setIncludeConversations(event.target.checked)} disabled={conversationAudience.length === 0} /><span><strong>{english ? "Existing conversations with opt-in" : "Conversas existentes com opt-in"}</strong><small className="muted">{conversationAudience.length ? (english ? `${conversationAudience.length} eligible conversation${conversationAudience.length === 1 ? "" : "s"}; only linked opted-in contacts are included.` : `${conversationAudience.length} conversa${conversationAudience.length === 1 ? " elegível" : "s elegíveis"}; só entram contactos ligados com opt-in.`) : (english ? "No eligible conversations. A conversation must match an opted-in contact." : "Não há conversas elegíveis. A conversa tem de corresponder a um contacto com opt-in.")}</small></span></label>
             {verifiedGroups.length ? <><div className="group-target-list">{verifiedGroups.map((group) => <label className="check-card" key={group.id}><input type="checkbox" checked={selectedGroupJids.includes(group.group_jid)} onChange={(event) => setSelectedGroupJids((current) => event.target.checked ? [...current, group.group_jid] : current.filter((item) => item !== group.group_jid))} />Grupo próprio: {group.name || group.group_jid}</label>)}</div><label className="check-card"><input type="checkbox" checked={groupAuthorizationConfirmed} onChange={(event) => setGroupAuthorizationConfirmed(event.target.checked)} required={selectedGroupJids.length > 0} />Confirmo que autorizo o envio apenas para estes grupos próprios onde a instância é administradora.</label></> : <small className="muted">{english ? <>No verified own groups yet. Open <b>Own groups</b> and click <b>Sync groups</b>.</> : <>Ainda não há grupos próprios verificados. Abre <b>Grupos próprios</b> e clica em <b>Sincronizar grupos</b>.</>}</small>}
           </fieldset>
           <label>Template opcional<select value={templateId} onChange={(event) => { const value = event.target.value; setTemplateId(value); const selected = templates.find((item) => item.id === value); if (selected) setMessage(selected.body); }}><option value="">Escrever mensagem</option>{templates.filter((item) => item.status !== "archived").map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
@@ -180,8 +184,8 @@ export function CampaignsPage() {
           <label>Agendar data e hora<small className="muted">Opcional; usa o fuso horário configurado abaixo.</small><input type="datetime-local" value={scheduledAt} onChange={(event) => setScheduledAt(event.target.value)} /></label>
           <label>Limite de contactos<small className="muted">Só afecta contactos com opt-in; grupos seleccionados são destinos directos e não contam como membros extraídos.</small><input type="number" min={1} max={15000} value={recipientLimit} onChange={(event) => setRecipientLimit(Math.max(1, Number(event.target.value) || 1))} required /></label>
           <label>Etiquetas do segmento<small className="muted">Separadas por vírgulas; vazio envia para todos com opt-in.</small><input value={segmentTags} onChange={(event) => setSegmentTags(event.target.value)} placeholder="vip, cliente" /></label>
-          <label className="check-card consent-card"><input type="checkbox" checked={consentConfirmed} onChange={(event) => setConsentConfirmed(event.target.checked)} required={includeContacts} disabled={!includeContacts} />Confirmo que os contactos deram autorização e que PARAR/STOP/SAIR será respeitado.</label>
-          <button className="primary-button" disabled={saving || channels.length === 0 || (includeContacts && !consentConfirmed) || (selectedGroupJids.length > 0 && !groupAuthorizationConfirmed)} type="submit">{saving ? "A preparar..." : "Colocar na fila omnichannel"}</button>
+          <label className="check-card consent-card"><input type="checkbox" checked={consentConfirmed} onChange={(event) => setConsentConfirmed(event.target.checked)} required={includeContacts || includeConversations} disabled={!includeContacts && !includeConversations} />{english ? "I confirm that the selected contacts/conversations authorised messages and that STOP will be respected." : "Confirmo que os contactos/conversas seleccionados autorizaram mensagens e que PARAR/STOP/SAIR será respeitado."}</label>
+          <button className="primary-button" disabled={saving || channels.length === 0 || ((includeContacts || includeConversations) && !consentConfirmed) || (selectedGroupJids.length > 0 && !groupAuthorizationConfirmed)} type="submit">{saving ? "A preparar..." : "Colocar na fila omnichannel"}</button>
         </form>
       </section>
       <section className="data-panel"><div className="panel-heading"><div><span className="eyebrow">{english ? "HISTORY" : "HISTÓRICO"}</span><h3>{campaigns.length} {english ? "campaigns" : "campanhas"}</h3></div><ActivityIcon /></div>{busy ? <LoadingBox /> : campaigns.length ? <div className="data-list">{campaigns.map((campaign) => <div className="data-row" key={campaign.id}><div className="quick-icon"><Send size={16} /></div><div className="row-main"><strong>{campaign.name}</strong><small>{(campaign.channels || ["whatsapp"]).join(", ")} · {campaign.total || 0} destinos · {campaign.sent || 0} enviados</small></div><span className={`status-badge ${campaign.status || "queued"}`}>{campaign.status || "queued"}</span><div className="row-actions">{campaign.status === "paused" ? <button title="Retomar" onClick={() => void action(campaign.id, "resume")}><Play size={14} /></button> : <button title="Pausar" onClick={() => void action(campaign.id, "pause")}><Pause size={14} /></button>}<button title="Cancelar" onClick={() => void action(campaign.id, "cancel")}><XCircle size={14} /></button></div></div>)}</div> : <div className="empty-state">Ainda não criaste nenhuma campanha.</div>}</section>

@@ -204,13 +204,16 @@ def _group_recipient_allowed(data: dict[str, Any], tenant_id: str, instance_name
     return group_jid in set(authorized_group_jids(tenant_id, instance_name))
 
 
-def _contact_for_recipient(db: Any, data: dict[str, Any]) -> dict[str, Any]:
+def _contact_for_recipient(db: Any, data: dict[str, Any], tenant_id: str | None = None) -> dict[str, Any]:
     contact_id = str(data.get("contact_id") or "").strip()
     if not contact_id:
         return {}
     ref = db.collection("contacts").document(contact_id)
     document = ref.get()
-    return document.to_dict() or {} if document.exists else {}
+    contact = document.to_dict() or {} if document.exists else {}
+    if tenant_id and contact.get("tenant_id") != tenant_id:
+        return {}
+    return contact
 
 
 def dispatch_non_whatsapp_channels(campaign_id: str, campaign: dict[str, Any]) -> dict[str, Any] | None:
@@ -318,7 +321,7 @@ def process_campaign(campaign_id: str, queue: Any) -> None:
                     continue
                 contact = {}
             else:
-                contact = _contact_for_recipient(db, data)
+                contact = _contact_for_recipient(db, data, tenant_id)
                 if not _recipient_allowed(contact):
                     recipient_document.reference.set({"status": "skipped_opt_out", "skipped_at": now_utc(), "reason": "opt_in ausente ou revogado"}, merge=True)
                     _mark_counter(campaign_ref, "skipped", 1)

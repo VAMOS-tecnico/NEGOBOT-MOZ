@@ -1153,9 +1153,10 @@ def create_campaign():
     if recipient_limit < 1 or (plan_contact_limit and recipient_limit > plan_contact_limit):
         return jsonify({"error": f"O limite deve ficar entre 1 e {plan_contact_limit or 'o limite do plano'} contactos."}), 400
     include_contacts = bool(payload.get("include_contacts", True))
+    include_conversations = bool(payload.get("include_conversations", False))
     group_jids = sorted({str(item).strip() for item in (payload.get("group_jids") or []) if str(item).strip()})[:50]
-    if include_contacts and payload.get("consent_confirmed") is not True:
-        return jsonify({"error": "Confirma que os contactos deram opt-in antes de criar a campanha."}), 400
+    if (include_contacts or include_conversations) and payload.get("consent_confirmed") is not True:
+        return jsonify({"error": "Confirma que os contactos e conversas elegíveis deram opt-in antes de criar a campanha."}), 400
     if group_jids:
         if payload.get("group_authorization_confirmed") is not True:
             return jsonify({"error": "Confirma que autorizas o envio apenas para os teus grupos próprios."}), 400
@@ -1164,13 +1165,31 @@ def create_campaign():
         if unauthorized:
             return jsonify({"error": "Um ou mais grupos não estão verificados como grupos próprios administrados pela instância deste tenant.", "unauthorized_groups": unauthorized}), 403
     contacts = []
-    if include_contacts:
-        contacts = list(db.collection("contacts").where("tenant_id", "==", tenant_id).where("opt_in", "==", True).limit(min(recipient_limit, 5000)).stream())
-        if segment_tags:
-            contacts = [contact for contact in contacts if set(segment_tags).issubset(set((contact.to_dict() or {}).get("tags") or []))]
-        contacts = contacts[:recipient_limit]
+    conversation_eligible_count = 0
+    eligible_contacts_by_phone = {}
+    if include_contacts or include_conversations:
+        contact_documents = list(db.collection("contacts").where("tenant_id", "==", tenant_id).limit(5000).stream())
+        for contact in contact_documents:
+            data = contact.to_dict() or {}
+            phone = re.sub(r"\D", "", str(data.get("phone") or ""))
+            if not phone or data.get("opt_in") is not True or data.get("do_not_contact"):
+                continue
+            if segment_tags and not set(segment_tags).issubset(set(data.get("tags") or [])):
+                continue
+            eligible_contacts_by_phone[phone] = contact
+        if include_contacts:
+            contacts = list(eligible_contacts_by_phone.values())[:recipient_limit]
+        if include_conversations:
+            conversation_documents = db.collection("clientes_bot").document(tenant_id).collection("conversas").limit(500).stream()
+            for conversation_document in conversation_documents:
+                phone = re.sub(r"\D", "", str(conversation_document.id or ""))
+                if phone not in eligible_contacts_by_phone:
+                    continue
+                conversation_eligible_count += 1
+                if not include_contacts and len(contacts) < recipient_limit:
+                    contacts.append(eligible_contacts_by_phone[phone])
     if not contacts and not group_jids:
-        return jsonify({"error": "Adiciona contactos com opt-in ou selecciona pelo menos um grupo próprio verificado."}), 400
+        return jsonify({"error": "Adiciona contactos/conversas com opt-in ou selecciona pelo menos um grupo próprio verificado."}), 400
     campaign_ref = db.collection("campaigns").document()
     campaign_ref.set({
         "tenant_id": tenant_id,
@@ -1193,12 +1212,18 @@ def create_campaign():
         "started_at": None,
         "finished_at": None,
         "include_contacts": include_contacts,
+        "include_conversations": include_conversations,
+        "conversation_count": conversation_eligible_count,
         "group_jids": group_jids,
         "contacts_count": 0,
         "groups_count": len(group_jids),
     })
     recipients = []
+    seen_contact_ids = set()
     for contact in contacts:
+        if contact.id in seen_contact_ids:
+            continue
+        seen_contact_ids.add(contact.id)
         data = contact.to_dict() or {}
         phone = re.sub(r"\D", "", str(data.get("phone") or ""))
         if not phone:
@@ -1368,6 +1393,41 @@ def update_assistant_settings():
         return jsonify({"error": "Nenhuma definição válida foi enviada."}), 400
     _db().collection("tenants").document(tenant_id).set({**allowed, "updated_at": _now()}, merge=True)
     return jsonify({"updated": True, "fields": sorted(allowed)})
+
+
+@platform_bp.get("/client/campaign-audience/conversations")
+@_require_roles("client", "operator")
+def campaign_conversation_audience():
+    """Return only existing conversations that can be used as an opted-in campaign audience."""
+    tenant_id = _tenant_for_identity(_identity())
+    db = _db()
+    contacts_by_phone = {}
+    for document in db.collection("contacts").where("tenant_id", "==", tenant_id).limit(5000).stream():
+        data = document.to_dict() or {}
+        phone = re.sub(r"\D", "", str(data.get("phone") or ""))
+        if phone and data.get("opt_in") is True and not data.get("do_not_contact"):
+            contacts_by_phone[phone] = {"id": document.id, "name": str(data.get("name") or "").strip(), "tags": data.get("tags") or []}
+    rows = []
+    seen = set()
+    for document in db.collection("clientes_bot").document(tenant_id).collection("conversas").limit(500).stream():
+        phone = re.sub(r"\D", "", str(document.id or ""))
+        contact = contacts_by_phone.get(phone)
+        if not phone or not contact or phone in seen:
+            continue
+        seen.add(phone)
+        data = document.to_dict() or {}
+        last_interaction = data.get("ultima_interacao") or data.get("updated_at")
+        rows.append({
+            "id": phone,
+            "phone": phone,
+            "name": str(data.get("name") or contact.get("name") or "Contacto").strip(),
+            "last_message": str(data.get("ultima_mensagem") or data.get("last_message") or "").strip(),
+            "last_interaction": str(last_interaction) if last_interaction else None,
+            "status_atendimento": data.get("status_atendimento") or "bot",
+            "contact_id": contact["id"],
+        })
+    rows.sort(key=lambda item: item.get("last_interaction") or "", reverse=True)
+    return jsonify({"conversations": rows, "count": len(rows), "eligibility": "opt_in_contact_only"})
 
 
 @platform_bp.get("/client/conversations")
