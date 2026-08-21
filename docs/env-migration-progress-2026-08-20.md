@@ -82,3 +82,18 @@ A linha de traceback apresentada pelo painel era anterior ao redeploy (`22:36:05
 A suite completa terminou com `130 tests ... OK`. Em produção, `/healthz` devolveu `{"status":"ok"}` e `/readyz` devolveu `{"status":"ready","checks":{"firebase":"online","redis":"online"}}`. O Assistente público respondeu depois de o Backend ficar sem as chaves dos fornecedores, confirmando o percurso Backend -> `negobot:ai_jobs` -> AI Worker.
 
 O AI Worker foi redeployado depois do commit `343299b` para carregar o handler `audio_transcription`; o cartão Boomploy está `running` e o log actual não contém `Traceback` nem `EnvironmentContractError`. Os artefactos não relacionados que estavam no working tree não foram incluídos nos commits desta migração.
+
+## Auditoria n8n — 21 de Agosto de 2026
+
+O cartão n8n está `running` e possui `N8N_WEBHOOK_URL`/base URL públicos configurados, além do contrato próprio de PostgreSQL e da chave de encriptação. O cartão NEGOBOT Campaign Worker está `running`, com `N8N_WEBHOOK_TIMEOUT` e `N8N_WEBHOOK_RETRIES`, mas `N8N_CAMPAIGN_WEBHOOK_URL` e `N8N_WEBHOOK_SECRET` estão ausentes. O Backend também não contém estas duas variáveis, de acordo com a migração de responsabilidade para o Campaign Worker. Nenhum valor secreto foi registado.
+
+## Recuperação n8n e webhook de campanhas — 21 de Agosto de 2026
+
+- A recuperação administrativa do n8n foi concluída sem apagar o volume `n8n_data`; o workflow existente foi preservado e confirmado no painel.
+- O novo proprietário foi criado com o e-mail operacional `contacto.negobotmoz@gmail.com`. A palavra-passe temporária não é registada neste relatório.
+- O SMTP do n8n foi configurado através do Mailer Worker existente. Como a porta SMTP é 587 com STARTTLS, `N8N_SMTP_SSL=false` foi aplicado no n8n.
+- O workflow foi publicado em produção com `POST https://n8n-central.duckdns.org/webhook/evolution`.
+- O nó Webhook usa Header Auth com o cabeçalho `X-NEGOBOT-Signature`; o valor secreto permanece apenas no n8n e no Campaign Worker.
+- O Campaign Worker recebeu `N8N_CAMPAIGN_WEBHOOK_URL`, `N8N_WEBHOOK_SECRET`, `N8N_WEBHOOK_RETRIES=3` e `N8N_WEBHOOK_TIMEOUT=12`, e foi redeployado isoladamente.
+- O commit `9f56923` alinhou o producer do NEGOBOT com o Header Auth fixo do n8n; os três testes específicos passaram.
+- O teste real do endpoint de produção devolveu HTTP 200 com `Workflow was started`. O Campaign Worker permanece `running`, sem reinício do n8n, Backend, PostgreSQL, Redis ou volumes persistentes.
