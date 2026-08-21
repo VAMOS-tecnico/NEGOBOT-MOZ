@@ -173,8 +173,34 @@ def baixar_videos_pexels(palavras_chave: list, duracao_minima: float, pasta_dest
     return downloaded
 
 
+def _parse_json_object(content: str) -> dict[str, Any]:
+    """Extrai um objecto JSON mesmo quando o modelo envolve a resposta em markdown."""
+    text = str(content or "").strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s*```$", "", text).strip()
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", text, flags=re.DOTALL)
+        if not match:
+            raise ValueError("O Groq não devolveu um objecto JSON válido.") from None
+        try:
+            parsed = json.loads(match.group(0))
+        except json.JSONDecodeError:
+            raise ValueError("O Groq não devolveu um objecto JSON válido.") from None
+    if not isinstance(parsed, dict):
+        raise ValueError("O roteiro Groq deve ser um objecto JSON.")
+    return parsed
+
+
 def gerar_roteiro(tema: str, idioma: str = "pt") -> dict:
-    """Gera roteiro estruturado usando Groq JSON Object Mode."""
+    """Gera roteiro estruturado com contrato JSON validado localmente.
+
+    O modelo qwen configurado no Groq rejeita ``response_format=json_object``
+    para alguns pedidos curtos. Por isso o prompt exige JSON estrito e o
+    resultado é validado localmente antes de ser aceite pelo pipeline.
+    """
     from groq import Groq
 
     language = "Português" if str(idioma).lower().startswith("pt") else "English"
@@ -194,11 +220,11 @@ def gerar_roteiro(tema: str, idioma: str = "pt") -> dict:
             {"role": "system", "content": "És um roteirista de vídeos curtos. Devolve somente JSON."},
             {"role": "user", "content": prompt},
         ],
-        response_format={"type": "json_object"},
         temperature=0.6,
+        max_tokens=500,
     )
     content = completion.choices[0].message.content or "{}"
-    data = json.loads(content)
+    data = _parse_json_object(content)
     narration = str(data.get("narracao") or "").strip()
     keywords = _normalise_keywords(data.get("palavras_chave") or [])
     if not narration or not 3 <= len(keywords) <= 5:
