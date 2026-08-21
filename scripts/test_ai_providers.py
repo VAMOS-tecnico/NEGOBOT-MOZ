@@ -84,7 +84,7 @@ def _test_openai_compatible(provider: Provider, key: str, model: str, timeout: f
             "model": model,
             "messages": [{"role": "user", "content": PROMPT_JSON if json_mode else PROMPT_TEXT}],
             "temperature": 0,
-            "max_tokens": 32,
+            "max_tokens": 400,
         }
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
@@ -117,7 +117,7 @@ def _test_openai_compatible(provider: Provider, key: str, model: str, timeout: f
 def _test_gemini(provider: Provider, key: str, model: str, timeout: float, json_mode: bool) -> dict[str, Any]:
     started = time.monotonic()
     try:
-        generation_config: dict[str, Any] = {"temperature": 0, "maxOutputTokens": 32}
+        generation_config: dict[str, Any] = {"temperature": 0, "maxOutputTokens": 400}
         if json_mode:
             generation_config["responseMimeType"] = "application/json"
         response = requests.post(

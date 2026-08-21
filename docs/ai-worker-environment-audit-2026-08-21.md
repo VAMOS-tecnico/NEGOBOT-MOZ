@@ -67,3 +67,15 @@ A acção planeada é alterar apenas os modelos já confirmados como inválidos:
 ## Correcção aplicada pelo Boomploy
 
 No cartão `Negobot Ai Worker (CPX32)`, foram actualizados apenas `CEREBRAS_MODEL` para `gpt-oss-120b` e `GEMINI_MODEL`/`GEMINI_MODEL_2` para `gemini-3.6-flash`. O Boomploy confirmou “Variáveis guardadas no .env deste serviço” e o redeploy do serviço CPX32 foi accionado. Nenhuma chave ou outra variável foi alterada.
+
+## Publicação da correcção
+
+O código foi validado com 142 testes do projecto e publicado no GitHub no commit `2f1a6ea` (`fix(ai): validate providers and tolerate Groq JSON responses`). O commit inclui o script `scripts/test_ai_providers.py`, o parser robusto de JSON do pipeline de vídeos e este relatório. O Boomploy confirmou que as variáveis corrigidas foram guardadas e que o AI Worker CPX32 iniciou novamente com o perfil `ai`.
+
+## Validação final após a correcção
+
+Depois do redeploy do AI Worker CPX32, o container ficou `running`, `healthy` e com zero reinícios. O teste individual com orçamento de resposta suficiente passou em Groq (`qwen/qwen3.6-27b`), Gemini 1 e Gemini 2 (`gemini-3.6-flash`), Mistral (`mistral-small-latest`) e OpenRouter (`openrouter/free`).
+
+Cerebras (`gpt-oss-120b`) e SambaNova (`Meta-Llama-3.3-70B-Instruct`) continuam a responder HTTP 402 por restrição de pagamento da conta, não por erro de variável. GitHub Models continua a responder HTTP 404 com o modelo configurado. Estes três fornecedores não foram apagados nem usados para interromper o worker; o pool continua a fazer fallback para os fornecedores funcionais.
+
+O script de teste foi ajustado para usar até 400 tokens no teste rápido, pois alguns modelos com raciocínio devolvem HTTP 200 mas ficam sem conteúdo quando o limite é demasiado baixo. A opção `--json-mode` permanece disponível para verificar compatibilidade JSON separadamente.
