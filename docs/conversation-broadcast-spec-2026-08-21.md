@@ -33,3 +33,9 @@ Não são elegíveis números extraídos de grupos de terceiros, conversas sem o
 ## Rollback
 
 A alteração é compatível com campanhas existentes: `include_conversations` ausente equivale a `false`, e o worker continua a aceitar apenas destinatários contact/group. Se a nova função falhar, o campo pode ser desactivado sem alterar campanhas anteriores.
+
+## Validação e publicação
+
+O commit `2732e60` foi publicado no GitHub. A suite passou com **131 testes**, a compilação TypeScript passou e o build Vite foi concluído. O Backend está `healthy`, o Campaign Worker actualizado no CPX32 está `running` e o site publicou o bundle `index-BF7Qz38g.js` com os marcadores da nova audiência de conversas.
+
+Durante o deploy foi detectada uma publicação ausente da porta privada do Redis. O Compose foi corrigido com backup e o Redis foi recriado exclusivamente com `10.0.0.2:6379:6379`; o volume `infra_redis_data` foi preservado. A CPX32 voltou a comunicar com o Redis e os nove workers ficaram activos. Nenhum envio real foi efectuado durante os testes.
