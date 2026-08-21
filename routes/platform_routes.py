@@ -2238,6 +2238,60 @@ def get_video_job(job_id: str):
     return jsonify({"job": job})
 
 
+@platform_bp.get("/client/videos/jobs/<job_id>/preview")
+@_require_roles("client", "operator")
+def preview_video_job(job_id: str):
+    base_url = str(os.getenv("VIDEO_SERVICE_URL", "")).rstrip("/")
+    service_token = os.getenv("VIDEO_SERVICE_TOKEN", "").strip()
+    tenant_id = _tenant_for_identity(_identity())
+    document = _db().collection("video_jobs").document(job_id).get()
+    if not document.exists or (document.to_dict() or {}).get("tenant_id") != tenant_id:
+        return jsonify({"error": "Job de vídeo não encontrado."}), 404
+    if not base_url or not service_token:
+        return jsonify({"error": "O motor de vídeos ainda não está configurado."}), 503
+    upstream_headers = {
+        "X-Video-Service-Token": service_token,
+        "X-Video-Tenant-Id": tenant_id,
+    }
+    if request.headers.get("Range"):
+        upstream_headers["Range"] = request.headers["Range"]
+    try:
+        upstream = requests.get(
+            f"{base_url}/api/video/jobs/{quote(job_id)}/preview",
+            headers=upstream_headers,
+            stream=True,
+            timeout=(10, 120),
+        )
+    except requests.RequestException:
+        return jsonify({"error": "O motor de vídeos está temporariamente indisponível."}), 503
+    if not upstream.ok:
+        try:
+            detail = (upstream.json() or {}).get("detail")
+        except ValueError:
+            detail = None
+        upstream.close()
+        return jsonify({"error": detail or "O vídeo ainda não está disponível para pré-visualização."}), upstream.status_code if upstream.status_code in {404, 409} else 502
+
+    def relay_preview():
+        try:
+            for chunk in upstream.iter_content(chunk_size=1024 * 1024):
+                if chunk:
+                    yield chunk
+        finally:
+            upstream.close()
+
+    headers = {"Cache-Control": "no-store", "X-Accel-Buffering": "no"}
+    for key in ("Content-Length", "Content-Range", "Accept-Ranges", "Content-Disposition"):
+        if upstream.headers.get(key):
+            headers[key] = upstream.headers[key]
+    return Response(
+        stream_with_context(relay_preview()),
+        status=upstream.status_code,
+        mimetype=upstream.headers.get("Content-Type", "video/mp4"),
+        headers=headers,
+    )
+
+
 @platform_bp.get("/client/videos/jobs/<job_id>/download")
 @_require_roles("client", "operator")
 def download_video_job(job_id: str):

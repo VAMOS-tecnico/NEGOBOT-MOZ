@@ -11,7 +11,7 @@ from typing import Any
 
 import redis
 from fastapi import Depends, FastAPI, Header, HTTPException, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 from services.service_config import enforce_profile
@@ -141,6 +141,26 @@ def get_job(job_id: str, x_video_tenant_id: str | None = Header(default=None)):
     payload["output_available"] = bool(payload.get("status") == "completed" and output_path is not None and output_path.is_file())
     payload.pop("output_path", None)
     return {"job": payload}
+
+
+@app.get("/api/video/jobs/{job_id}/preview", dependencies=[Depends(require_service_token)])
+def preview_job(job_id: str, x_video_tenant_id: str | None = Header(default=None)):
+    _, payload = _job_from_redis(job_id)
+    _tenant_guard(payload, x_video_tenant_id)
+    if payload.get("status") != "completed":
+        raise HTTPException(status_code=409, detail="O vídeo ainda não está pronto para pré-visualização.")
+    path = _safe_output_path(str(payload.get("output_path") or ""))
+    if path is None or not path.is_file():
+        raise HTTPException(status_code=404, detail="O ficheiro de vídeo já não está disponível.")
+    return FileResponse(
+        path,
+        media_type="video/mp4",
+        headers={
+            "Content-Disposition": f'inline; filename="{_filename(str(payload.get("title") or "video"), job_id)}"',
+            "Cache-Control": "no-store",
+            "Accept-Ranges": "bytes",
+        },
+    )
 
 
 @app.get("/api/video/jobs/{job_id}/download", dependencies=[Depends(require_service_token)])

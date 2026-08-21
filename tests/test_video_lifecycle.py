@@ -66,6 +66,39 @@ class VideoLifecycleTests(unittest.TestCase):
         self.assertNotIn("output_path", result["job"])
         self.assertFalse(result["job"]["output_available"])
 
+    def test_preview_keeps_file_and_returns_inline_video(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "job.mp4"
+            output.write_bytes(b"preview-data")
+            redis_client = FakeRedis({
+                "negobot:video:job:job-preview": {
+                    "payload": '{"id":"job-preview","tenant_id":"tenant-a","title":"Oferta Preview"}',
+                    "status": "completed",
+                    "progress": "100",
+                    "output_path": str(output),
+                }
+            })
+            with patch.object(video_service, "OUTPUT_DIR", root), patch.object(video_service, "queue_client", return_value=redis_client):
+                response = video_service.preview_job("job-preview", "tenant-a")
+            self.assertEqual(response.media_type, "video/mp4")
+            self.assertIn("inline", response.headers.get("content-disposition", ""))
+            self.assertTrue(output.exists())
+
+    def test_wrong_tenant_cannot_preview(self):
+        redis_client = FakeRedis({
+            "negobot:video:job:job-preview": {
+                "payload": '{"id":"job-preview","tenant_id":"tenant-a","title":"Oferta"}',
+                "status": "completed",
+                "progress": "100",
+                "output_path": "/var/lib/negobot/videos/job-preview.mp4",
+            }
+        })
+        with patch.object(video_service, "queue_client", return_value=redis_client):
+            with self.assertRaises(Exception) as raised:
+                video_service.preview_job("job-preview", "tenant-b")
+        self.assertEqual(getattr(raised.exception, "status_code", None), 404)
+
     def test_wrong_tenant_cannot_download(self):
         redis_client = FakeRedis({
             "negobot:video:job:job-a": {

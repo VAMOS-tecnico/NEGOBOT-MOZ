@@ -473,6 +473,7 @@ export const api = {
     updateSupportTicket: (id: string, fields: { message?: string; status?: "open" | "closed" }) => request<{ updated: true }>(`/api/platform/client/support/tickets/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(fields) }),
     createVideoJob: (payload: { title: string; scenes: VideoScene[]; language?: string; voice?: string; subtitles?: boolean }) => request<{ accepted: true; job: VideoJob }>("/api/platform/client/videos/jobs", { method: "POST", body: JSON.stringify(payload) }),
     videoJob: (id: string) => request<{ job: VideoJob }>(`/api/platform/client/videos/jobs/${encodeURIComponent(id)}`),
+    videoPreviewUrl: (id: string) => `/api/platform/client/videos/jobs/${encodeURIComponent(id)}/preview`,
     downloadVideoJob: async (id: string) => {
       const response = await fetch(`/api/platform/client/videos/jobs/${encodeURIComponent(id)}/download`, { credentials: "same-origin" });
       if (!response.ok) {
