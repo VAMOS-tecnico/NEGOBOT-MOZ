@@ -1,12 +1,11 @@
 """Integração segura entre o worker NEGOBOT e webhooks n8n.
 
 O n8n deve usar um Webhook node em modo de produção com Header Auth. O valor
-configurado no header `X-NEGOBOT-Signature` é um HMAC-SHA256 do corpo JSON.
+configurado no header `X-NEGOBOT-Signature` é o segredo partilhado, guardado
+apenas no n8n e no Campaign Worker.
 """
 from __future__ import annotations
 
-import hashlib
-import hmac
 import json
 import logging
 import os
@@ -23,14 +22,10 @@ def configured() -> bool:
     return bool(os.getenv("N8N_CAMPAIGN_WEBHOOK_URL", "").strip() and os.getenv("N8N_WEBHOOK_SECRET", "").strip())
 
 
-def _signature(raw_body: bytes, secret: str) -> str:
-    return hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
-
-
 def dispatch_campaign_event(event: str, payload: dict[str, Any], request_id: str | None = None) -> dict[str, Any]:
     """Envia um evento de campanha ao n8n com retries seguros.
 
-    O corpo inclui `request_id` para correlação e o header assinado impede que
+    O corpo inclui `request_id` para correlação e o header secreto impede que
     uma chamada externa injete tarefas na automação sem conhecer o segredo.
     """
     url = os.getenv("N8N_CAMPAIGN_WEBHOOK_URL", "").strip()
@@ -44,7 +39,7 @@ def dispatch_campaign_event(event: str, payload: dict[str, Any], request_id: str
         "Content-Type": "application/json",
         "X-NEGOBOT-Event": event,
         "X-NEGOBOT-Request-ID": correlation_id,
-        "X-NEGOBOT-Signature": _signature(raw_body, secret),
+        "X-NEGOBOT-Signature": secret,
     }
     retries = max(1, min(4, int(os.getenv("N8N_WEBHOOK_RETRIES", "3"))))
     timeout = max(3, min(30, int(os.getenv("N8N_WEBHOOK_TIMEOUT", "12"))))

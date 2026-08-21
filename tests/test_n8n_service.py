@@ -1,5 +1,3 @@
-import hashlib
-import hmac
 import json
 import os
 import unittest
@@ -35,8 +33,7 @@ class N8nServiceTests(unittest.TestCase):
         raw = kwargs["data"]
         body = json.loads(raw)
         self.assertEqual(body["request_id"], "req-1")
-        expected = hmac.new(b"secret-test", raw, hashlib.sha256).hexdigest()
-        self.assertEqual(kwargs["headers"]["X-NEGOBOT-Signature"], expected)
+        self.assertEqual(kwargs["headers"]["X-NEGOBOT-Signature"], "secret-test")
         self.assertEqual(kwargs["headers"]["X-NEGOBOT-Event"], "campaign.dispatch")
 
     @patch("services.n8n_service.time.sleep")
