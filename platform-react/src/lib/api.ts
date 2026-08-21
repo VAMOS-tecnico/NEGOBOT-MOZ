@@ -91,6 +91,7 @@ export type IntegrationStatus = {
   instance_name?: string;
   state?: string;
   configured?: boolean;
+  services?: Record<string, { label: string; status: string }>;
 };
 
 export type ChannelStatus = "not_configured" | "pending_authorization" | "pending_review" | "connected" | "disabled" | "error";

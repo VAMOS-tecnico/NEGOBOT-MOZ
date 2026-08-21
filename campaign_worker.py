@@ -20,7 +20,7 @@ from firebase_admin import firestore
 import extensions
 from services.evolution_service import send_whatsapp
 from services.group_automation_service import authorized_group_jids
-from services.n8n_service import dispatch_campaign_event
+from services.n8n_service import configured as n8n_configured, dispatch_campaign_event
 from services.plan_service import entitlements_for_tenant
 from services.service_config import enforce_profile
 
@@ -368,6 +368,8 @@ def main() -> None:
     logger.info("Worker de campanhas iniciado; fila=%s", CAMPAIGN_QUEUE)
     while True:
         try:
+            queue.setex("negobot:worker:heartbeat:campaign", 90, str(time.time()))
+            queue.setex("negobot:worker:campaign:n8n_configured", 90, "1" if n8n_configured() else "0")
             promote_scheduled(queue)
             job = queue.blpop(CAMPAIGN_QUEUE, timeout=15)
             if not job:

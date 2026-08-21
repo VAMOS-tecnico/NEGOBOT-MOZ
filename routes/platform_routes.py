@@ -1302,7 +1302,37 @@ def client_integration_status():
                 state = "offline"
         except requests.RequestException:
             state = "offline"
-    return jsonify({"instance_name": instance_name, "state": state, "configured": bool(tenant.get("instance_name"))})
+    services: dict[str, dict[str, str]] = {
+        "whatsapp": {"label": "WhatsApp / Evolution", "status": "online" if state == "open" else state},
+        "redis": {"label": "Campaign queue", "status": "unknown"},
+        "automation": {"label": "Campaign automation", "status": "unknown"},
+        "payments_local": {"label": "M-Pesa / AutoPay", "status": "configured" if os.getenv("MPESA_RECEIVER_PHONE", "855000929").strip() else "not_configured"},
+        "payments_international": {"label": "Lemon Squeezy", "status": "configured" if os.getenv("LEMONSQUEEZY_API_KEY", "").strip() and os.getenv("LEMONSQUEEZY_WEBHOOK_SECRET", "").strip() else "not_configured"},
+    }
+    worker_profiles = ("ai", "image", "audio", "social", "mailer", "video", "campaign")
+    try:
+        import redis
+        queue = redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379/1"), decode_responses=True)
+        queue.ping()
+        services["redis"]["status"] = "online"
+        now = time.time()
+        n8n_flag = queue.get("negobot:worker:campaign:n8n_configured")
+        if n8n_flag is not None:
+            services["automation"]["status"] = "configured" if n8n_flag == "1" else "not_configured"
+        for profile in worker_profiles:
+            raw_heartbeat = queue.get(f"negobot:worker:heartbeat:{profile}")
+            if raw_heartbeat:
+                try:
+                    services[f"worker_{profile}"] = {"label": f"{profile.title()} worker", "status": "online" if now - float(raw_heartbeat) <= 120 else "offline"}
+                except (TypeError, ValueError):
+                    services[f"worker_{profile}"] = {"label": f"{profile.title()} worker", "status": "unknown"}
+            else:
+                services[f"worker_{profile}"] = {"label": f"{profile.title()} worker", "status": "offline"}
+    except Exception:
+        services["redis"]["status"] = "offline"
+        for profile in worker_profiles:
+            services[f"worker_{profile}"] = {"label": f"{profile.title()} worker", "status": "unknown"}
+    return jsonify({"instance_name": instance_name, "state": state, "configured": bool(tenant.get("instance_name")), "services": services})
 
 
 @platform_bp.get("/client/assistant")
