@@ -14,6 +14,7 @@ except ImportError:  # instalado no container pelo requirements.txt
     redis = None
 
 from routes.webhook_routes import processar_webhook_background
+from services.group_automation_service import purge_archived_groups
 from services.incoming_queue import OMNICHANNEL_QUEUE_NAME, QUEUE_NAME
 from services.service_config import enforce_profile
 
@@ -101,7 +102,17 @@ def main() -> None:
     client = redis.from_url(REDIS_URL, decode_responses=True)
     client.ping()
     logger.info("Consumidor online queues=%s,%s", QUEUE_NAME, OMNICHANNEL_QUEUE_NAME)
+    last_group_cleanup = 0.0
     while True:
+        now = time.time()
+        if now - last_group_cleanup >= 300:
+            try:
+                removed = purge_archived_groups()
+                if removed:
+                    logger.info("Limpeza de grupos arquivados: %d documento(s) removido(s)", removed)
+            except Exception:
+                logger.exception("Falha na limpeza de grupos arquivados; o consumo continua")
+            last_group_cleanup = now
         item = client.blpop([QUEUE_NAME, OMNICHANNEL_QUEUE_NAME], timeout=30)
         if item:
             if item[0] == OMNICHANNEL_QUEUE_NAME:

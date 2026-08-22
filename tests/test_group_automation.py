@@ -1,3 +1,4 @@
+import time
 import unittest
 from unittest.mock import patch
 
@@ -9,6 +10,7 @@ class FakeDocument:
         self._data = data or {}
         self.exists = exists
         self.id = "fake"
+        self.deleted = False
 
     def to_dict(self):
         return dict(self._data)
@@ -22,6 +24,9 @@ class FakeDocument:
 
     def set(self, data, merge=False):
         self._data.update(data)
+
+    def delete(self):
+        self.deleted = True
 
 
 class FakeCollection:
@@ -89,6 +94,23 @@ class GroupAutomationTests(unittest.TestCase):
     def test_verify_admin_accepts_c_us_and_device_jids(self):
         participants = [{"id": "258841234567:7@c.us", "isAdmin": True}]
         self.assertEqual(groups.verify_bot_admin(self.tenant, "tenant-instance", participants), (True, "admin_verified", "258841234567@s.whatsapp.net"))
+
+    def test_disconnected_groups_are_hidden_immediately(self):
+        document = FakeDocument({**self.group, "instance_name": "tenant-instance"})
+        database = FakeDb(self.tenant, self.group)
+        database.collections["whatsapp_groups"].documents = [document]
+        groups.extensions.db = database
+        self.assertEqual(groups.archive_groups_for_instance("tenant-instance"), 1)
+        self.assertEqual(document.to_dict()["status"], "archived")
+        self.assertFalse(document.to_dict()["visible"])
+
+    def test_archived_groups_are_deleted_only_after_retention_window(self):
+        document = FakeDocument({"instance_name": "tenant-instance", "status": "archived", "archived_at": time.time() - 7200})
+        database = FakeDb(self.tenant, self.group)
+        database.collections["whatsapp_groups"].documents = [document]
+        groups.extensions.db = database
+        self.assertEqual(groups.purge_archived_groups(max_age_seconds=3600), 1)
+        self.assertTrue(document.deleted)
 
     @patch("services.group_automation_service.send_whatsapp", return_value=True)
     def test_keyword_requires_mention(self, send_mock):

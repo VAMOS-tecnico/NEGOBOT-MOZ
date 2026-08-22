@@ -22,11 +22,12 @@ from services.channel_registry import CHANNEL_STATUSES, client_channel_rows, ens
 from services.plan_service import entitlements_for_tenant, plan_channel_limit, public_plan_rows
 from services.secret_store import SecretStoreError, decrypt_secret, encrypt_secret
 from services.telegram_service import TelegramApiError, delete_webhook, get_me, get_webhook_info, set_webhook
-from services.group_automation_service import authorized_group_jids, group_document_id, sync_groups_for_tenant
+from services.group_automation_service import archive_groups_for_instance, authorized_group_jids, group_document_id, sync_groups_for_tenant
 from services.channel_publication_service import channel_capability, create_publication_data, enqueue_publication
 from services.channel_oauth_service import complete_oauth, disconnect_oauth, provider_config, start_oauth
 from services.password_reset_service import consume_password_reset, request_password_reset
 from services.ai_queue_service import AIQueueError, request_ai_text
+from services.evolution_service import get_connection_state
 
 platform_bp = Blueprint("platform", __name__, url_prefix="/api/platform")
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -821,14 +822,22 @@ def update_campaign_template(template_id: str):
 @_require_roles("client", "operator")
 def client_groups():
     tenant_id = _tenant_for_identity(_identity())
+    tenant = _tenant_data(tenant_id)
+    instance_name = str(tenant.get("instance_name") or "").strip()
+    connection_state = get_connection_state(instance_name) if instance_name else "not_configured"
+    if connection_state != "open":
+        archived = archive_groups_for_instance(instance_name) if instance_name else 0
+        return jsonify({"tenant_id": tenant_id, "groups": [], "connection_state": connection_state, "archived": archived})
     documents = _db().collection("whatsapp_groups").where("tenant_id", "==", tenant_id).limit(500).stream()
     rows = []
     for document in documents:
         data = document.to_dict() or {}
+        if data.get("status") == "archived" or data.get("visible") is False:
+            continue
         data["id"] = document.id
         rows.append(data)
     rows.sort(key=lambda item: str(item.get("name") or item.get("group_jid") or "").lower())
-    return jsonify({"tenant_id": tenant_id, "groups": rows})
+    return jsonify({"tenant_id": tenant_id, "groups": rows, "connection_state": connection_state})
 
 
 @platform_bp.post("/client/groups/sync")

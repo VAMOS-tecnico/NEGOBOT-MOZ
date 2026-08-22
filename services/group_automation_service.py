@@ -26,6 +26,7 @@ logger = logging.getLogger("negobot-group-automation")
 ADMIN_ROLES = {"admin", "superadmin", "super_admin", "creator", "owner"}
 GROUP_EVENTS = {"groups.upsert", "groups_upsert", "groups.update", "groups_update", "group.participants.update", "group_participants_update", "group-participants-update"}
 OPT_OUT_FIELDS = {"admin_verified", "bot_is_admin"}
+GROUP_RETENTION_SECONDS = 7 * 24 * 60 * 60
 
 
 def _clean(value: Any) -> str:
@@ -130,7 +131,40 @@ def _group_name(group: dict[str, Any]) -> str:
     return _clean(group.get("subject") or group.get("name") or "Grupo WhatsApp")[:180]
 
 
-def sync_groups_for_tenant(tenant_id: str, instance_name: str) -> dict[str, Any]:
+def archive_groups_for_instance(instance_name: str, reason: str = "whatsapp_disconnected") -> int:
+    """Hide groups immediately; physical deletion is deferred for safe recovery."""
+    if extensions.db is None:
+        return 0
+    now = time.time()
+    archived = 0
+    documents = extensions.db.collection("whatsapp_groups").where("instance_name", "==", _clean(instance_name)).limit(1000).stream()
+    for document in documents:
+        document.reference.set({
+            "status": "archived",
+            "visible": False,
+            "archived_at": now,
+            "last_error": reason,
+        }, merge=True)
+        archived += 1
+    return archived
+
+
+def purge_archived_groups(max_age_seconds: int = GROUP_RETENTION_SECONDS) -> int:
+    """Delete only archived group metadata older than the recovery window."""
+    if extensions.db is None:
+        return 0
+    cutoff = time.time() - max(3600, int(max_age_seconds))
+    deleted = 0
+    documents = extensions.db.collection("whatsapp_groups").where("status", "==", "archived").limit(1000).stream()
+    for document in documents:
+        data = document.to_dict() or {}
+        if float(data.get("archived_at") or 0) <= cutoff:
+            document.reference.delete()
+            deleted += 1
+    return deleted
+
+
+def sync_groups_for_tenant(tenant_id: str, instance_name: str):
     if extensions.db is None:
         extensions.init_extensions()
     if extensions.db is None:
@@ -168,6 +202,8 @@ def sync_groups_for_tenant(tenant_id: str, instance_name: str) -> dict[str, Any]
             "participant_count": len(participants),
             "last_synced_at": time.time(),
             "last_error": None,
+            "visible": True,
+            "archived_at": None,
         }
         # A previously configured group keeps settings only while it remains verified.
         if verified:
@@ -284,6 +320,8 @@ def _refresh_group_authorization(tenant_id: str, tenant: dict[str, Any], instanc
         "status": "active" if verified else "rejected",
         "participant_count": len(participants),
         "last_event_at": time.time(),
+        "visible": True,
+        "archived_at": None,
         "automation_enabled": bool(existing.get("automation_enabled", False)) if verified else False,
         "mention_required": bool(existing.get("mention_required", True)),
         "welcome_enabled": bool(existing.get("welcome_enabled", False)) if verified else False,

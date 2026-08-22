@@ -304,6 +304,22 @@ def _webhook_payload(webhook_target_url):
     }
 
 
+def get_connection_state(instance_name: str) -> str:
+    """Consulta o estado actual sem lançar excepções para a camada de apresentação."""
+    name = str(instance_name or "").strip()
+    if not name:
+        return "not_configured"
+    try:
+        url = f"{str(Config.EVOLUTION_API_URL).rstrip('/')}/instance/connectionState/{quote(name)}"
+        response = requests.get(url, headers={"apikey": Config.EVOLUTION_API_KEY}, timeout=8)
+        if not response.ok:
+            return "offline"
+        payload = response.json() or {}
+        return str((payload.get("instance") or {}).get("state") or payload.get("state") or "unknown").strip().lower()
+    except (requests.RequestException, ValueError, TypeError):
+        return "offline"
+
+
 def ensure_group_webhook(instance_name):
     """Activa eventos de grupos na instância existente sem recriar a sessão."""
     webhook_target_url = getattr(Config, "WEBHOOK_URL", None)

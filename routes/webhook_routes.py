@@ -12,7 +12,7 @@ from services.trial_service import ACTIVE_STATUS, PENDING_STATUS, active_fields,
 from services.central_account_service import central_account_id_for_tenant, claim_trial_for_account, registry_is_expired, registry_status, trial_fields_from_registry
 from workflows.central_flow import process_central_flow
 from workflows.client_flow import process_client_flow
-from services.group_automation_service import GROUP_EVENTS, handle_group_event
+from services.group_automation_service import GROUP_EVENTS, archive_groups_for_instance, handle_group_event
 
 logger = logging.getLogger(__name__)
 
@@ -181,7 +181,8 @@ def _handle_connection_update(data: dict) -> None:
     if state == "open":
         _mark_trial_connection_open(instance_name, data)
     elif state in {"close", "connecting", "qr", "refused"}:
-        logger.info("Estado WhatsApp instance=%s state=%s; demonstração permanece pendente/activa", instance_name, state)
+        archived = archive_groups_for_instance(instance_name, reason=f"whatsapp_{state}")
+        logger.info("Estado WhatsApp instance=%s state=%s; %d grupo(s) arquivado(s)", instance_name, state, archived)
 
 
 def processar_webhook_background(data):
