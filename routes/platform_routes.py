@@ -1448,20 +1448,25 @@ def _conversation_sources(tenant_id: str, instance_name: str) -> list[Any]:
 
 def _clean_chat_target(value: str) -> str:
     raw = str(value or "").strip()
-    if raw.endswith("@g.us"):
+    lowered = raw.lower()
+    if lowered.endswith("@g.us"):
         return raw
+    if lowered.endswith("@lid"):
+        return ""
+    if "@" in raw and not lowered.endswith("@s.whatsapp.net"):
+        return ""
     return re.sub(r"\D", "", raw)
 
 
 def _chat_target_from_evolution(chat: dict[str, Any]) -> str:
     """Extract a complete WhatsApp JID/number, never a short @lid or display fragment."""
-    candidates: list[Any] = [
-        chat.get("remoteJid"),
-        chat.get("jid"),
-        chat.get("id"),
-        chat.get("phone"),
-        chat.get("number"),
-        chat.get("phoneNumber"),
+    candidates: list[tuple[str, Any]] = [
+        ("remoteJid", chat.get("remoteJid")),
+        ("jid", chat.get("jid")),
+        ("id", chat.get("id")),
+        ("phone", chat.get("phone")),
+        ("number", chat.get("number")),
+        ("phoneNumber", chat.get("phoneNumber")),
     ]
     for nested in (
         chat.get("key"),
@@ -1471,18 +1476,21 @@ def _chat_target_from_evolution(chat: dict[str, Any]) -> str:
     ):
         if isinstance(nested, dict):
             candidates.extend([
-                nested.get("remoteJid"),
-                nested.get("jid"),
-                nested.get("id"),
-                nested.get("phone"),
-                nested.get("number"),
-                nested.get("phoneNumber"),
-                (nested.get("key") or {}).get("remoteJid") if isinstance(nested.get("key"), dict) else None,
+                ("remoteJid", nested.get("remoteJid")),
+                ("jid", nested.get("jid")),
+                ("id", nested.get("id")),
+                ("phone", nested.get("phone")),
+                ("number", nested.get("number")),
+                ("phoneNumber", nested.get("phoneNumber")),
+                ("remoteJid", (nested.get("key") or {}).get("remoteJid") if isinstance(nested.get("key"), dict) else None),
             ])
-    for candidate in candidates:
+    for field, candidate in candidates:
         raw = str(candidate or "").strip()
-        if raw.endswith("@g.us"):
+        lowered = raw.lower()
+        if lowered.endswith("@g.us"):
             return raw
+        if lowered.endswith("@lid") or ("@" in raw and not lowered.endswith("@s.whatsapp.net")):
+            continue
         cleaned = _clean_chat_target(raw)
         if len(cleaned) >= 8:
             return cleaned
@@ -1529,14 +1537,35 @@ def _serialize_chat_message(document: Any, data: dict[str, Any]) -> dict[str, An
     }
 
 
+def _tenant_chat_groups(tenant_id: str) -> dict[str, dict[str, Any]]:
+    """Return tenant-owned group metadata indexed by both full JID and numeric prefix."""
+    groups: dict[str, dict[str, Any]] = {}
+    for group_doc in _db().collection("whatsapp_groups").where("tenant_id", "==", tenant_id).limit(1000).stream():
+        data = group_doc.to_dict() or {}
+        group_jid = str(data.get("group_jid") or "").strip()
+        if not group_jid.endswith("@g.us"):
+            continue
+        item = {
+            "id": group_doc.id,
+            "group_jid": group_jid,
+            "name": _real_chat_name(data.get("name"), data.get("subject"), data.get("group_name")) or group_jid,
+            "admin_verified": data.get("admin_verified") is True,
+            "status": data.get("status") or "unknown",
+        }
+        groups[group_jid] = item
+        groups[re.sub(r"\D", "", group_jid.split("@", 1)[0])] = item
+    return groups
+
+
 def _tenant_chat_contacts(tenant_id: str) -> dict[str, dict[str, Any]]:
     """Merge platform contacts with WhatsApp contacts synced under the tenant document."""
     db = _db()
+    group_phones = set(_tenant_chat_groups(tenant_id))
     contacts: dict[str, dict[str, Any]] = {}
     for contact_doc in db.collection("contacts").where("tenant_id", "==", tenant_id).limit(5000).stream():
         data = contact_doc.to_dict() or {}
         normalized = _clean_chat_target(str(data.get("phone") or data.get("telefone") or ""))
-        if normalized and not normalized.endswith("@g.us") and len(normalized) >= 8:
+        if normalized and normalized not in group_phones and not normalized.endswith("@g.us") and len(normalized) >= 8:
             contacts[normalized] = {
                 "id": contact_doc.id,
                 "name": _real_chat_name(data.get("name"), data.get("nome"), data.get("pushName")),
@@ -1545,7 +1574,7 @@ def _tenant_chat_contacts(tenant_id: str) -> dict[str, dict[str, Any]]:
     for contact_doc in base_contacts:
         data = contact_doc.to_dict() or {}
         normalized = _clean_chat_target(str(data.get("phone") or data.get("telefone") or contact_doc.id or ""))
-        if not normalized or normalized.endswith("@g.us") or len(normalized) < 8:
+        if not normalized or normalized in group_phones or normalized.endswith("@g.us") or len(normalized) < 8:
             continue
         name = _real_chat_name(data.get("name"), data.get("nome"), data.get("pushName"), data.get("display_name"))
         current = contacts.get(normalized)
@@ -1560,9 +1589,12 @@ def list_conversations():
     tenant_id = _tenant_for_identity(_identity())
     tenant = _tenant_data(tenant_id)
     instance_name = str(tenant.get("instance_name") or "").strip()
+    tenant_groups = _tenant_chat_groups(tenant_id)
     contacts = _tenant_chat_contacts(tenant_id)
     by_phone: dict[str, dict[str, Any]] = {}
     for phone, contact in contacts.items():
+        if phone in tenant_groups:
+            continue
         by_phone[phone] = {
             "id": phone,
             "phone": phone,
@@ -1578,6 +1610,10 @@ def list_conversations():
             phone = _chat_target_from_evolution(chat)
             if not phone:
                 continue
+            numeric_phone = re.sub(r"\D", "", phone.split("@", 1)[0]) if phone.endswith("@g.us") else phone
+            group = tenant_groups.get(phone) or tenant_groups.get(numeric_phone)
+            if group:
+                phone = group["group_jid"]
             last_message_data = chat.get("lastMessage") or chat.get("last_message") or {}
             if not isinstance(last_message_data, dict):
                 last_message_data = {}
@@ -1595,7 +1631,7 @@ def list_conversations():
             by_phone.setdefault(phone, {
                 "id": phone,
                 "phone": phone,
-                "name": _chat_display_name(chat) or _real_chat_name(contacts.get(phone, {}).get("name")) or phone,
+                "name": _chat_display_name(chat) or _real_chat_name((group or {}).get("name"), contacts.get(phone, {}).get("name")) or phone,
                 "last_message": last_message,
                 "last_interaction": str(last_interaction) if last_interaction else None,
                 "status_atendimento": "bot",
@@ -1608,6 +1644,10 @@ def list_conversations():
             phone = _clean_chat_target(document.id)
             if not phone or (not phone.endswith("@g.us") and len(phone) < 8):
                 continue
+            numeric_phone = re.sub(r"\D", "", phone.split("@", 1)[0]) if phone.endswith("@g.us") else phone
+            group = tenant_groups.get(phone) or tenant_groups.get(numeric_phone)
+            if group:
+                phone = group["group_jid"]
             existing = by_phone.get(phone, {})
             last_message = str(data.get("ultima_mensagem") or data.get("last_message") or existing.get("last_message") or "").strip()
             last_interaction = data.get("ultima_interacao") or data.get("updated_at") or existing.get("last_interaction")
@@ -1617,7 +1657,7 @@ def list_conversations():
                 **existing,
                 "id": phone,
                 "phone": phone,
-                "name": _real_chat_name(data.get("name"), contacts.get(phone, {}).get("name"), existing.get("name")) or phone,
+                "name": _real_chat_name(data.get("name"), (group or {}).get("name"), contacts.get(phone, {}).get("name"), existing.get("name")) or phone,
                 "last_message": last_message,
                 "last_interaction": str(last_interaction) if last_interaction else None,
                 "status_atendimento": data.get("status_atendimento") or existing.get("status_atendimento") or "bot",

@@ -121,6 +121,19 @@ class ChatRouteTests(unittest.TestCase):
         self.assertEqual(by_phone["258849999999"]["last_message"], "Histórico")
         self.assertNotIn("258847777777", by_phone)
 
+    def test_numeric_group_history_is_classified_as_group(self):
+        group_jid = "120363000000000000@g.us"
+        numeric_id = group_jid.split("@", 1)[0]
+        self.db.put("whatsapp_groups", "group-doc", {"tenant_id": "tenant-a", "group_jid": group_jid, "name": "Grupo Real", "status": "active", "admin_verified": True})
+        self.db.put("clientes_bot/inst-a/conversas", numeric_id, {"ultima_mensagem": "Mensagem do grupo"})
+        response = self.client.get("/api/platform/client/conversations")
+        self.assertEqual(response.status_code, 200)
+        rows = response.get_json()["conversations"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["phone"], group_jid)
+        self.assertEqual(rows[0]["kind"], "group")
+        self.assertEqual(rows[0]["name"], "Grupo Real")
+
     @patch("routes.platform_routes.listar_chats_whatsapp")
     @patch("routes.platform_routes.get_connection_state", return_value="open")
     def test_open_instance_merges_remote_evolution_chats(self, _state, list_chats):
