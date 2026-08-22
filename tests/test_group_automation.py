@@ -95,6 +95,10 @@ class GroupAutomationTests(unittest.TestCase):
         participants = [{"id": "258841234567:7@c.us", "isAdmin": True}]
         self.assertEqual(groups.verify_bot_admin(self.tenant, "tenant-instance", participants), (True, "admin_verified", "258841234567@s.whatsapp.net"))
 
+    def test_verify_admin_prefers_phone_number_over_lid(self):
+        participants = [{"id": "123456789012345@lid", "phoneNumber": "258841234567", "admin": "admin"}]
+        self.assertEqual(groups.verify_bot_admin(self.tenant, "tenant-instance", participants), (True, "admin_verified", "258841234567@s.whatsapp.net"))
+
     def test_disconnected_groups_are_hidden_immediately(self):
         document = FakeDocument({**self.group, "instance_name": "tenant-instance"})
         database = FakeDb(self.tenant, self.group)

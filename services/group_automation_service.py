@@ -94,7 +94,9 @@ def participant_is_admin(participant: dict[str, Any]) -> bool:
 
 
 def _participant_jid(participant: dict[str, Any]) -> str:
-    return normalize_jid(participant.get("id") or participant.get("jid") or participant.get("participant"))
+    # Evolution/Baileys may expose an opaque @lid in `id`; phoneNumber is the
+    # real WhatsApp identity and must be preferred for admin verification.
+    return normalize_jid(participant.get("phoneNumber") or participant.get("phone") or participant.get("jid") or participant.get("participant") or participant.get("id"))
 
 
 def connected_jids(tenant: dict[str, Any], instance_name: str) -> set[str]:
