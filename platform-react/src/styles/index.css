@@ -463,3 +463,17 @@ select:focus { border-color: rgba(98, 226, 171, .7); box-shadow: 0 0 0 3px rgba(
 .chat-empty-thread small { max-width: 320px; color: #779788; font-size: 11px; line-height: 1.5; }
 @media (max-width: 840px) { .chat-layout { grid-template-columns: 1fr; } .chat-directory { min-height: 430px; } .chat-list { max-height: 330px; } .chat-messages { max-height: none; } }
 @media (max-width: 560px) { .chat-thread-header { padding: 15px; } .chat-thread-header .chat-connection-pill { display: none; } .chat-messages { min-height: 410px; padding: 20px 13px; } .chat-bubble { max-width: 90%; } .chat-composer { padding: 12px; } }
+
+/* Chat media and identity affordances */
+.chat-avatar-image { width: 35px; height: 35px; flex: 0 0 auto; object-fit: cover; border-radius: 50%; background: rgba(67, 180, 127, .14); }
+.chat-avatar-image.large { width: 42px; height: 42px; }
+.chat-attach-button { display: grid; width: 38px; height: 38px; flex: 0 0 auto; place-items: center; border: 1px solid rgba(117, 173, 148, .15); border-radius: 50%; color: #8bc6a6; background: rgba(5, 15, 12, .5); cursor: pointer; }
+.chat-attach-button:hover { color: #d7f6e1; background: rgba(67, 180, 127, .14); }
+.chat-attach-button input { display: none; }
+.chat-selected-file { display: inline-flex; align-items: center; gap: 6px; max-width: 220px; padding: 7px 8px 7px 10px; border: 1px solid rgba(98, 226, 171, .2); border-radius: 999px; color: #cde6d5; background: rgba(67, 180, 127, .12); font-size: 10px; }
+.chat-selected-file > span { display: inline-flex; align-items: center; gap: 5px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-selected-file button { display: grid; flex: 0 0 auto; place-items: center; padding: 0; border: 0; color: #91c4a7; background: transparent; cursor: pointer; }
+.chat-attachment { display: inline-flex; align-items: center; gap: 8px; min-height: 31px; padding-right: 26px; color: #d7f6e1; font-weight: 600; }
+.chat-media-image { display: block; max-width: min(360px, 100%); max-height: 330px; border-radius: 9px; object-fit: contain; }
+.chat-caption { margin: 8px 0 0; white-space: pre-wrap; }
+@media (max-width: 680px) { .chat-composer { flex-wrap: wrap; } .chat-composer > input:not([type="file"]) { order: 2; flex-basis: calc(100% - 52px); } .chat-selected-file { order: 1; max-width: calc(100% - 52px); } .chat-send { order: 3; } }

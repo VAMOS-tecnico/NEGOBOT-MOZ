@@ -138,6 +138,7 @@ export type Conversation = {
   id?: string;
   phone?: string;
   name?: string;
+  avatar_url?: string | null;
   last_message?: string;
   updated_at?: string;
   last_interaction?: string | null;
@@ -153,6 +154,11 @@ export type ChatMessage = {
   text: string;
   timestamp?: string | null;
   from_me?: boolean;
+  media_type?: "image" | "document" | string | null;
+  file_name?: string | null;
+  mime_type?: string | null;
+  caption?: string | null;
+  media_url?: string | null;
 };
 
 export type Contact = {
@@ -466,7 +472,9 @@ export const api = {
     updateTeamMember: (id: string, fields: { status?: "active" | "suspended"; tenant_role?: "operator" | "viewer" }) => request<{ updated: true }>(`/api/platform/client/team/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(fields) }),
     conversations: () => request<{ conversations: Conversation[]; count?: number; instance_name?: string }>("/api/platform/client/conversations"),
     conversationMessages: (phone: string) => request<{ phone: string; messages: ChatMessage[]; count: number }>(`/api/platform/client/conversations/${encodeURIComponent(phone)}/messages`),
+    conversationProfile: (phone: string) => request<{ phone: string; profile_picture_url?: string | null; available: boolean }>(`/api/platform/client/conversations/${encodeURIComponent(phone)}/profile`),
     sendConversationMessage: (phone: string, text: string) => request<{ sent: true; phone: string; message: ChatMessage }>(`/api/platform/client/conversations/${encodeURIComponent(phone)}/messages`, { method: "POST", body: JSON.stringify({ text }) }),
+    sendConversationMedia: (phone: string, file: File, caption = "") => { const form = new FormData(); form.append("file", file); form.append("caption", caption); return request<{ sent: true; phone: string; message: ChatMessage }>(`/api/platform/client/conversations/${encodeURIComponent(phone)}/media`, { method: "POST", body: form }); },
     campaignConversationAudience: () => request<{ conversations: Conversation[]; count: number; eligibility: string }>("/api/platform/client/campaign-audience/conversations"),
     handoff: (phone: string, mode: "bot" | "humano") => request<{ updated: true }>(`/api/platform/client/conversations/${encodeURIComponent(phone)}/handoff`, { method: "POST", body: JSON.stringify({ mode }) }),
     contacts: (filters: { search?: string; tag?: string; opt_in?: "true" | "false" } = {}) => { const query = new URLSearchParams(); if (filters.search) query.set("search", filters.search); if (filters.tag) query.set("tag", filters.tag); if (filters.opt_in) query.set("opt_in", filters.opt_in); const suffix = query.toString() ? `?${query.toString()}` : ""; return request<{ contacts: Contact[]; count?: number }>(`/api/platform/client/contacts${suffix}`); },

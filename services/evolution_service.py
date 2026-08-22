@@ -254,8 +254,8 @@ def transcrever_audio_mensagem(data_payload, instance_name=None):
         return ""
 
 
-def send_media(to, media, caption="", mediatype="image", filename="media.png", instance_name=None):
-    """Função de atalho compatível para envio de mídias exigida pelo central_flow."""
+def send_media(to, media, caption="", mediatype="image", filename="media.png", instance_name=None, mimetype=None):
+    """Send an image/document through Evolution using a URL or base64 payload."""
     try:
         is_group = str(to).endswith('@g.us')
         clean_target = str(to).strip() if is_group else _limpar_numero(to)
@@ -274,6 +274,8 @@ def send_media(to, media, caption="", mediatype="image", filename="media.png", i
             "fileName": filename,
             "delay": 1200
         }
+        if mimetype:
+            payload["mimetype"] = str(mimetype).strip()[:120]
         res = requests.post(url_send_media, headers=headers, json=payload, timeout=45)
         res.raise_for_status()
         return True
@@ -490,6 +492,37 @@ def gerar_e_enviar_qrcode_central(phone_number):
 # ==========================================================
 # 🟢 SINCRONIZAÇÃO E EXTRAÇÃO DE CONTATOS/GRUPOS
 # ==========================================================
+
+def get_profile_picture_url(to, instance_name=None):
+    """Fetch a WhatsApp profile/group picture URL from Evolution, without exposing API credentials."""
+    clean_instance = _get_clean_instance(instance_name)
+    raw_target = str(to or "").strip()
+    clean_target = raw_target if raw_target.endswith("@g.us") else _limpar_numero(raw_target)
+    if not clean_instance or not clean_target:
+        return ""
+    headers = {"apikey": Config.EVOLUTION_API_KEY, "Content-Type": "application/json"}
+    base_url = Config.EVOLUTION_API_URL.rstrip("/")
+    endpoint = f"{base_url}/chat/fetchProfilePictureUrl/{clean_instance}"
+    try:
+        response = requests.post(endpoint, headers=headers, json={"number": clean_target}, timeout=15)
+        if response.status_code in {404, 405}:
+            response = requests.get(endpoint, headers=headers, params={"number": clean_target}, timeout=15)
+        if not response.ok:
+            return ""
+        payload = response.json() or {}
+        if isinstance(payload, str):
+            return payload.strip()
+        if isinstance(payload, dict):
+            data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+            for key in ("profilePictureUrl", "profilePicUrl", "picture", "url"):
+                value = data.get(key) if isinstance(data, dict) else None
+                if isinstance(value, str) and value.strip().startswith(("https://", "http://")):
+                    return value.strip()
+        return ""
+    except (requests.RequestException, ValueError, TypeError):
+        logger.exception("Falha ao obter foto de perfil Evolution para %s", clean_target)
+        return ""
+
 
 def listar_chats_whatsapp(instance_name):
     """Lista chats da instância Evolution sem importar membros nem enviar mensagens."""

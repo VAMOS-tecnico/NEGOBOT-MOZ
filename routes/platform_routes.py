@@ -1,4 +1,5 @@
 import csv
+import base64
 import hashlib
 import hmac
 import io
@@ -14,6 +15,7 @@ from urllib.parse import quote, urlparse
 import requests
 from flask import Blueprint, Response, jsonify, redirect, request, session, stream_with_context
 from werkzeug.security import check_password_hash, generate_password_hash
+from werkzeug.utils import secure_filename
 
 import extensions
 from services.trial_service import ACTIVE_STATUS, PENDING_STATUS, active_fields, is_expired as trial_is_expired, is_paid_plan, pending_fields
@@ -27,7 +29,7 @@ from services.channel_publication_service import channel_capability, create_publ
 from services.channel_oauth_service import complete_oauth, disconnect_oauth, provider_config, start_oauth
 from services.password_reset_service import consume_password_reset, request_password_reset
 from services.ai_queue_service import AIQueueError, request_ai_text
-from services.evolution_service import get_connection_state, listar_chats_whatsapp, send_whatsapp
+from services.evolution_service import get_connection_state, get_profile_picture_url, listar_chats_whatsapp, send_media, send_whatsapp
 
 platform_bp = Blueprint("platform", __name__, url_prefix="/api/platform")
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -1522,18 +1524,62 @@ def _chat_display_name(chat: dict[str, Any]) -> str:
     )
 
 
+def _chat_picture_url(chat: dict[str, Any]) -> str:
+    for key in ("profilePictureUrl", "profilePicUrl", "picture", "pictureUrl", "avatar_url"):
+        value = chat.get(key)
+        if isinstance(value, str) and value.strip().startswith(("https://", "http://")):
+            return value.strip()
+    for nested_key in ("contact", "profile"):
+        nested = chat.get(nested_key)
+        if isinstance(nested, dict):
+            value = _chat_picture_url(nested)
+            if value:
+                return value
+    return ""
+
+
+def _authorize_chat_target(tenant_id: str, instance_name: str, target: str, *, require_group_admin: bool = True, allow_live_instance: bool = False) -> tuple[bool, int, str]:
+    if target.endswith("@g.us"):
+        group_doc = _db().collection("whatsapp_groups").document(group_document_id(target)).get()
+        group_data = group_doc.to_dict() if group_doc.exists else {}
+        allowed = bool(group_data and group_data.get("tenant_id") == tenant_id)
+        if require_group_admin:
+            allowed = allowed and group_data.get("admin_verified") is True and group_data.get("status") == "active"
+        if not allowed:
+            return False, 403, "Este grupo não está autorizado para este tenant."
+        return True, 200, ""
+    contact_exists = target in _tenant_chat_contacts(tenant_id)
+    conversation_exists = any(source.document(target).get().exists for source in _conversation_sources(tenant_id, instance_name))
+    if not contact_exists and not conversation_exists and allow_live_instance and instance_name and get_connection_state(instance_name) == "open":
+        live_target = next((_chat_target_from_evolution(chat) for chat in listar_chats_whatsapp(instance_name) if _chat_target_from_evolution(chat)), "")
+        if live_target == target:
+            return True, 200, ""
+    if not contact_exists and not conversation_exists:
+        return False, 403, "Só podes consultar uma conversa pertencente a este tenant."
+    return True, 200, ""
+
+
 def _serialize_chat_message(document: Any, data: dict[str, Any]) -> dict[str, Any]:
     stamp = data.get("timestamp") or data.get("created_at") or data.get("updated_at")
     if hasattr(stamp, "isoformat"):
         stamp = stamp.isoformat()
-    text = str(data.get("text") or data.get("content") or "").strip()
+    text = str(data.get("text") or data.get("content") or data.get("caption") or "").strip()
     role = str(data.get("role") or "user").strip().lower()
+    raw_media_type = str(data.get("media_type") or data.get("mediatype") or data.get("message_type") or "").strip().lower()
+    media_type = "image" if raw_media_type in {"image", "imagemessage", "image_message", "photo"} else "document" if raw_media_type in {"document", "documentmessage", "document_message", "file"} else (raw_media_type or None)
+    raw_media_url = data.get("media_url") or data.get("url")
+    media_url = raw_media_url.strip() if isinstance(raw_media_url, str) and raw_media_url.strip().startswith(("https://", "http://")) else None
     return {
         "id": getattr(document, "id", None) or str(data.get("id") or ""),
         "role": role,
         "text": text,
         "timestamp": str(stamp) if stamp else None,
         "from_me": role in {"assistant", "atendente", "bot", "agent"},
+        "media_type": media_type,
+        "media_url": media_url,
+        "file_name": str(data.get("file_name") or data.get("filename") or data.get("fileName") or "").strip() or None,
+        "mime_type": str(data.get("mime_type") or data.get("mimetype") or "").strip().lower() or None,
+        "caption": str(data.get("caption") or "").strip() or None,
     }
 
 
@@ -1636,6 +1682,7 @@ def list_conversations():
                 "last_interaction": str(last_interaction) if last_interaction else None,
                 "status_atendimento": "bot",
                 "contact_id": contacts.get(phone, {}).get("id"),
+                "avatar_url": _chat_picture_url(chat) or None,
                 "kind": "group" if phone.endswith("@g.us") else "contact",
             })
     for source in _conversation_sources(tenant_id, instance_name):
@@ -1668,6 +1715,23 @@ def list_conversations():
     return jsonify({"conversations": rows[:500], "count": len(rows), "instance_name": instance_name})
 
 
+@platform_bp.get("/client/conversations/<phone>/profile")
+@_require_roles("client", "operator")
+def conversation_profile(phone: str):
+    tenant_id = _tenant_for_identity(_identity())
+    tenant = _tenant_data(tenant_id)
+    instance_name = str(tenant.get("instance_name") or "").strip()
+    target = _clean_chat_target(phone)
+    if not target or (not target.endswith("@g.us") and len(target) < 8):
+        return jsonify({"error": "Destino de conversa inválido."}), 400
+    allowed, status_code, error = _authorize_chat_target(tenant_id, instance_name, target, require_group_admin=True, allow_live_instance=True)
+    if not allowed:
+        return jsonify({"error": error}), status_code
+    if not instance_name or get_connection_state(instance_name) != "open":
+        return jsonify({"phone": target, "profile_picture_url": None, "available": False})
+    return jsonify({"phone": target, "profile_picture_url": get_profile_picture_url(target, instance_name=instance_name) or None, "available": True})
+
+
 @platform_bp.get("/client/conversations/<phone>/messages")
 @_require_roles("client", "operator")
 def conversation_messages(phone: str):
@@ -1677,16 +1741,9 @@ def conversation_messages(phone: str):
     target = _clean_chat_target(phone)
     if not target or (not target.endswith("@g.us") and len(target) < 8):
         return jsonify({"error": "Destino de conversa inválido."}), 400
-    if target.endswith("@g.us"):
-        group_doc = _db().collection("whatsapp_groups").document(group_document_id(target)).get()
-        group_data = group_doc.to_dict() if group_doc.exists else {}
-        if not group_data or group_data.get("tenant_id") != tenant_id or group_data.get("admin_verified") is not True or group_data.get("status") != "active":
-            return jsonify({"error": "Este grupo não está verificado como grupo próprio administrado pela instância deste tenant."}), 403
-    else:
-        contact_exists = target in _tenant_chat_contacts(tenant_id)
-        conversation_exists = any(source.document(target).get().exists for source in _conversation_sources(tenant_id, instance_name))
-        if not contact_exists and not conversation_exists:
-            return jsonify({"error": "Só podes consultar uma conversa pertencente a este tenant."}), 403
+    allowed, status_code, error = _authorize_chat_target(tenant_id, instance_name, target, require_group_admin=True, allow_live_instance=True)
+    if not allowed:
+        return jsonify({"error": error}), status_code
     messages: list[dict[str, Any]] = []
     seen: set[str] = set()
     for source in _conversation_sources(tenant_id, instance_name):
@@ -1708,6 +1765,55 @@ def conversation_messages(phone: str):
                 seen.add(key); messages.append(serialized)
     messages.sort(key=lambda item: str(item.get("timestamp") or ""))
     return jsonify({"phone": target, "messages": messages[-200:], "count": min(len(messages), 200)})
+
+
+@platform_bp.post("/client/conversations/<phone>/media")
+@_require_tenant_roles("owner", "operator")
+def send_conversation_media(phone: str):
+    tenant_id = _tenant_for_identity(_identity())
+    tenant = _tenant_data(tenant_id)
+    instance_name = str(tenant.get("instance_name") or "").strip()
+    target = _clean_chat_target(phone)
+    if not target or (not target.endswith("@g.us") and len(target) < 8):
+        return jsonify({"error": "Destino de conversa inválido."}), 400
+    if not instance_name:
+        return jsonify({"error": "Liga primeiro o WhatsApp deste tenant."}), 409
+    if get_connection_state(instance_name) != "open":
+        return jsonify({"error": "O WhatsApp deste tenant está desligado. Liga a instância antes de enviar ficheiros."}), 409
+    allowed, status_code, error = _authorize_chat_target(tenant_id, instance_name, target, require_group_admin=True, allow_live_instance=True)
+    if not allowed:
+        return jsonify({"error": error}), status_code
+    uploaded = request.files.get("file")
+    if uploaded is None or not uploaded.filename:
+        return jsonify({"error": "Selecciona uma imagem ou documento."}), 400
+    mime_type = str(uploaded.mimetype or "application/octet-stream").lower().strip()
+    allowed_image = mime_type.startswith("image/")
+    allowed_document = mime_type in {
+        "application/pdf", "application/msword", "application/rtf", "application/zip",
+        "application/vnd.ms-excel", "application/vnd.ms-powerpoint",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "text/plain", "text/csv",
+    }
+    if not allowed_image and not allowed_document:
+        return jsonify({"error": "Apenas imagens e documentos PDF, Word, Excel, PowerPoint, CSV ou TXT são permitidos."}), 415
+    content = uploaded.stream.read(16 * 1024 * 1024 + 1)
+    if len(content) > 16 * 1024 * 1024:
+        return jsonify({"error": "O ficheiro não pode exceder 16 MB."}), 413
+    filename = secure_filename(uploaded.filename)[:180] or ("imagem" if allowed_image else "documento")
+    caption = str(request.form.get("caption") or "").strip()[:4000]
+    media_type = "image" if allowed_image else "document"
+    encoded = f"data:{mime_type};base64,{base64.b64encode(content).decode('ascii')}"
+    if not send_media(target, encoded, caption=caption, mediatype=media_type, filename=filename, mimetype=mime_type, instance_name=instance_name):
+        return jsonify({"error": "A Evolution API não conseguiu enviar o ficheiro."}), 502
+    now = _now()
+    label = caption or ("Imagem enviada" if allowed_image else f"Documento enviado: {filename}")
+    conversation_ref = _db().collection("clientes_bot").document(instance_name).collection("conversas").document(target)
+    conversation_ref.set({"ultima_mensagem": label, "ultima_mensagem_por": "atendente", "ultima_interacao": now, "status_atendimento": "humano"}, merge=True)
+    message_data = {"role": "atendente", "text": caption, "caption": caption, "media_type": media_type, "file_name": filename, "mime_type": mime_type, "timestamp": now}
+    conversation_ref.collection("historico").add(message_data)
+    return jsonify({"sent": True, "phone": target, "message": _serialize_chat_message(type("Message", (), {"id": "media-outgoing"})(), message_data)})
 
 
 @platform_bp.post("/client/conversations/<phone>/messages")
@@ -1732,11 +1838,9 @@ def send_conversation_message(phone: str):
         group_data = group_doc.to_dict() if group_doc.exists else {}
         if not group_data or group_data.get("tenant_id") != tenant_id or group_data.get("admin_verified") is not True or group_data.get("status") != "active":
             return jsonify({"error": "Este grupo não está verificado como grupo próprio administrado pela instância deste tenant."}), 403
-    else:
-        contact_exists = target in _tenant_chat_contacts(tenant_id)
-        conversation_exists = any(source.document(target).get().exists for source in _conversation_sources(tenant_id, instance_name))
-        if not contact_exists and not conversation_exists:
-            return jsonify({"error": "Só podes iniciar uma conversa com um contacto ou conversa pertencente a este tenant."}), 403
+    allowed, status_code, error = _authorize_chat_target(tenant_id, instance_name, target, require_group_admin=True, allow_live_instance=True)
+    if not allowed:
+        return jsonify({"error": error.replace("consultar", "iniciar")}), status_code
     if not send_whatsapp(target, text, instance_name=instance_name):
         return jsonify({"error": "A Evolution API não conseguiu enviar a mensagem."}), 502
     now = _now()

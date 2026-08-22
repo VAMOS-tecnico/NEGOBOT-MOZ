@@ -1,4 +1,5 @@
 import os
+import io
 import sys
 import types
 import unittest
@@ -161,6 +162,23 @@ class ChatRouteTests(unittest.TestCase):
         rejected = self.client.get("/api/platform/client/conversations/258842222222/messages")
         self.assertEqual(rejected.status_code, 403)
         self.assertNotIn("Privado", rejected.get_data(as_text=True))
+
+    @patch("routes.platform_routes.send_media", return_value=True)
+    @patch("routes.platform_routes.get_connection_state", return_value="open")
+    def test_send_image_persists_metadata_without_file_bytes(self, _state, send_media):
+        self.db.put("clientes_bot/tenant-a/base_contactos", "ana", {"phone": "258841234567", "nome": "Ana"})
+        response = self.client.post(
+            "/api/platform/client/conversations/258841234567/media",
+            data={"caption": "Fotografia", "file": (io.BytesIO(b"fake-image"), "foto.png")},
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(response.status_code, 200)
+        send_media.assert_called_once()
+        stored = self.db.collections["clientes_bot/inst-a/conversas/258841234567/historico"]
+        message = next(iter(stored.values())).data
+        self.assertEqual(message["media_type"], "image")
+        self.assertEqual(message["file_name"], "foto.png")
+        self.assertNotIn("fake-image", repr(message))
 
     @patch("routes.platform_routes.get_connection_state", return_value="offline")
     def test_send_rejects_when_tenant_instance_is_offline(self, _state):
