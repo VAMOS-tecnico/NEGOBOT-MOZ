@@ -110,6 +110,20 @@ class VideoPipelineTests(unittest.TestCase):
         self.assertEqual(video_pipeline._effective_scene_duration(3.5, 18.75), 19.0)
         self.assertEqual(video_pipeline._effective_scene_duration(30, 18.75), 30.0)
 
+    def test_total_script_limit_accepts_5000_characters(self):
+        first = "a" * 2500
+        second = "b" * 2500
+        job = VideoJobRequest(tenant_id="tenant-a", title="Limite", scenes=[Scene(text=first), Scene(text=second)])
+        self.assertEqual(sum(len(scene.text) for scene in job.scenes), 5000)
+
+    def test_total_script_limit_rejects_more_than_5000_characters(self):
+        with self.assertRaises(ValidationError):
+            VideoJobRequest(tenant_id="tenant-a", title="Limite", scenes=[Scene(text="a" * 2501), Scene(text="b" * 2500)])
+
+    def test_total_duration_limit_rejects_more_than_300_seconds(self):
+        with self.assertRaises(ValidationError):
+            VideoJobRequest(tenant_id="tenant-a", title="Limite", scenes=[Scene(text="Cena um", duration_seconds=200), Scene(text="Cena dois", duration_seconds=101)])
+
     def test_advanced_scene_rejects_private_or_invalid_asset_urls(self):
         with self.assertRaises(ValidationError):
             Scene(text="Cena", visual_mode="upload_media", asset_url="http://private.local/video.mp4")

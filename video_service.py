@@ -81,9 +81,10 @@ def _filename(title: str, job_id: str) -> str:
     return f"{clean}-{job_id[:8]}.mp4"
 
 
-MAX_SCENE_TEXT_LENGTH = 12_000
-MAX_SCENE_DURATION_SECONDS = 900
-MAX_JOB_DURATION_SECONDS = 1_800
+MAX_TOTAL_SCRIPT_CHARACTERS = 5_000
+MAX_SCENE_TEXT_LENGTH = MAX_TOTAL_SCRIPT_CHARACTERS
+MAX_SCENE_DURATION_SECONDS = 300
+MAX_JOB_DURATION_SECONDS = 300
 
 
 class Scene(BaseModel):
@@ -127,10 +128,17 @@ class VideoJobRequest(BaseModel):
     transition: Literal["cut", "fade"] = "fade"
 
     @model_validator(mode="after")
-    def validate_total_duration(self) -> "VideoJobRequest":
-        total = sum(float(scene.duration_seconds or 0) for scene in self.scenes)
-        if total > MAX_JOB_DURATION_SECONDS:
-            raise ValueError(f"A duração total do job não pode ultrapassar {MAX_JOB_DURATION_SECONDS // 60} minutos.")
+    def validate_script_limits(self) -> "VideoJobRequest":
+        total_characters = sum(len(scene.text) for scene in self.scenes) + len(self.narracao or "")
+        if total_characters > MAX_TOTAL_SCRIPT_CHARACTERS:
+            raise ValueError(f"O roteiro completo não pode ultrapassar {MAX_TOTAL_SCRIPT_CHARACTERS:,} caracteres.".replace(",", "."))
+        estimated_duration = 0.0
+        for scene in self.scenes:
+            words = len(scene.text.split())
+            narration_seconds = (words / 2.35) if words else 0.0
+            estimated_duration += max(float(scene.duration_seconds or 0), narration_seconds)
+        if estimated_duration > MAX_JOB_DURATION_SECONDS:
+            raise ValueError(f"A duração total calculada não pode ultrapassar {MAX_JOB_DURATION_SECONDS // 60} minutos (300 segundos).")
         return self
 
     @field_validator("callback_url")

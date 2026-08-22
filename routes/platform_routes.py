@@ -39,6 +39,8 @@ _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _LOGIN_ATTEMPTS: dict[str, list[float]] = {}
 _LOGIN_WINDOW_SECONDS = 900
 _LOGIN_MAX_ATTEMPTS = 8
+_VIDEO_MAX_TOTAL_SCRIPT_CHARACTERS = 5_000
+_VIDEO_MAX_TOTAL_DURATION_SECONDS = 300
 
 
 def _request_key(identifier: str) -> str:
@@ -2843,6 +2845,24 @@ def create_video_job():
     title = str(payload.get("title") or "").strip()
     if not 2 <= len(title) <= 160 or not isinstance(scenes, list) or not 1 <= len(scenes) <= 20:
         return jsonify({"error": "Indica um título e pelo menos uma cena válida."}), 400
+    total_characters = len(str(payload.get("narracao") or ""))
+    total_duration = 0.0
+    for scene in scenes:
+        if not isinstance(scene, dict):
+            return jsonify({"error": "Cada cena deve ser um objecto válido."}), 422
+        text = str(scene.get("text") or "")
+        total_characters += len(text)
+        try:
+            requested_duration = float(scene.get("duration_seconds") or 3.5)
+        except (TypeError, ValueError):
+            return jsonify({"error": "A duração de cada cena deve ser numérica."}), 422
+        words = len(text.split())
+        narration_duration = words / 2.35 if words else 0.0
+        total_duration += max(requested_duration, narration_duration)
+    if total_characters > _VIDEO_MAX_TOTAL_SCRIPT_CHARACTERS:
+        return jsonify({"error": "O roteiro completo não pode ultrapassar 5.000 caracteres."}), 422
+    if total_duration > _VIDEO_MAX_TOTAL_DURATION_SECONDS:
+        return jsonify({"error": "A duração total calculada não pode ultrapassar 300 segundos (5 minutos)."}), 422
     tenant_id = _tenant_for_identity(_identity())
     outgoing = {"tenant_id": tenant_id, "title": title, "scenes": scenes, "language": str(payload.get("language") or "pt-MZ"), "voice": payload.get("voice"), "subtitles": bool(payload.get("subtitles", True)), "narracao": payload.get("narracao"), "palavras_chave": payload.get("palavras_chave") or [], "background_keywords": payload.get("background_keywords") or [], "transition": str(payload.get("transition") or "fade")}
     try:

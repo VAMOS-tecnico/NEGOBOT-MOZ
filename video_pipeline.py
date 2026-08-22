@@ -26,8 +26,8 @@ import requests
 logger = logging.getLogger("negobot-video-pipeline")
 PEXELS_SEARCH_URL = "https://api.pexels.com/videos/search"
 MAX_ASSET_BYTES = 80 * 1024 * 1024
-MAX_SCENE_TEXT_LENGTH = 12_000
-MAX_SCENE_DURATION_SECONDS = 900
+MAX_SCENE_TEXT_LENGTH = 5_000
+MAX_SCENE_DURATION_SECONDS = 300
 DEFAULT_PEXELS_PER_PAGE = 3
 DEFAULT_PEXELS_TIMEOUT = 20
 
