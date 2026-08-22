@@ -11,3 +11,9 @@ O redeploy foi autorizado pelo utilizador e accionado no cartão `NEGOBOT Backen
 O Backend foi redeployado pelo Boomploy às 14:12 e ficou `running`, `healthy`, com zero reinícios. O código activo contém `GROUP_UPDATE` e já não contém `GROUPS_UPDATE`.
 
 A consulta à instância previamente observada em estado `connecting` devolveu `HTTP 200` no endpoint `/instance/connect/...`, com um campo de QR Code presente e resposta de 13.559 bytes. O conteúdo do QR não foi impresso nem guardado. Falta confirmar a transformação na rota autenticada do painel.
+
+## Confirmação final
+
+O payload corrigido foi enviado à Evolution para a instância previamente observada e foi aceite com `HTTP 201` usando o evento `GROUP_UPDATE`. O endpoint de conexão devolveu `HTTP 200` e incluiu um campo de QR Code; o conteúdo não foi guardado nem exposto.
+
+Os erros HTTP 403 actualmente visíveis nos logs correspondem ao webhook global da Evolution para o n8n (`/webhook/evolution`) e não ao webhook do Backend nem à geração do QR Code. O Backend permanece `running`, `healthy` e sem reinícios após o redeploy.
