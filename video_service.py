@@ -7,7 +7,7 @@ import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import redis
 from fastapi import Depends, FastAPI, Header, HTTPException, status
@@ -84,13 +84,27 @@ def _filename(title: str, job_id: str) -> str:
 class Scene(BaseModel):
     text: str = Field(min_length=1, max_length=500)
     duration_seconds: float = Field(default=3.5, ge=1, le=20)
+    visual_mode: Literal["avatar_ai", "upload_media", "ai_media"] = "ai_media"
     asset_url: str | None = Field(default=None, max_length=2000)
+    asset_kind: Literal["image", "video"] | None = None
+    voice: str | None = Field(default=None, max_length=120)
+    voice_sample_url: str | None = Field(default=None, max_length=2000)
+    voice_sample_mime: str | None = Field(default=None, max_length=80)
+    avatar_id: str | None = Field(default=None, max_length=160)
+    subtitles: bool = True
 
-    @field_validator("asset_url")
+    @field_validator("asset_url", "voice_sample_url")
     @classmethod
     def public_asset_url(cls, value: str | None) -> str | None:
         if value and not re.match(r"^https://[^\s]+$", value, flags=re.IGNORECASE):
             raise ValueError("Os assets devem usar URLs HTTPS públicas.")
+        return value
+
+    @field_validator("voice")
+    @classmethod
+    def safe_voice(cls, value: str | None) -> str | None:
+        if value and not re.match(r"^[A-Za-z0-9._-]{2,120}$", value):
+            raise ValueError("Identificador de voz inválido.")
         return value
 
 
@@ -105,6 +119,7 @@ class VideoJobRequest(BaseModel):
     palavras_chave: list[str] = Field(default_factory=list, max_length=8)
     background_keywords: list[str] = Field(default_factory=list, max_length=8)
     callback_url: str | None = Field(default=None, max_length=2000)
+    transition: Literal["cut", "fade"] = "fade"
 
     @field_validator("callback_url")
     @classmethod

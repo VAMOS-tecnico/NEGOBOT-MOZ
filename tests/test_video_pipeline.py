@@ -7,6 +7,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 import video_pipeline
+from pydantic import ValidationError
+from video_service import Scene, VideoJobRequest
 
 
 class FakeResponse:
@@ -73,6 +75,49 @@ class VideoPipelineTests(unittest.TestCase):
             result = video_pipeline.gerar_roteiro("crescimento de vendas", "pt")
         self.assertIn("narracao", result)
         self.assertEqual(len(result["palavras_chave"]), 3)
+
+    def test_advanced_scene_contract_is_validated(self):
+        scene = Scene(text="Apresenta a oferta", duration_seconds=4, visual_mode="upload_media", asset_kind="image", voice="pt_mz_female", voice_sample_url="https://app.example/assets/voice", subtitles=False)
+        self.assertEqual(scene.visual_mode, "upload_media")
+        self.assertEqual(scene.asset_kind, "image")
+        self.assertFalse(scene.subtitles)
+        job = VideoJobRequest(tenant_id="tenant-a", title="Oferta", scenes=[scene], transition="fade")
+        self.assertEqual(job.transition, "fade")
+
+    def test_heygen_v3_adapter_uses_vertical_contract(self):
+        created = FakeResponse({"data": {"id": "video-123"}})
+        ready = FakeResponse({"data": {"status": "completed", "video_url": "https://files.example/video.mp4"}})
+        with tempfile.TemporaryDirectory() as directory, patch.dict("os.environ", {"HEYGEN_API_KEY": "test-key", "HEYGEN_TIMEOUT_SECONDS": "30"}, clear=False), patch.object(video_pipeline.requests, "post", return_value=created) as post, patch.object(video_pipeline.requests, "get", return_value=ready), patch.object(video_pipeline, "_download_asset", return_value=Path(directory) / "avatar.mp4") as download:
+            result = video_pipeline._heygen_avatar("Fala sobre a oferta", "avatar-abc", Path(directory) / "avatar.mp4")
+        self.assertEqual(result.name, "avatar.mp4")
+        payload = post.call_args.kwargs["json"]
+        self.assertEqual(payload["type"], "avatar")
+        self.assertEqual(payload["aspect_ratio"], "9:16")
+        self.assertEqual(payload["resolution"], "1080p")
+        self.assertTrue(post.call_args.kwargs["headers"]["Idempotency-Key"].startswith("negobot-"))
+        self.assertEqual(download.call_args.args[0], "https://files.example/video.mp4")
+
+    def test_advanced_scene_rejects_private_or_invalid_asset_urls(self):
+        with self.assertRaises(ValidationError):
+            Scene(text="Cena", visual_mode="upload_media", asset_url="http://private.local/video.mp4")
+        with self.assertRaises(ValidationError):
+            Scene(text="Cena", voice="voz com espaços")
+
+    def test_voice_aliases_are_resolved_without_provider_call(self):
+        self.assertEqual(video_pipeline._resolved_edge_voice("pt-MZ", "pt_mz_male"), "pt-BR-AntonioNeural")
+        self.assertEqual(video_pipeline._resolved_edge_voice("en", "en_us_female"), "en-US-AriaNeural")
+
+    def test_render_job_composes_multiple_fallback_scenes_without_external_apis(self):
+        def no_provider(coroutine):
+            coroutine.close()
+            return False
+
+        with tempfile.TemporaryDirectory() as directory, patch.object(video_pipeline, "baixar_videos_pexels", return_value=[]), patch.object(video_pipeline, "_generate_ai_image", return_value=None), patch.object(video_pipeline.asyncio, "run", side_effect=no_provider):
+            output = video_pipeline.render_job({"id": "job-scenes", "tenant_id": "tenant-a", "title": "Oferta", "language": "pt-MZ", "transition": "fade", "scenes": [{"text": "Cena um", "duration_seconds": 1}, {"text": "Cena dois", "duration_seconds": 1, "subtitles": False}]}, directory)
+            path = Path(output)
+            self.assertTrue(path.is_file())
+            self.assertGreater(path.stat().st_size, 1000)
+            self.assertFalse((Path(directory) / "video-job-scenes-" ).exists())
 
     def test_groq_roteiro_rejects_invalid_contract(self):
         class FakeGroq:

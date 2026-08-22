@@ -220,10 +220,11 @@ def _firebase_bucket():
         return None
 
 
-def store_original(tenant_id: str, file_id: str, filename: str, content: bytes, mime_type: str) -> str | None:
-    """Store original bytes outside Firestore and return an opaque storage key."""
+def store_blob(tenant_id: str, file_id: str, filename: str, content: bytes, mime_type: str, prefix: str = "knowledge") -> str | None:
+    """Store bytes outside Firestore and return an opaque storage key."""
     safe_name = secure_filename(filename)[:180] or "documento"
-    key = f"knowledge/{secure_filename(tenant_id)[:80]}/{file_id}/{safe_name}"
+    safe_prefix = secure_filename(prefix)[:40] or "uploads"
+    key = f"{safe_prefix}/{secure_filename(tenant_id)[:80]}/{file_id}/{safe_name}"
     bucket = _firebase_bucket()
     if bucket is not None:
         try:
@@ -233,7 +234,7 @@ def store_original(tenant_id: str, file_id: str, filename: str, content: bytes, 
         except Exception:
             logger.exception("Falha ao guardar ficheiro no Firebase Storage")
     try:
-        relative_key = f"{secure_filename(tenant_id)[:80]}/{file_id}/{safe_name}"
+        relative_key = f"{safe_prefix}/{secure_filename(tenant_id)[:80]}/{file_id}/{safe_name}"
         target = (LOCAL_STORAGE_DIR / relative_key).resolve()
         if LOCAL_STORAGE_DIR not in target.parents:
             raise KnowledgeBaseError("Caminho de armazenamento inválido.")
@@ -242,6 +243,32 @@ def store_original(tenant_id: str, file_id: str, filename: str, content: bytes, 
         return f"local:{relative_key}"
     except Exception:
         logger.exception("Falha ao guardar ficheiro no armazenamento local")
+        return None
+
+
+def store_original(tenant_id: str, file_id: str, filename: str, content: bytes, mime_type: str) -> str | None:
+    return store_blob(tenant_id, file_id, filename, content, mime_type, prefix="knowledge")
+
+
+def read_blob(storage_key: str | None) -> bytes | None:
+    if not storage_key:
+        return None
+    if storage_key.startswith("local:"):
+        try:
+            relative_key = storage_key.removeprefix("local:")
+            path = (LOCAL_STORAGE_DIR / relative_key).resolve()
+            if LOCAL_STORAGE_DIR in path.parents and path.is_file():
+                return path.read_bytes()
+        except Exception:
+            logger.warning("Falha ao ler blob local", exc_info=True)
+        return None
+    bucket = _firebase_bucket()
+    if bucket is None:
+        return None
+    try:
+        return bucket.blob(storage_key).download_as_bytes()
+    except Exception:
+        logger.warning("Falha ao ler blob do Firebase Storage", exc_info=True)
         return None
 
 

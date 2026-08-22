@@ -97,7 +97,7 @@ def process(client, job: dict):
     update(client, job, "processing", 5)
     try:
         update(client, job, "processing", 20)
-        output = render_job_with_tts(job, OUTPUT_DIR)
+        output = render_job_with_tts(job, OUTPUT_DIR, progress_callback=lambda progress: update(client, job, "processing", progress))
         update(client, job, "completed", 100, output_path=output)
         callback(job, {"job_id": job["id"], "status": "completed", "output_path": output})
         logger.info("Vídeo concluído job=%s", job["id"])

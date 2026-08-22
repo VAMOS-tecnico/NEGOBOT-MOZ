@@ -31,7 +31,7 @@ from services.channel_oauth_service import complete_oauth, disconnect_oauth, pro
 from services.password_reset_service import consume_password_reset, request_password_reset
 from services.ai_queue_service import AIQueueError, request_ai_text
 from services.evolution_service import get_connection_state, get_profile_picture_url, listar_chats_whatsapp, send_media, send_whatsapp
-from services.knowledge_base_service import KnowledgeBaseError, build_tenant_context, delete_original, extract_text, list_tenant_files, serialise_file, store_original, validate_upload
+from services.knowledge_base_service import KnowledgeBaseError, build_tenant_context, delete_original, extract_text, list_tenant_files, read_blob, serialise_file, store_blob, store_original, validate_upload
 
 logger = logging.getLogger(__name__)
 platform_bp = Blueprint("platform", __name__, url_prefix="/api/platform")
@@ -2725,6 +2725,112 @@ def admin_update_support_ticket(ticket_id: str):
     return jsonify({"updated": True, "ticket_id": ticket_id, "status": status})
 
 
+_VIDEO_ASSET_EXTENSIONS = {
+    ".mp4": ("video", "video/mp4"),
+    ".mov": ("video", "video/quicktime"),
+    ".webm": ("video", "video/webm"),
+    ".png": ("image", "image/png"),
+    ".jpg": ("image", "image/jpeg"),
+    ".jpeg": ("image", "image/jpeg"),
+    ".mp3": ("audio", "audio/mpeg"),
+    ".wav": ("audio", "audio/wav"),
+}
+_VIDEO_ASSET_MAX_BYTES = 16 * 1024 * 1024
+
+
+def _video_asset_url(asset_id: str) -> str:
+    base_url = str(os.getenv("VIDEO_ASSET_BASE_URL") or os.getenv("PUBLIC_APP_BASE_URL") or request.host_url).rstrip("/")
+    return f"{base_url}/api/platform/client/videos/assets/{quote(asset_id)}"
+
+
+def _serialise_video_asset(asset_id: str, data: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": asset_id,
+        "file_name": str(data.get("file_name") or "media"),
+        "size_bytes": int(data.get("size_bytes") or 0),
+        "mime_type": str(data.get("mime_type") or "application/octet-stream"),
+        "kind": str(data.get("kind") or "video"),
+        "asset_url": _video_asset_url(asset_id),
+        "created_at": data.get("created_at"),
+    }
+
+
+@platform_bp.get("/client/videos/assets")
+@_require_roles("client", "operator")
+def list_video_assets():
+    tenant_id = _tenant_for_identity(_identity())
+    if not tenant_id:
+        return jsonify({"error": "tenant não configurado"}), 403
+    documents = _db().collection("video_assets").where("tenant_id", "==", tenant_id).limit(100).stream()
+    assets = [_serialise_video_asset(document.id, document.to_dict() or {}) for document in documents]
+    assets.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
+    return jsonify({"assets": assets, "count": len(assets)})
+
+
+@platform_bp.post("/client/videos/assets")
+@_require_tenant_roles("owner", "operator")
+def upload_video_asset():
+    tenant_id = _tenant_for_identity(_identity())
+    if not tenant_id:
+        return jsonify({"error": "tenant não configurado"}), 403
+    uploaded = request.files.get("file")
+    filename = secure_filename(uploaded.filename if uploaded else "")
+    extension = (os.path.splitext(filename)[1] or "").lower()
+    if uploaded is None or not filename:
+        return jsonify({"error": "Selecciona um ficheiro de media."}), 400
+    if extension not in _VIDEO_ASSET_EXTENSIONS:
+        return jsonify({"error": "Formato não suportado. Usa MP4, MOV, WEBM, PNG, JPG, JPEG, MP3 ou WAV."}), 400
+    content = uploaded.read(_VIDEO_ASSET_MAX_BYTES + 1)
+    if len(content) > _VIDEO_ASSET_MAX_BYTES:
+        return jsonify({"error": "O ficheiro excede o limite de 16 MB."}), 413
+    if not content:
+        return jsonify({"error": "O ficheiro está vazio."}), 400
+    kind, fallback_mime = _VIDEO_ASSET_EXTENSIONS[extension]
+    mime_type = str(uploaded.mimetype or fallback_mime).lower()
+    if not (mime_type.startswith(f"{kind}/") or mime_type == fallback_mime):
+        mime_type = fallback_mime
+    asset_id = secrets.token_urlsafe(18)
+    storage_key = store_blob(tenant_id, asset_id, filename, content, mime_type, prefix="video-assets")
+    if not storage_key:
+        return jsonify({"error": "Não foi possível guardar o ficheiro de media."}), 503
+    data = {"tenant_id": tenant_id, "file_name": filename, "size_bytes": len(content), "mime_type": mime_type, "kind": kind, "storage_key": storage_key, "created_at": _now()}
+    _db().collection("video_assets").document(asset_id).set(data)
+    _audit("video_asset_uploaded", _identity(), tenant_id, {"asset_id": asset_id, "kind": kind, "size_bytes": len(content)})
+    return jsonify({"uploaded": True, "asset": _serialise_video_asset(asset_id, data)}), 201
+
+
+@platform_bp.delete("/client/videos/assets/<asset_id>")
+@_require_tenant_roles("owner", "operator")
+def delete_video_asset(asset_id: str):
+    tenant_id = _tenant_for_identity(_identity())
+    reference = _db().collection("video_assets").document(asset_id)
+    document = reference.get()
+    data = document.to_dict() if document.exists else {}
+    if not document.exists or data.get("tenant_id") != tenant_id:
+        return jsonify({"error": "Media não encontrado neste tenant."}), 404
+    delete_original(data.get("storage_key"))
+    reference.delete()
+    _audit("video_asset_deleted", _identity(), tenant_id, {"asset_id": asset_id})
+    return jsonify({"deleted": True, "asset_id": asset_id})
+
+
+@platform_bp.get("/client/videos/assets/<asset_id>")
+def stream_video_asset(asset_id: str):
+    expected_token = str(os.getenv("VIDEO_SERVICE_TOKEN") or "").strip()
+    supplied_token = str(request.headers.get("X-Video-Service-Token") or "").strip()
+    if not expected_token or not hmac.compare_digest(supplied_token, expected_token):
+        return jsonify({"error": "Media não encontrado."}), 404
+    tenant_id = str(request.headers.get("X-Video-Tenant-Id") or "").strip()
+    document = _db().collection("video_assets").document(asset_id).get()
+    data = document.to_dict() if document.exists else {}
+    if not document.exists or not tenant_id or data.get("tenant_id") != tenant_id:
+        return jsonify({"error": "Media não encontrado."}), 404
+    content = read_blob(data.get("storage_key"))
+    if content is None:
+        return jsonify({"error": "Media não disponível."}), 404
+    return Response(content, mimetype=str(data.get("mime_type") or "application/octet-stream"), headers={"Cache-Control": "private, no-store", "Content-Disposition": f'inline; filename="{secure_filename(str(data.get("file_name") or "media"))}"'})
+
+
 @platform_bp.post("/client/videos/jobs")
 @_require_roles("client", "operator")
 def create_video_job():
@@ -2738,7 +2844,7 @@ def create_video_job():
     if not 2 <= len(title) <= 160 or not isinstance(scenes, list) or not 1 <= len(scenes) <= 20:
         return jsonify({"error": "Indica um título e pelo menos uma cena válida."}), 400
     tenant_id = _tenant_for_identity(_identity())
-    outgoing = {"tenant_id": tenant_id, "title": title, "scenes": scenes, "language": str(payload.get("language") or "pt-MZ"), "voice": payload.get("voice"), "subtitles": bool(payload.get("subtitles", True)), "narracao": payload.get("narracao"), "palavras_chave": payload.get("palavras_chave") or [], "background_keywords": payload.get("background_keywords") or []}
+    outgoing = {"tenant_id": tenant_id, "title": title, "scenes": scenes, "language": str(payload.get("language") or "pt-MZ"), "voice": payload.get("voice"), "subtitles": bool(payload.get("subtitles", True)), "narracao": payload.get("narracao"), "palavras_chave": payload.get("palavras_chave") or [], "background_keywords": payload.get("background_keywords") or [], "transition": str(payload.get("transition") or "fade")}
     try:
         response = requests.post(f"{base_url}/api/video/jobs", json=outgoing, headers={"X-Video-Service-Token": service_token}, timeout=20)
     except requests.RequestException:

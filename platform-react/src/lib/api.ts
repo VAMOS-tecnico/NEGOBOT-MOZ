@@ -276,7 +276,9 @@ export type TenantMetrics = {
   deliveries: DeliveryMetrics;
 };
 
-export type VideoScene = { text: string; duration_seconds?: number; asset_url?: string };
+export type VideoVisualMode = "avatar_ai" | "upload_media" | "ai_media";
+export type VideoAsset = { id: string; file_name: string; size_bytes: number; mime_type: string; kind: "image" | "video" | "audio"; asset_url: string; created_at?: string };
+export type VideoScene = { text: string; duration_seconds?: number; visual_mode?: VideoVisualMode; asset_url?: string; asset_kind?: "image" | "video"; voice?: string; voice_sample_url?: string; voice_sample_mime?: string; avatar_id?: string; subtitles?: boolean };
 
 export type VideoJob = { id: string; tenant_id?: string; title: string; scenes?: VideoScene[]; status?: "queued" | "processing" | "completed" | "deleted" | "failed"; progress?: number; output_available?: boolean; output_url?: string; error?: string; created_at?: string; deleted_at?: string; deletion_reason?: string };
 
@@ -504,7 +506,10 @@ export const api = {
     supportTickets: () => request<{ tickets: SupportTicket[] }>("/api/platform/client/support/tickets"),
     createSupportTicket: (fields: { subject: string; message: string; category?: string; priority?: SupportTicket["priority"] }) => request<{ created: true; ticket: SupportTicket }>("/api/platform/client/support/tickets", { method: "POST", body: JSON.stringify(fields) }),
     updateSupportTicket: (id: string, fields: { message?: string; status?: "open" | "closed" }) => request<{ updated: true }>(`/api/platform/client/support/tickets/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(fields) }),
-    createVideoJob: (payload: { title: string; scenes: VideoScene[]; language?: string; voice?: string; subtitles?: boolean }) => request<{ accepted: true; job: VideoJob }>("/api/platform/client/videos/jobs", { method: "POST", body: JSON.stringify(payload) }),
+    videoAssets: () => request<{ assets: VideoAsset[]; count: number }>("/api/platform/client/videos/assets"),
+    uploadVideoAsset: (file: File) => { const form = new FormData(); form.append("file", file); return request<{ uploaded: true; asset: VideoAsset }>("/api/platform/client/videos/assets", { method: "POST", body: form }); },
+    deleteVideoAsset: (id: string) => request<{ deleted: true; asset_id: string }>(`/api/platform/client/videos/assets/${encodeURIComponent(id)}`, { method: "DELETE" }),
+    createVideoJob: (payload: { title: string; scenes: VideoScene[]; language?: string; voice?: string; subtitles?: boolean; transition?: "cut" | "fade" }) => request<{ accepted: true; job: VideoJob }>("/api/platform/client/videos/jobs", { method: "POST", body: JSON.stringify(payload) }),
     videoJob: (id: string) => request<{ job: VideoJob }>(`/api/platform/client/videos/jobs/${encodeURIComponent(id)}`),
     videoPreviewUrl: (id: string) => `/api/platform/client/videos/jobs/${encodeURIComponent(id)}/preview`,
     downloadVideoJob: async (id: string) => {

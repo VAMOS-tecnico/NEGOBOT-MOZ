@@ -15,9 +15,11 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
+import uuid
 from pathlib import Path
 from typing import Any, Iterable
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import requests
 
@@ -52,12 +54,13 @@ def _ffmpeg_text(value: str) -> str:
     return _safe_text(value).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'").replace("%", "\\%")
 
 
-def _download_url(url: str, target: Path, max_bytes: int = MAX_ASSET_BYTES) -> Path:
+def _download_url(url: str, target: Path, max_bytes: int = MAX_ASSET_BYTES, headers: dict[str, str] | None = None) -> Path:
     parsed = urlparse(url)
     if parsed.scheme != "https" or not parsed.hostname:
         raise ValueError("Os assets devem usar URLs HTTPS públicas.")
     target.parent.mkdir(parents=True, exist_ok=True)
-    with requests.get(url, timeout=DEFAULT_PEXELS_TIMEOUT, stream=True, headers={"User-Agent": "NEGOBOT-video/1.0"}) as response:
+    request_headers = {"User-Agent": "NEGOBOT-video/1.0", **(headers or {})}
+    with requests.get(url, timeout=DEFAULT_PEXELS_TIMEOUT, stream=True, headers=request_headers) as response:
         response.raise_for_status()
         content_length = int(response.headers.get("content-length") or 0)
         if content_length > max_bytes:
@@ -76,12 +79,18 @@ def _download_url(url: str, target: Path, max_bytes: int = MAX_ASSET_BYTES) -> P
     return target
 
 
-def _download_asset(url: str, target: Path) -> Path | None:
+def _download_asset(url: str, target: Path, headers: dict[str, str] | None = None) -> Path | None:
     try:
-        return _download_url(url, target)
+        return _download_url(url, target, headers=headers)
     except (OSError, requests.RequestException, ValueError) as exc:
         logger.warning("Asset externo ignorado: %s", exc)
         return None
+
+
+def _internal_asset_headers(job: dict[str, Any]) -> dict[str, str]:
+    token = str(os.getenv("VIDEO_SERVICE_TOKEN") or "").strip()
+    tenant_id = str(job.get("tenant_id") or "").strip()
+    return {"X-Video-Service-Token": token, "X-Video-Tenant-Id": tenant_id} if token and tenant_id else {}
 
 
 def _pexels_search(query: str, page: int = 1) -> list[dict[str, Any]]:
@@ -244,11 +253,109 @@ async def gerar_audio(texto: str, idioma: str = "pt", output_path: str = "audio.
     return output_path
 
 
-async def _tts(text: str, output: Path, language: str, voice: str | None) -> bool:
+VOICE_ALIASES = {
+    "pt_mz_female": "pt-BR-FranciscaNeural",
+    "pt_mz_male": "pt-BR-AntonioNeural",
+    "en_us_female": "en-US-AriaNeural",
+    "en_us_male": "en-US-ChristopherNeural",
+}
+
+
+class VoiceCloneError(RuntimeError):
+    pass
+
+
+class AvatarProviderError(RuntimeError):
+    pass
+
+
+def _resolved_edge_voice(language: str, voice: str | None) -> str:
+    selected = str(voice or "").strip()
+    return VOICE_ALIASES.get(selected, selected or ("pt-BR-AntonioNeural" if language.lower().startswith("pt") else "en-US-ChristopherNeural"))
+
+
+def _elevenlabs_key() -> str:
+    return str(os.getenv("ELEVENLABS_API_KEY") or "").strip()
+
+
+def _clone_voice(sample_path: Path, voice_name: str) -> str:
+    api_key = _elevenlabs_key()
+    if not api_key:
+        raise VoiceCloneError("ELEVENLABS_API_KEY não está configurada para clonagem de voz.")
+    base = str(os.getenv("ELEVENLABS_API_BASE") or "https://api.elevenlabs.io/v1").rstrip("/")
+    try:
+        with sample_path.open("rb") as sample:
+            response = requests.post(
+                f"{base}/voices/add",
+                headers={"xi-api-key": api_key},
+                data={"name": voice_name[:80] or "NEGOBOT scene voice", "description": "NEGOBOT temporary scene voice"},
+                files={"files": (sample_path.name, sample, "audio/wav" if sample_path.suffix.lower() == ".wav" else "audio/mpeg")},
+                timeout=60,
+            )
+        response.raise_for_status()
+        voice_id = str((response.json() or {}).get("voice_id") or "").strip()
+    except (OSError, ValueError, requests.RequestException) as exc:
+        raise VoiceCloneError(f"Não foi possível criar a voz clonada: {exc}") from exc
+    if not voice_id:
+        raise VoiceCloneError("A ElevenLabs não devolveu um voice_id para a amostra.")
+    return voice_id
+
+
+def _delete_elevenlabs_voice(voice_id: str) -> None:
+    api_key = _elevenlabs_key()
+    if not api_key or not voice_id:
+        return
+    base = str(os.getenv("ELEVENLABS_API_BASE") or "https://api.elevenlabs.io/v1").rstrip("/")
+    try:
+        response = requests.delete(f"{base}/voices/{voice_id}", headers={"xi-api-key": api_key}, timeout=30)
+        response.raise_for_status()
+    except requests.RequestException:
+        logger.warning("Não foi possível remover a voz clonada temporária", exc_info=True)
+
+
+def _elevenlabs_tts(text: str, output: Path, voice_id: str, language: str) -> bool:
+    api_key = _elevenlabs_key()
+    if not api_key:
+        return False
+    base = str(os.getenv("ELEVENLABS_API_BASE") or "https://api.elevenlabs.io/v1").rstrip("/")
+    model = str(os.getenv("ELEVENLABS_MODEL") or ("eleven_multilingual_v2" if language.lower().startswith("pt") else "eleven_turbo_v2_5"))
+    try:
+        response = requests.post(
+            f"{base}/text-to-speech/{voice_id}",
+            headers={"xi-api-key": api_key, "Accept": "audio/mpeg", "Content-Type": "application/json"},
+            json={"text": text, "model_id": model},
+            timeout=120,
+        )
+        response.raise_for_status()
+        output.write_bytes(response.content)
+        return output.exists() and output.stat().st_size > 0
+    except (OSError, requests.RequestException) as exc:
+        raise VoiceCloneError(f"A síntese ElevenLabs falhou: {exc}") from exc
+
+
+async def gerar_audio(texto: str, idioma: str = "pt", output_path: str = "audio.mp3") -> str:
+    """Sintetiza voz de forma assíncrona através do edge-tts."""
+    import edge_tts
+
+    voice = _resolved_edge_voice(idioma, None)
+    communicator = edge_tts.Communicate(str(texto), voice)
+    await communicator.save(output_path)
+    if not Path(output_path).exists() or Path(output_path).stat().st_size == 0:
+        raise RuntimeError("O edge-tts não produziu um ficheiro de áudio válido.")
+    return output_path
+
+
+async def _tts(text: str, output: Path, language: str, voice: str | None, sample_path: Path | None = None) -> bool:
+    if sample_path is not None:
+        voice_id = _clone_voice(sample_path, f"NEGOBOT-{sample_path.stem[:40]}")
+        try:
+            return _elevenlabs_tts(text, output, voice_id, language)
+        finally:
+            _delete_elevenlabs_voice(voice_id)
     try:
         import edge_tts
 
-        selected_voice = voice or ("pt-BR-AntonioNeural" if language.lower().startswith("pt") else "en-US-ChristopherNeural")
+        selected_voice = _resolved_edge_voice(language, voice)
         communicator = edge_tts.Communicate(text, selected_voice)
         await communicator.save(str(output))
         return output.exists() and output.stat().st_size > 0
@@ -312,15 +419,76 @@ def _burn_subtitles(video: Path, timestamps: list[dict[str, Any]], target: Path)
     _run(["ffmpeg", "-y", "-i", str(video), "-vf", f"ass={ass}", "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p", "-an", "-movflags", "+faststart", str(target)], timeout=180)
 
 
-def _render_card(text: str, duration: float, output: Path, background: str = "#102c3a") -> None:
+def _fade_filter(duration: float, transition: str = "fade") -> str:
+    base = "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,fps=30"
+    if transition != "fade":
+        return base
+    fade_duration = min(0.22, max(0.05, duration / 4))
+    fade_out_start = max(0.0, duration - fade_duration)
+    return f"{base},fade=t=in:st=0:d={fade_duration:.3f},fade=t=out:st={fade_out_start:.3f}:d={fade_duration:.3f}"
+
+
+def _render_card(text: str, duration: float, output: Path, background: str = "#102c3a", transition: str = "fade") -> None:
     safe = _ffmpeg_text(text)
     drawtext = f"drawtext=text='{safe}':fontcolor=white:fontsize=54:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:x=(w-text_w)/2:y=(h-text_h)/2:line_spacing=12"
-    _run(["ffmpeg", "-y", "-f", "lavfi", "-i", f"color=c={background}:s=1080x1920:d={duration}", "-vf", drawtext, "-r", "30", "-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-movflags", "+faststart", str(output)], timeout=120)
+    vf = f"{drawtext},{_fade_filter(duration, transition).replace('scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,fps=30', 'format=yuv420p')}"
+    _run(["ffmpeg", "-y", "-f", "lavfi", "-i", f"color=c={background}:s=1080x1920:d={duration}", "-vf", vf, "-r", "30", "-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-movflags", "+faststart", str(output)], timeout=120)
 
 
-def _render_background(source: Path, duration: float, output: Path) -> None:
-    filter_graph = "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,fps=30"
+def _render_background(source: Path, duration: float, output: Path, transition: str = "fade") -> None:
+    filter_graph = _fade_filter(duration, transition)
     _run(["ffmpeg", "-y", "-stream_loop", "-1", "-i", str(source), "-t", str(max(0.1, duration)), "-an", "-vf", filter_graph, "-r", "30", "-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-movflags", "+faststart", str(output)], timeout=180)
+
+
+def _render_image(source: Path, duration: float, output: Path, transition: str = "fade") -> None:
+    _run(["ffmpeg", "-y", "-loop", "1", "-i", str(source), "-t", str(max(0.1, duration)), "-an", "-vf", _fade_filter(duration, transition), "-r", "30", "-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-movflags", "+faststart", str(output)], timeout=180)
+
+
+def _generate_ai_image(text: str, output: Path) -> Path | None:
+    prompt = quote(f"vertical cinematic background for {text}, no text, professional marketing, 9:16")
+    url = f"https://image.pollinations.ai/prompt/{prompt}?width=1080&height=1920&nologo=true"
+    return _download_asset(url, output)
+
+
+def _heygen_avatar(text: str, avatar_id: str, output: Path) -> Path:
+    api_key = str(os.getenv("HEYGEN_API_KEY") or "").strip()
+    if not api_key:
+        raise AvatarProviderError("HEYGEN_API_KEY não está configurada para o modo Avatar AI.")
+    base = str(os.getenv("HEYGEN_API_BASE") or "https://api.heygen.com").rstrip("/")
+    create_path = str(os.getenv("HEYGEN_CREATE_PATH") or "/v3/videos")
+    status_path = str(os.getenv("HEYGEN_STATUS_PATH") or "/v3/videos/{video_id}")
+    payload = {"type": "avatar", "avatar_id": avatar_id, "title": f"NEGOBOT scene {avatar_id[:20]}", "resolution": "1080p", "aspect_ratio": "9:16", "output_format": "mp4", "script": text}
+    try:
+        response = requests.post(f"{base}{create_path}", headers={"x-api-key": api_key, "Content-Type": "application/json", "Idempotency-Key": f"negobot-{uuid.uuid4()}"}, json=payload, timeout=60)
+        response.raise_for_status()
+        create_data = (response.json() or {}).get("data") or {}
+        video_id = str(create_data.get("id") or create_data.get("video_id") or "").strip()
+        if not video_id:
+            raise AvatarProviderError("O HeyGen não devolveu um video_id.")
+        timeout = max(30, int(os.getenv("HEYGEN_TIMEOUT_SECONDS", "600")))
+        deadline = time.monotonic() + timeout
+        video_url = ""
+        while time.monotonic() < deadline:
+            resolved_status_path = status_path.format(video_id=video_id)
+            status_response = requests.get(f"{base}{resolved_status_path}", headers={"x-api-key": api_key}, timeout=30)
+            status_response.raise_for_status()
+            data = status_response.json() or {}
+            status_data = data.get("data") or data
+            status = str(status_data.get("status") or "").lower()
+            video_url = str(status_data.get("video_url") or "").strip()
+            if status in {"completed", "complete", "ready"} and video_url:
+                break
+            if status in {"failed", "error", "cancelled"}:
+                raise AvatarProviderError(f"O HeyGen terminou com estado {status}.")
+            time.sleep(5)
+        if not video_url:
+            raise AvatarProviderError("O avatar excedeu o tempo de processamento configurado.")
+        downloaded = _download_asset(video_url, output)
+        if downloaded is None:
+            raise AvatarProviderError("O vídeo do avatar não pôde ser descarregado.")
+        return downloaded
+    except (requests.RequestException, ValueError) as exc:
+        raise AvatarProviderError(f"Falha na API de avatar: {exc}") from exc
 
 
 def renderizar_video(lista_videos: list, audio_path: str, timestamps: list, output_path: str = "video_final.mp4") -> str:
@@ -370,8 +538,56 @@ def _derive_keywords(job: dict[str, Any]) -> list[str]:
     return [title[:80]]
 
 
-def render_job(job: dict[str, Any], output_dir: str) -> str:
-    """Renderiza um job com Pexels opcional e fallback determinístico."""
+def _mux_scene_audio(video: Path, audio: Path, duration: float, output: Path) -> None:
+    _run(["ffmpeg", "-y", "-i", str(video), "-i", str(audio), "-map", "0:v:0", "-map", "1:a:0", "-t", str(duration), "-c:v", "copy", "-c:a", "aac", "-ar", "44100", "-ac", "2", "-shortest", "-movflags", "+faststart", str(output)], timeout=180)
+
+
+def _mux_scene_silence(video: Path, duration: float, output: Path) -> None:
+    _run(["ffmpeg", "-y", "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100", "-i", str(video), "-map", "1:v:0", "-map", "0:a:0", "-t", str(duration), "-c:v", "copy", "-c:a", "aac", "-ar", "44100", "-ac", "2", "-shortest", "-movflags", "+faststart", str(output)], timeout=180)
+
+
+def _scene_text(scene: dict[str, Any], job: dict[str, Any]) -> str:
+    return str(scene.get("text") or job.get("title") or "NEGOBOT-MOZ").strip()[:500]
+
+
+def _render_scene_visual(scene: dict[str, Any], job: dict[str, Any], index: int, duration: float, job_dir: Path, pexels_assets: list[str], transition: str) -> Path:
+    mode = str(scene.get("visual_mode") or ("upload_media" if scene.get("asset_url") else "ai_media"))
+    internal_headers = _internal_asset_headers(job)
+    source: Path | None = None
+    kind = str(scene.get("asset_kind") or "")
+    text = _scene_text(scene, job)
+    if mode == "upload_media" and scene.get("asset_url"):
+        suffix = ".jpg" if kind == "image" else ".mp4"
+        source = _download_asset(str(scene["asset_url"]), job_dir / f"asset-{index:03d}{suffix}", headers=internal_headers)
+    elif mode == "avatar_ai" and scene.get("avatar_id"):
+        try:
+            source = _heygen_avatar(text, str(scene["avatar_id"]), job_dir / f"avatar-{index:03d}.mp4")
+            kind = "video"
+        except AvatarProviderError as exc:
+            logger.warning("Avatar indisponível na cena %s; fallback visual activo: %s", index, exc)
+    elif mode == "ai_media":
+        source = _generate_ai_image(text, job_dir / f"ai-{index:03d}.png")
+        kind = "image" if source else kind
+    if source is None and pexels_assets:
+        source = Path(pexels_assets[index % len(pexels_assets)])
+        kind = "video"
+    part = job_dir / f"scene-visual-{index:03d}.mp4"
+    try:
+        if source and source.is_file():
+            if kind == "image" or source.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}:
+                _render_image(source, duration, part, transition)
+            else:
+                _render_background(source, duration, part, transition)
+        else:
+            _render_card(text, duration, part, transition=transition)
+    except Exception as exc:
+        logger.warning("Visual ignorado na cena %s: %s", index, exc)
+        _render_card(text, duration, part, transition=transition)
+    return part
+
+
+def render_job(job: dict[str, Any], output_dir: str, progress_callback: Any | None = None) -> str:
+    """Renderiza cenas sequenciais com voz, avatar/media opcional e legendas individuais."""
     root = Path(output_dir)
     root.mkdir(parents=True, exist_ok=True)
     job_dir = Path(tempfile.mkdtemp(prefix=f"video-{job['id']}-", dir=root))
@@ -379,54 +595,60 @@ def render_job(job: dict[str, Any], output_dir: str) -> str:
         scenes = job.get("scenes") or []
         if not scenes:
             raise ValueError("O job precisa de pelo menos uma cena.")
-        total_duration = sum(float(scene.get("duration_seconds") or 3.5) for scene in scenes)
+        total_duration = sum(max(1.0, min(20.0, float(scene.get("duration_seconds") or 3.5))) for scene in scenes)
+        transition = str(job.get("transition") or "fade")
         pexels_assets = baixar_videos_pexels(_derive_keywords(job), total_duration, str(job_dir / "pexels"))
         parts: list[Path] = []
+        if progress_callback:
+            progress_callback(10)
         for index, scene in enumerate(scenes):
             duration = max(1.0, min(20.0, float(scene.get("duration_seconds") or 3.5)))
-            source: Path | None = None
-            asset_url = scene.get("asset_url")
-            if asset_url:
-                source = _download_asset(str(asset_url), job_dir / f"asset-{index:03d}.mp4")
-            if source is None and pexels_assets:
-                source = Path(pexels_assets[index % len(pexels_assets)])
-            part = job_dir / f"scene-{index:03d}.mp4"
-            try:
-                if source and source.is_file():
-                    _render_background(source, duration, part)
-                else:
-                    _render_card(str(scene.get("text") or job.get("title") or "NEGOBOT-MOZ"), duration, part)
-            except Exception as exc:
-                logger.warning("Fundo de vídeo ignorado na cena %s: %s", index, exc)
-                _render_card(str(scene.get("text") or job.get("title") or "NEGOBOT-MOZ"), duration, part)
-            parts.append(part)
+            visual = _render_scene_visual(scene, job, index, duration, job_dir, pexels_assets, transition)
+            audio = job_dir / f"scene-audio-{index:03d}.mp3"
+            sample = None
+            sample_url = str(scene.get("voice_sample_url") or "").strip()
+            if sample_url:
+                sample_mime = str(scene.get("voice_sample_mime") or "audio/mpeg").lower()
+                sample_suffix = ".wav" if sample_mime == "audio/wav" else ".mp3"
+                sample = _download_asset(sample_url, job_dir / f"voice-sample-{index:03d}{sample_suffix}", headers=_internal_asset_headers(job))
+            has_audio = False
+            text = _scene_text(scene, job)
+            if text:
+                try:
+                    has_audio = asyncio.run(_tts(text, audio, str(job.get("language") or "pt"), scene.get("voice") or job.get("voice"), sample))
+                except VoiceCloneError as exc:
+                    logger.warning("Clonagem indisponível na cena %s; voz padrão usada: %s", index, exc)
+                    try:
+                        has_audio = asyncio.run(_tts(text, audio, str(job.get("language") or "pt"), scene.get("voice") or job.get("voice")))
+                    except Exception:
+                        has_audio = False
+                except Exception as exc:
+                    logger.warning("Voz indisponível na cena %s: %s", index, exc)
+            captioned = job_dir / f"scene-captioned-{index:03d}.mp4"
+            subtitles = bool(scene.get("subtitles", job.get("subtitles", True)))
+            if has_audio and subtitles:
+                try:
+                    timestamps = gerar_timestamps(str(audio))
+                    _burn_subtitles(visual, timestamps, captioned)
+                except Exception as exc:
+                    logger.warning("Legendas indisponíveis na cena %s: %s", index, exc)
+                    shutil.copyfile(visual, captioned)
+            else:
+                shutil.copyfile(visual, captioned)
+            final_scene = job_dir / f"scene-final-{index:03d}.mp4"
+            if has_audio:
+                _mux_scene_audio(captioned, audio, duration, final_scene)
+            else:
+                _mux_scene_silence(captioned, duration, final_scene)
+            parts.append(final_scene)
+            if progress_callback:
+                progress_callback(15 + int(75 * (index + 1) / len(scenes)))
         concat_file = job_dir / "concat.txt"
         concat_file.write_text("\n".join(f"file '{path.as_posix()}'" for path in parts) + "\n", encoding="utf-8")
-        silent = job_dir / "silent.mp4"
-        _run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(concat_file), "-c", "copy", "-movflags", "+faststart", str(silent)], timeout=240)
-        audio = job_dir / "voice.mp3"
-        spoken_text = str(job.get("narracao") or " ".join(str(scene.get("text") or "") for scene in scenes)).strip()
-        has_audio = False
-        if spoken_text:
-            try:
-                has_audio = asyncio.run(_tts(spoken_text, audio, str(job.get("language") or "pt"), job.get("voice")))
-            except RuntimeError:
-                has_audio = False
-        captioned = job_dir / "captioned.mp4"
-        if has_audio and job.get("subtitles", True):
-            try:
-                timestamps = gerar_timestamps(str(audio))
-                _burn_subtitles(silent, timestamps, captioned)
-            except Exception as exc:
-                logger.warning("Whisper/legendas indisponível; vídeo seguirá sem legendas: %s", exc)
-                shutil.copyfile(silent, captioned)
-        else:
-            shutil.copyfile(silent, captioned)
         output = root / f"{job['id']}.mp4"
-        if has_audio:
-            _run(["ffmpeg", "-y", "-i", str(captioned), "-i", str(audio), "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-c:a", "aac", "-shortest", "-movflags", "+faststart", str(output)], timeout=240)
-        else:
-            shutil.copyfile(captioned, output)
+        _run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(concat_file), "-c", "copy", "-movflags", "+faststart", str(output)], timeout=300)
+        if progress_callback:
+            progress_callback(98)
         if not output.exists() or output.stat().st_size == 0:
             raise RuntimeError("FFmpeg não produziu o vídeo final.")
         return str(output)
@@ -434,5 +656,5 @@ def render_job(job: dict[str, Any], output_dir: str) -> str:
         shutil.rmtree(job_dir, ignore_errors=True)
 
 
-def render_job_with_tts(job: dict[str, Any], output_dir: str) -> str:
-    return render_job(job, output_dir)
+def render_job_with_tts(job: dict[str, Any], output_dir: str, progress_callback: Any | None = None) -> str:
+    return render_job(job, output_dir, progress_callback=progress_callback)
