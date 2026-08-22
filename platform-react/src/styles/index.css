@@ -510,11 +510,11 @@ select:focus { border-color: rgba(98, 226, 171, .7); box-shadow: 0 0 0 3px rgba(
 /* Advanced scene editor */
 .scene-grid-two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 9px; }
 .scene-option-panel { display: grid; gap: 6px; padding: 10px; border: 1px solid rgba(117, 173, 148, .14); border-radius: 10px; background: rgba(5, 15, 12, .24); }
-.scene-dropzone { display: grid; min-height: 104px; place-items: center; align-content: center; gap: 5px; padding: 13px; border: 1px dashed rgba(98, 226, 171, .34); border-radius: 10px; color: #82dcae; background: rgba(67, 180, 127, .06); cursor: pointer; text-align: center; transition: border-color .18s ease, background .18s ease, transform .18s ease; }
-.scene-dropzone:hover, .scene-dropzone.is-dragging { border-color: rgba(98, 226, 171, .82); background: rgba(67, 180, 127, .15); transform: translateY(-1px); }
+.scene-dropzone { position: relative; display: grid; min-height: 104px; place-items: center; align-content: center; gap: 5px; padding: 13px; border: 1px dashed rgba(98, 226, 171, .34); border-radius: 10px; color: #82dcae; background: rgba(67, 180, 127, .06); cursor: pointer; text-align: center; user-select: none; transition: border-color .18s ease, background .18s ease, transform .18s ease; }
+.scene-dropzone:hover, .scene-dropzone.is-dragging, .scene-dropzone:focus-visible { border-color: rgba(98, 226, 171, .82); background: rgba(67, 180, 127, .15); transform: translateY(-1px); }
 .scene-dropzone strong { color: #dff6e7; font-size: 11px; line-height: 1.35; }
 .scene-dropzone small { color: #78998a; font-size: 10px; }
-.scene-dropzone input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.scene-dropzone input { position: absolute; width: 1px; height: 1px; margin: -1px; opacity: 0; pointer-events: none; }
 .scene-option-hint { display: flex; align-items: flex-start; gap: 7px; padding: 10px; border: 1px solid rgba(163, 127, 231, .18); border-radius: 10px; color: #c4b2ef; background: rgba(129, 84, 196, .08); font-size: 10px; line-height: 1.45; }
 .scene-option-hint svg { flex: 0 0 auto; color: #b89be9; }
 .toggle-field { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 41px; }

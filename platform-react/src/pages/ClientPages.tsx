@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { AlertCircle, BarChart3, Bot, Building2, CheckCircle2, CircleDollarSign, Download, FileSpreadsheet, FileText, FileType, FileUp, Image as ImageIcon, LifeBuoy, Loader2, MessageCircle, Pause, Play, Plus, Presentation, QrCode, RefreshCw, Send, ShieldCheck, Smartphone, Sparkles, Trash2, UploadCloud, Users, Video, XCircle } from "lucide-react";
 import { usePlatformLanguage } from "../lib/platformLanguage";
 import { api, type AssistantKnowledgeFile, type AssistantSettings, type Campaign, type CampaignTemplate, type CampaignSettings, type ClientPlan, type ChatMessage, type Contact, type Conversation, type DeliveryMetrics, type IntegrationStatus, type LemonSqueezyStatus, type PaymentRecord, type Plan, type PlanAddon, type SupportTicket, type TeamMember, type TenantMetrics, type VideoAsset, type VideoJob, type VideoScene, type VideoVisualMode, type WhatsAppGroup } from "../lib/api";
@@ -576,6 +576,7 @@ export function VideoPage() {
   const [assetsBusy, setAssetsBusy] = useState(true);
   const [uploading, setUploading] = useState<string | null>(null);
   const [draggingScene, setDraggingScene] = useState<number | null>(null);
+  const mediaInputRefs = useRef<Record<number, HTMLInputElement | null>>({});
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [previewError, setPreviewError] = useState(false);
@@ -608,10 +609,32 @@ export function VideoPage() {
     } catch (reason) { setError(reason instanceof Error ? reason.message : (english ? "The file could not be uploaded." : "Não foi possível carregar o ficheiro.")); }
     finally { setUploading(null); }
   }
+  function isSupportedMediaFile(file: File) {
+    const extension = file.name.toLowerCase().split(".").pop() || "";
+    return ["mp4", "mov", "webm", "png", "jpg", "jpeg"].includes(extension) || ["video/mp4", "video/quicktime", "video/webm", "image/png", "image/jpeg"].includes(file.type);
+  }
+  function handleDragEnter(sceneId: number, event: React.DragEvent<HTMLDivElement>) {
+    event.preventDefault(); event.stopPropagation();
+    if (event.dataTransfer.types.includes("Files")) setDraggingScene(sceneId);
+  }
+  function handleDragOver(sceneId: number, event: React.DragEvent<HTMLDivElement>) {
+    event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = "copy";
+    if (event.dataTransfer.types.includes("Files")) setDraggingScene(sceneId);
+  }
+  function handleDragLeave(sceneId: number, event: React.DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    const nextTarget = event.relatedTarget as Node | null;
+    if (!nextTarget || !event.currentTarget.contains(nextTarget)) setDraggingScene((current) => current === sceneId ? null : current);
+  }
   function handleDrop(sceneId: number, event: React.DragEvent<HTMLDivElement>) {
-    event.preventDefault(); setDraggingScene(null);
-    const file = event.dataTransfer.files?.[0];
-    if (file) void uploadForScene(sceneId, file, "media");
+    event.preventDefault(); event.stopPropagation(); setDraggingScene(null);
+    const file = Array.from(event.dataTransfer.files || [])[0];
+    if (!file) return;
+    if (!isSupportedMediaFile(file)) {
+      setError(english ? "Use an MP4, MOV, WEBM, PNG or JPG file." : "Usa um ficheiro MP4, MOV, WEBM, PNG ou JPG.");
+      return;
+    }
+    void uploadForScene(sceneId, file, "media");
   }
   async function create(event: FormEvent) {
     event.preventDefault(); setSaving(true); setError(""); setNotice("");
@@ -642,7 +665,7 @@ export function VideoPage() {
       <textarea value={scene.text} onChange={(event) => updateScene(scene.id, { text: event.target.value })} rows={3} required={index === 0} placeholder={english ? "Describe what should appear and be said..." : "Descreve o que deve aparecer e ser dito..."} />
       <div className="scene-grid-two"><label>{english ? "Duration (seconds)" : "Duração (segundos)"}<input type="number" min={1} max={20} step={0.5} value={scene.duration_seconds} onChange={(event) => updateScene(scene.id, { duration_seconds: Math.min(20, Math.max(1, Number(event.target.value) || 1)) })} /></label><label>{english ? "Visual mode" : "Modo visual"}<select value={scene.visual_mode || "ai_media"} onChange={(event) => updateScene(scene.id, { visual_mode: event.target.value as VideoVisualMode })}><option value="avatar_ai">{english ? "AI Avatar / Spokesperson" : "Avatar AI / Porta-Voz"}</option><option value="upload_media">{english ? "Upload Media" : "Upload de Mídia"}</option><option value="ai_media">{english ? "Generate Media with AI" : "Gerar Mídia por IA"}</option></select></label></div>
       {scene.visual_mode === "avatar_ai" && <div className="scene-option-panel"><label>{english ? "Avatar ID" : "ID do avatar"}<input value={scene.avatar_id || ""} onChange={(event) => updateScene(scene.id, { avatar_id: event.target.value })} placeholder={english ? "Configured HeyGen avatar ID" : "ID do avatar HeyGen configurado"} /></label><small className="muted">{english ? "Requires HEYGEN_API_KEY and an approved avatar in the Video Worker." : "Requer HEYGEN_API_KEY e um avatar aprovado no Video Worker."}</small></div>}
-      {scene.visual_mode === "upload_media" && <div className={`scene-dropzone ${draggingScene === scene.id ? "is-dragging" : ""}`} onDragOver={(event) => { event.preventDefault(); setDraggingScene(scene.id); }} onDragLeave={() => setDraggingScene(null)} onDrop={(event) => handleDrop(scene.id, event)}><UploadCloud size={19} /><strong>{scene.media?.file_name || (english ? "Drop a video or image here" : "Arrasta um vídeo ou imagem para aqui")}</strong><small>{scene.media ? formatVideoBytes(scene.media.size_bytes) : (english ? "or click to choose · MP4, MOV, WEBM, PNG, JPG" : "ou clica para seleccionar · MP4, MOV, WEBM, PNG, JPG")}</small><input type="file" accept={mediaAccept} disabled={uploading === `${scene.id}:media`} onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadForScene(scene.id, file, "media"); event.currentTarget.value = ""; }} /></div>}
+      {scene.visual_mode === "upload_media" && <div className={`scene-dropzone ${draggingScene === scene.id ? "is-dragging" : ""}`} role="button" tabIndex={0} aria-label={english ? "Upload scene video or image" : "Carregar vídeo ou imagem da cena"} onClick={() => mediaInputRefs.current[scene.id]?.click()} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); mediaInputRefs.current[scene.id]?.click(); } }} onDragEnter={(event) => handleDragEnter(scene.id, event)} onDragOver={(event) => handleDragOver(scene.id, event)} onDragLeave={(event) => handleDragLeave(scene.id, event)} onDrop={(event) => handleDrop(scene.id, event)}><UploadCloud size={19} /><strong>{uploading === `${scene.id}:media` ? (english ? "Uploading..." : "A carregar...") : scene.media?.file_name || (english ? "Drop a video or image here" : "Arrasta um vídeo ou imagem para aqui")}</strong><small>{scene.media ? formatVideoBytes(scene.media.size_bytes) : (english ? "or click to choose · MP4, MOV, WEBM, PNG, JPG" : "ou clica para seleccionar · MP4, MOV, WEBM, PNG, JPG")}</small><input ref={(element) => { mediaInputRefs.current[scene.id] = element; }} type="file" accept={mediaAccept} disabled={uploading === `${scene.id}:media`} onClick={(event) => event.stopPropagation()} onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadForScene(scene.id, file, "media"); event.currentTarget.value = ""; }} /></div>}
       {scene.visual_mode === "ai_media" && <div className="scene-option-hint"><Sparkles size={16} />{english ? "The worker generates a vertical AI background from this scene text, with Pexels fallback." : "O worker gera um fundo vertical por IA a partir do texto, com fallback Pexels."}</div>}
       <div className="scene-grid-two"><label>{english ? "Voice" : "Voz"}<select value={scene.voice || ""} onChange={(event) => updateScene(scene.id, { voice: event.target.value || undefined })}><option value="">{english ? "Default voice" : "Voz padrão"}</option>{VIDEO_VOICES.map((voice) => <option key={voice.value} value={voice.value}>{english ? voice.en : voice.pt}</option>)}</select></label><label className="toggle-field"><span>{english ? "Animated subtitles" : "Legendas dinâmicas"}<small>{english ? "Show word-level captions" : "Mostrar legendas sincronizadas"}</small></span><input type="checkbox" checked={scene.subtitles !== false} onChange={(event) => updateScene(scene.id, { subtitles: event.target.checked })} /></label></div>
       <label className="scene-upload-inline"><span><FileUp size={15} />{scene.voiceSample?.file_name || (english ? "Clone voice with MP3/WAV sample" : "Clonar voz com amostra MP3/WAV")}</span><input type="file" accept={voiceAccept} disabled={uploading === `${scene.id}:voice`} onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadForScene(scene.id, file, "voice"); event.currentTarget.value = ""; }} /></label>
