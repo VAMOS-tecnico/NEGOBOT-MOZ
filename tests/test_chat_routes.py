@@ -180,6 +180,20 @@ class ChatRouteTests(unittest.TestCase):
         self.assertEqual(message["file_name"], "foto.png")
         self.assertNotIn("fake-image", repr(message))
 
+    @patch("routes.platform_routes.requests.get")
+    @patch("routes.platform_routes.get_profile_picture_url", return_value="https://files.example/profile.jpg")
+    @patch("routes.platform_routes.get_connection_state", return_value="open")
+    def test_profile_image_is_proxied_as_same_origin_image(self, _state, profile_url, remote_get):
+        self.db.put("clientes_bot/tenant-a/base_contactos", "ana", {"phone": "258841234567", "nome": "Ana"})
+        remote_response = types.SimpleNamespace(content=b"jpeg-bytes", headers={"Content-Type": "image/jpeg"})
+        remote_response.raise_for_status = lambda: None
+        remote_get.return_value = remote_response
+        response = self.client.get("/api/platform/client/conversations/258841234567/profile/image")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.mimetype, "image/jpeg")
+        self.assertEqual(response.data, b"jpeg-bytes")
+        profile_url.assert_called_once_with("258841234567", instance_name="inst-a")
+
     @patch("routes.platform_routes.get_connection_state", return_value="offline")
     def test_send_rejects_when_tenant_instance_is_offline(self, _state):
         self.db.put("clientes_bot/tenant-a/base_contactos", "ana", {"phone": "258841234567", "nome": "Ana"})

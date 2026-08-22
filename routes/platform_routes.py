@@ -1551,8 +1551,8 @@ def _authorize_chat_target(tenant_id: str, instance_name: str, target: str, *, r
     contact_exists = target in _tenant_chat_contacts(tenant_id)
     conversation_exists = any(source.document(target).get().exists for source in _conversation_sources(tenant_id, instance_name))
     if not contact_exists and not conversation_exists and allow_live_instance and instance_name and get_connection_state(instance_name) == "open":
-        live_target = next((_chat_target_from_evolution(chat) for chat in listar_chats_whatsapp(instance_name) if _chat_target_from_evolution(chat)), "")
-        if live_target == target:
+        live_targets = {_chat_target_from_evolution(chat) for chat in listar_chats_whatsapp(instance_name)}
+        if target in live_targets:
             return True, 200, ""
     if not contact_exists and not conversation_exists:
         return False, 403, "Só podes consultar uma conversa pertencente a este tenant."
@@ -1729,7 +1729,39 @@ def conversation_profile(phone: str):
         return jsonify({"error": error}), status_code
     if not instance_name or get_connection_state(instance_name) != "open":
         return jsonify({"phone": target, "profile_picture_url": None, "available": False})
-    return jsonify({"phone": target, "profile_picture_url": get_profile_picture_url(target, instance_name=instance_name) or None, "available": True})
+    remote_url = get_profile_picture_url(target, instance_name=instance_name)
+    proxy_url = f"/api/platform/client/conversations/{quote(target, safe='')}/profile/image" if remote_url else None
+    return jsonify({"phone": target, "profile_picture_url": proxy_url, "available": bool(remote_url)})
+
+
+@platform_bp.get("/client/conversations/<phone>/profile/image")
+@_require_roles("client", "operator")
+def conversation_profile_image(phone: str):
+    tenant_id = _tenant_for_identity(_identity())
+    tenant = _tenant_data(tenant_id)
+    instance_name = str(tenant.get("instance_name") or "").strip()
+    target = _clean_chat_target(phone)
+    if not target or (not target.endswith("@g.us") and len(target) < 8):
+        return jsonify({"error": "Destino de conversa inválido."}), 400
+    allowed, status_code, error = _authorize_chat_target(tenant_id, instance_name, target, require_group_admin=True, allow_live_instance=True)
+    if not allowed:
+        return jsonify({"error": error}), status_code
+    if not instance_name or get_connection_state(instance_name) != "open":
+        return jsonify({"error": "O WhatsApp deste tenant está desligado."}), 409
+    remote_url = get_profile_picture_url(target, instance_name=instance_name)
+    if not remote_url:
+        return jsonify({"error": "Este contacto não tem uma foto de perfil disponível."}), 404
+    try:
+        image_response = requests.get(remote_url, timeout=15)
+        image_response.raise_for_status()
+        content_type = image_response.headers.get("Content-Type", "image/jpeg").split(";", 1)[0]
+        if not content_type.startswith("image/"):
+            return jsonify({"error": "A Evolution devolveu um conteúdo que não é uma imagem."}), 502
+        response = Response(image_response.content, mimetype=content_type)
+        response.headers["Cache-Control"] = "private, max-age=300"
+        return response
+    except requests.RequestException:
+        return jsonify({"error": "Não foi possível carregar a foto de perfil."}), 502
 
 
 @platform_bp.get("/client/conversations/<phone>/messages")
