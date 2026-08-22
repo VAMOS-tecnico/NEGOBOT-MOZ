@@ -1,4 +1,5 @@
 import json
+import asyncio
 import sys
 import tempfile
 import types
@@ -102,6 +103,33 @@ class VideoPipelineTests(unittest.TestCase):
             Scene(text="Cena", visual_mode="upload_media", asset_url="http://private.local/video.mp4")
         with self.assertRaises(ValidationError):
             Scene(text="Cena", voice="voz com espaços")
+
+    def test_tts_falls_back_to_offline_after_edge_tts_error(self):
+        class BrokenCommunicate:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def save(self, path):
+                raise RuntimeError("403 Invalid response status")
+
+        edge_module = types.SimpleNamespace(Communicate=BrokenCommunicate)
+        with tempfile.TemporaryDirectory() as directory, patch.dict(sys.modules, {"edge_tts": edge_module}), patch.object(video_pipeline, "_offline_tts", return_value=True) as fallback:
+            result = asyncio.run(video_pipeline._tts("Olá, esta é uma narração de teste.", Path(directory) / "audio.mp3", "pt-MZ", "pt_mz_male"))
+        self.assertTrue(result)
+        fallback.assert_called_once()
+
+    def test_offline_tts_converts_espeak_wav_to_mp3_and_cleans_temp_file(self):
+        def fake_run(command, timeout=90):
+            if command[0] == "espeak-ng":
+                Path(command[command.index("-w") + 1]).write_bytes(b"wav")
+            elif command[0] == "ffmpeg":
+                Path(command[-1]).write_bytes(b"mp3")
+
+        with tempfile.TemporaryDirectory() as directory, patch.object(video_pipeline, "_run", side_effect=fake_run):
+            output = Path(directory) / "audio.mp3"
+            self.assertTrue(video_pipeline._offline_tts("Olá", output, "pt-MZ"))
+            self.assertTrue(output.is_file())
+            self.assertFalse(output.with_suffix(".wav").exists())
 
     def test_voice_aliases_are_resolved_without_provider_call(self):
         self.assertEqual(video_pipeline._resolved_edge_voice("pt-MZ", "pt_mz_male"), "pt-BR-AntonioNeural")

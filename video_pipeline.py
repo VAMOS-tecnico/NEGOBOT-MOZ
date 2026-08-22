@@ -333,16 +333,36 @@ def _elevenlabs_tts(text: str, output: Path, voice_id: str, language: str) -> bo
         raise VoiceCloneError(f"A síntese ElevenLabs falhou: {exc}") from exc
 
 
-async def gerar_audio(texto: str, idioma: str = "pt", output_path: str = "audio.mp3") -> str:
-    """Sintetiza voz de forma assíncrona através do edge-tts."""
-    import edge_tts
+def _offline_tts(text: str, output: Path, language: str) -> bool:
+    """Gera voz localmente quando o endpoint público edge-tts está indisponível."""
+    voice = "pt" if str(language or "pt").lower().startswith("pt") else "en"
+    wav = output.with_suffix(".wav")
+    try:
+        _run(["espeak-ng", "-v", voice, "-s", "150", "-w", str(wav), str(text)], timeout=90)
+        _run(["ffmpeg", "-y", "-i", str(wav), "-codec:a", "libmp3lame", "-q:a", "3", str(output)], timeout=90)
+        return output.exists() and output.stat().st_size > 0
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        logger.warning("Fallback TTS offline indisponível: %s", exc)
+        return False
+    finally:
+        wav.unlink(missing_ok=True)
 
-    voice = _resolved_edge_voice(idioma, None)
-    communicator = edge_tts.Communicate(str(texto), voice)
-    await communicator.save(output_path)
-    if not Path(output_path).exists() or Path(output_path).stat().st_size == 0:
-        raise RuntimeError("O edge-tts não produziu um ficheiro de áudio válido.")
-    return output_path
+
+async def gerar_audio(texto: str, idioma: str = "pt", output_path: str = "audio.mp3") -> str:
+    """Sintetiza voz através do edge-tts, com fallback offline."""
+    try:
+        import edge_tts
+
+        voice = _resolved_edge_voice(idioma, None)
+        communicator = edge_tts.Communicate(str(texto), voice)
+        await communicator.save(output_path)
+        if Path(output_path).exists() and Path(output_path).stat().st_size > 0:
+            return output_path
+    except Exception as exc:
+        logger.warning("edge-tts indisponível; a usar fallback offline: %s", exc)
+    if _offline_tts(str(texto), Path(output_path), idioma):
+        return output_path
+    raise RuntimeError("Não foi possível gerar um ficheiro de áudio válido.")
 
 
 async def _tts(text: str, output: Path, language: str, voice: str | None, sample_path: Path | None = None) -> bool:
@@ -360,8 +380,8 @@ async def _tts(text: str, output: Path, language: str, voice: str | None, sample
         await communicator.save(str(output))
         return output.exists() and output.stat().st_size > 0
     except Exception as exc:
-        logger.warning("TTS indisponível para o job: %s", exc)
-        return False
+        logger.warning("edge-tts indisponível; a tentar fallback offline: %s", exc)
+        return _offline_tts(text, output, language)
 
 
 def gerar_timestamps(audio_path: str) -> list[dict[str, Any]]:
