@@ -13,9 +13,10 @@ from services.evolution_service import send_whatsapp
 from services.trial_service import PENDING_STATUS, is_expired as trial_is_expired
 from services.plan_service import entitlements_for_tenant
 from services.media_service import (
-    extrair_texto_pdf_url, 
-    extrair_texto_excel_url
+    extrair_texto_pdf_url,
+    extrair_texto_excel_url,
 )
+from services.knowledge_base_service import build_tenant_context
 
 logger = logging.getLogger(__name__)
 
@@ -480,7 +481,10 @@ def process_client_flow(
         bloco_conhecimento_extra = ""
         if base_conhecimento_docs:
             doc_text_clean = base_conhecimento_docs[:MAX_KNOWLEDGE_CHARS]
-            bloco_conhecimento_extra = f"\n\nDOCUMENTAÇÃO E DADOS DA EMPRESA (EXTRAÍDOS DE PDF/EXCEL):\n{doc_text_clean}\n"
+            bloco_conhecimento_extra = f"\n\nDOCUMENTAÇÃO E DADOS DA EMPRESA (REGISTO MANUAL/LEGADO):\n{doc_text_clean}\n"
+        indexed_knowledge = build_tenant_context(extensions.db, tenant_id_for_opt_out, max_chars=6500)
+        if indexed_knowledge:
+            bloco_conhecimento_extra += f"\n\nDOCUMENTAÇÃO INDEXADA DA BASE DE CONHECIMENTO (FONTE OFICIAL):\n{indexed_knowledge}\n"
 
         sys_instruction = f"""Você é o assistente virtual oficial de atendimento desta empresa.
 Português de Moçambique, tom profissional, atencioso e conciso.
@@ -498,7 +502,7 @@ REGRA DE ATENDIMENTO:
         response_text = None
         try:
             ai_result = request_ai_text(
-                tenant_id=f"cliente_{clean_user_phone}",
+                tenant_id=f"tenant_{tenant_id_for_opt_out or nome_instancia_atual}",
                 messages=contents,
                 system_prompt=sys_instruction,
             )

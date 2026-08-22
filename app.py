@@ -24,7 +24,7 @@ def create_app():
     app.config["SESSION_COOKIE_HTTPONLY"] = True
     app.config["SESSION_COOKIE_SECURE"] = True
     app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
-    app.config["MAX_CONTENT_LENGTH"] = int(os.getenv("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))
+    app.config["MAX_CONTENT_LENGTH"] = int(os.getenv("MAX_UPLOAD_BYTES", str(16 * 1024 * 1024)))
     app.config["SESSION_REFRESH_EACH_REQUEST"] = True
     app.permanent_session_lifetime = timedelta(hours=12)
 

@@ -8,6 +8,9 @@ pypdf
 pillow
 pandas
 openpyxl
+python-pptx
+python-docx
+pytesseract
 groq
 setuptools
 edge-tts

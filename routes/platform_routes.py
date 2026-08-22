@@ -3,6 +3,7 @@ import base64
 import hashlib
 import hmac
 import io
+import logging
 import os
 import re
 import secrets
@@ -30,7 +31,9 @@ from services.channel_oauth_service import complete_oauth, disconnect_oauth, pro
 from services.password_reset_service import consume_password_reset, request_password_reset
 from services.ai_queue_service import AIQueueError, request_ai_text
 from services.evolution_service import get_connection_state, get_profile_picture_url, listar_chats_whatsapp, send_media, send_whatsapp
+from services.knowledge_base_service import KnowledgeBaseError, build_tenant_context, delete_original, extract_text, list_tenant_files, serialise_file, store_original, validate_upload
 
+logger = logging.getLogger(__name__)
 platform_bp = Blueprint("platform", __name__, url_prefix="/api/platform")
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _LOGIN_ATTEMPTS: dict[str, list[float]] = {}
@@ -1404,6 +1407,103 @@ def update_assistant_settings():
         return jsonify({"error": "Nenhuma definição válida foi enviada."}), 400
     _db().collection("tenants").document(tenant_id).set({**allowed, "updated_at": _now()}, merge=True)
     return jsonify({"updated": True, "fields": sorted(allowed)})
+
+
+@platform_bp.get("/client/assistant/knowledge")
+@_require_roles("client", "operator")
+def list_assistant_knowledge():
+    tenant_id = _tenant_for_identity(_identity())
+    if not tenant_id:
+        return jsonify({"error": "tenant não configurado"}), 403
+    try:
+        files = list_tenant_files(_db(), tenant_id)
+    except Exception:
+        logger.exception("Falha ao listar Base de Conhecimento tenant=%s", tenant_id)
+        return jsonify({"error": "Não foi possível carregar a base de conhecimento neste momento."}), 503
+    return jsonify({"files": files, "count": len(files)})
+
+
+@platform_bp.post("/client/assistant/knowledge")
+@_require_tenant_roles("owner", "operator")
+def upload_assistant_knowledge():
+    tenant_id = _tenant_for_identity(_identity())
+    if not tenant_id:
+        return jsonify({"error": "tenant não configurado"}), 403
+    uploaded = request.files.get("file")
+    if uploaded is None or not uploaded.filename:
+        return jsonify({"error": "Selecciona um ficheiro para a base de conhecimento."}), 400
+
+    content = uploaded.read()
+    try:
+        filename, extension = validate_upload(uploaded.filename, uploaded.mimetype, len(content))
+    except KnowledgeBaseError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    file_id = secrets.token_urlsafe(16)
+    now = _now()
+    db = _db()
+    file_ref = db.collection("assistant_knowledge_files").document(file_id)
+    base_data = {
+        "tenant_id": tenant_id,
+        "file_name": filename,
+        "extension": extension,
+        "mime_type": str(uploaded.mimetype or "application/octet-stream").split(";", 1)[0].lower(),
+        "size_bytes": len(content),
+        "status": "processing",
+        "created_at": now,
+        "updated_at": now,
+    }
+    file_ref.set(base_data, merge=True)
+
+    storage_key = store_original(tenant_id, file_id, filename, content, base_data["mime_type"])
+    if not storage_key:
+        file_ref.set({"status": "error", "error": "Não foi possível armazenar o ficheiro.", "updated_at": _now()}, merge=True)
+        return jsonify({"error": "Não foi possível armazenar o ficheiro."}), 502
+
+    try:
+        extracted = extract_text(filename, content)
+    except KnowledgeBaseError as exc:
+        delete_original(storage_key)
+        file_ref.set({"storage_key": storage_key, "status": "error", "error": str(exc), "updated_at": _now()}, merge=True)
+        return jsonify({"error": str(exc), "file": serialise_file(file_id, {**base_data, "storage_key": storage_key, "status": "error", "error": str(exc)})}), 422
+    except Exception:
+        logger.exception("Falha inesperada a processar ficheiro de conhecimento tenant=%s", tenant_id)
+        delete_original(storage_key)
+        error = "Não foi possível processar este ficheiro. Tenta novamente com um ficheiro válido."
+        file_ref.set({"storage_key": storage_key, "status": "error", "error": error, "updated_at": _now()}, merge=True)
+        return jsonify({"error": error}), 422
+
+    indexed_at = _now()
+    file_ref.set({
+        "storage_key": storage_key,
+        "extracted_text": extracted,
+        "extracted_chars": len(extracted),
+        "status": "indexed",
+        "error": None,
+        "indexed_at": indexed_at,
+        "updated_at": indexed_at,
+    }, merge=True)
+    data = {**base_data, "storage_key": storage_key, "extracted_chars": len(extracted), "status": "indexed", "indexed_at": indexed_at}
+    return jsonify({"uploaded": True, "file": serialise_file(file_id, data)}), 201
+
+
+@platform_bp.delete("/client/assistant/knowledge/<file_id>")
+@_require_tenant_roles("owner", "operator")
+def delete_assistant_knowledge(file_id: str):
+    tenant_id = _tenant_for_identity(_identity())
+    if not tenant_id:
+        return jsonify({"error": "tenant não configurado"}), 403
+    clean_file_id = str(file_id or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]{8,64}", clean_file_id):
+        return jsonify({"error": "Ficheiro inválido."}), 400
+    ref = _db().collection("assistant_knowledge_files").document(clean_file_id)
+    snapshot = ref.get()
+    data = snapshot.to_dict() if snapshot.exists else {}
+    if not snapshot.exists or data.get("tenant_id") != tenant_id:
+        return jsonify({"error": "Ficheiro não encontrado neste tenant."}), 404
+    delete_original(data.get("storage_key"))
+    ref.delete()
+    return jsonify({"deleted": True, "file_id": clean_file_id})
 
 
 @platform_bp.get("/client/campaign-audience/conversations")

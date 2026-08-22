@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
-import { AlertCircle, BarChart3, Bot, Building2, CheckCircle2, CircleDollarSign, Download, FileUp, LifeBuoy, Loader2, MessageCircle, Pause, Play, Plus, QrCode, RefreshCw, Send, ShieldCheck, Smartphone, Sparkles, Trash2, Users, Video, XCircle } from "lucide-react";
+import { AlertCircle, BarChart3, Bot, Building2, CheckCircle2, CircleDollarSign, Download, FileSpreadsheet, FileText, FileType, FileUp, Image as ImageIcon, LifeBuoy, Loader2, MessageCircle, Pause, Play, Plus, Presentation, QrCode, RefreshCw, Send, ShieldCheck, Smartphone, Sparkles, Trash2, UploadCloud, Users, Video, XCircle } from "lucide-react";
 import { usePlatformLanguage } from "../lib/platformLanguage";
-import { api, type AssistantSettings, type Campaign, type CampaignTemplate, type CampaignSettings, type ClientPlan, type ChatMessage, type Contact, type Conversation, type DeliveryMetrics, type IntegrationStatus, type LemonSqueezyStatus, type PaymentRecord, type Plan, type PlanAddon, type SupportTicket, type TeamMember, type TenantMetrics, type VideoJob, type WhatsAppGroup } from "../lib/api";
+import { api, type AssistantKnowledgeFile, type AssistantSettings, type Campaign, type CampaignTemplate, type CampaignSettings, type ClientPlan, type ChatMessage, type Contact, type Conversation, type DeliveryMetrics, type IntegrationStatus, type LemonSqueezyStatus, type PaymentRecord, type Plan, type PlanAddon, type SupportTicket, type TeamMember, type TenantMetrics, type VideoJob, type WhatsAppGroup } from "../lib/api";
 
 function ModuleHeader({ eyebrow, title, description, action }: { eyebrow: string; title: string; description: string; action?: ReactNode }) {
   const { language } = usePlatformLanguage();
@@ -284,11 +284,106 @@ export function WhatsAppPage() {
 export function AssistantPage() {
   const { language } = usePlatformLanguage();
   const english = language === "en";
-  const [settings, setSettings] = useState<AssistantSettings>({ diretrizes_corporativas: "", base_conhecimento_documentos: "", timeout_humano_minutos: 15 }); const [busy, setBusy] = useState(true); const [saving, setSaving] = useState(false); const [error, setError] = useState(""); const [notice, setNotice] = useState("");
-  useEffect(() => { api.client.assistant().then(setSettings).catch((reason) => setError(reason instanceof Error ? reason.message : "Não foi possível carregar o assistente.")).finally(() => setBusy(false)); }, []);
-  async function save(event: FormEvent) { event.preventDefault(); setSaving(true); setError(""); setNotice(""); try { await api.client.updateAssistant(settings); setNotice("Configuração do assistente guardada."); } catch (reason) { setError(reason instanceof Error ? reason.message : "Não foi possível guardar a configuração."); } finally { setSaving(false); } }
+  const [settings, setSettings] = useState<AssistantSettings>({ diretrizes_corporativas: "", base_conhecimento_documentos: "", timeout_humano_minutos: 15 });
+  const [knowledgeFiles, setKnowledgeFiles] = useState<AssistantKnowledgeFile[]>([]);
+  const [busy, setBusy] = useState(true);
+  const [knowledgeBusy, setKnowledgeBusy] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const [deletingId, setDeletingId] = useState("");
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+
+  useEffect(() => {
+    let mounted = true;
+    void Promise.allSettled([api.client.assistant(), api.client.assistantKnowledge()]).then(([settingsResult, knowledgeResult]) => {
+      if (!mounted) return;
+      if (settingsResult.status === "fulfilled") setSettings(settingsResult.value);
+      else setError(settingsResult.reason instanceof Error ? settingsResult.reason.message : (english ? "Unable to load the assistant." : "Não foi possível carregar o assistente."));
+      if (knowledgeResult.status === "fulfilled") setKnowledgeFiles(knowledgeResult.value.files || []);
+      else setError((current) => current || (english ? "Unable to load the knowledge base." : "Não foi possível carregar a base de conhecimento."));
+    }).finally(() => { if (mounted) { setBusy(false); setKnowledgeBusy(false); } });
+    return () => { mounted = false; };
+  }, [english]);
+
+  async function save(event: FormEvent) {
+    event.preventDefault(); setSaving(true); setError(""); setNotice("");
+    try { await api.client.updateAssistant(settings); setNotice(english ? "Assistant configuration saved." : "Configuração do assistente guardada."); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : (english ? "Unable to save the configuration." : "Não foi possível guardar a configuração.")); }
+    finally { setSaving(false); }
+  }
+
+  async function refreshKnowledge() {
+    try { const result = await api.client.assistantKnowledge(); setKnowledgeFiles(result.files || []); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : (english ? "Unable to refresh the knowledge base." : "Não foi possível actualizar a base de conhecimento.")); }
+  }
+
+  async function uploadKnowledge(file?: File) {
+    if (!file) return;
+    setUploading(true); setError(""); setNotice("");
+    try {
+      const result = await api.client.uploadAssistantKnowledge(file);
+      if (result.file) setKnowledgeFiles((current) => [result.file, ...current.filter((item) => item.id !== result.file.id)]);
+      setNotice(english ? `${file.name} is indexed and ready for the assistant.` : `${file.name} foi indexado e já está disponível para o assistente.`);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : (english ? "Unable to process this file." : "Não foi possível processar este ficheiro."));
+      await refreshKnowledge();
+    } finally { setUploading(false); }
+  }
+
+  async function removeKnowledge(file: AssistantKnowledgeFile) {
+    const question = english ? `Remove ${file.file_name} from the knowledge base?` : `Remover ${file.file_name} da base de conhecimento?`;
+    if (!window.confirm(question)) return;
+    setDeletingId(file.id); setError(""); setNotice("");
+    try { await api.client.deleteAssistantKnowledge(file.id); setKnowledgeFiles((current) => current.filter((item) => item.id !== file.id)); setNotice(english ? "File removed from the knowledge base." : "Ficheiro removido da base de conhecimento."); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : (english ? "Unable to remove this file." : "Não foi possível remover este ficheiro.")); }
+    finally { setDeletingId(""); }
+  }
+
+  function formatFileSize(bytes: number) {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
+  function fileIcon(file: AssistantKnowledgeFile) {
+    if ([".png", ".jpg", ".jpeg"].includes(file.extension)) return <ImageIcon size={19} />;
+    if ([".xlsx", ".csv"].includes(file.extension)) return <FileSpreadsheet size={19} />;
+    if (file.extension === ".pptx") return <Presentation size={19} />;
+    if (file.extension === ".docx") return <FileType size={19} />;
+    return <FileText size={19} />;
+  }
+
+  function statusLabel(status: string) {
+    if (status === "indexed") return english ? "Indexed" : "Indexado";
+    if (status === "processing") return english ? "Processing..." : "A processar...";
+    return english ? "Error" : "Erro";
+  }
+
   if (busy) return <div className="content-stack"><LoadingBox /></div>;
-  return <div className="content-stack"><ModuleHeader eyebrow="ASSISTENTE NEGOBOT" title="Configura o teu assistente" description="Define as regras de atendimento, a base de conhecimento e quando uma conversa passa para uma pessoa." />{error && <ErrorBox message={error} />}{notice && <SuccessBox message={notice} />}<form className="data-panel stack-form" onSubmit={save}><div className="panel-heading"><div><span className="eyebrow">PERSONALIDADE E REGRAS</span><h3>Diretrizes corporativas</h3></div><Bot size={20} /></div><textarea rows={7} value={settings.diretrizes_corporativas} onChange={(event) => setSettings({ ...settings, diretrizes_corporativas: event.target.value })} placeholder="Ex.: responde em Português de Moçambique, apresenta preços reais e encaminha pagamentos para validação AutoPay." /><label>Base de conhecimento<textarea rows={8} value={settings.base_conhecimento_documentos} onChange={(event) => setSettings({ ...settings, base_conhecimento_documentos: event.target.value })} placeholder="Produtos, horários, localização, perguntas frequentes e informação que o bot deve conhecer." /></label><label>Timeout para atendimento humano (minutos)<input type="number" min={1} max={240} value={settings.timeout_humano_minutos} onChange={(event) => setSettings({ ...settings, timeout_humano_minutos: Number(event.target.value) })} /></label><div className="model-summary"><strong>{english ? "Active AI engines" : "Motores de IA activos"}</strong><span>{english ? "Text Engine Pro" : "Motor de Texto Pro"}<small>{english ? "For conversations, FAQs and scripts" : "Para conversas, FAQs e roteiros"}</small></span><span>{english ? "Advanced Vision Engine" : "Motor de Visão Avançada"}<small>{english ? "For images and documents" : "Para imagens e documentos"}</small></span></div><button className="primary-button" disabled={saving} type="submit">{saving ? "A guardar..." : "Guardar configuração"}</button></form></div>;
+  return <div className="content-stack"><ModuleHeader eyebrow="ASSISTENTE NEGOBOT" title="Configura o teu assistente" description="Define as regras de atendimento, a base de conhecimento e quando uma conversa passa para uma pessoa." />
+    {error && <ErrorBox message={error} />}{notice && <SuccessBox message={notice} />}
+    <form className="data-panel stack-form" onSubmit={save}>
+      <div className="panel-heading"><div><span className="eyebrow">PERSONALIDADE E REGRAS</span><h3>Diretrizes corporativas</h3></div><Bot size={20} /></div>
+      <textarea rows={7} value={settings.diretrizes_corporativas} onChange={(event) => setSettings({ ...settings, diretrizes_corporativas: event.target.value })} placeholder="Ex.: responde em Português de Moçambique, apresenta preços reais e encaminha pagamentos para validação AutoPay." />
+      <label>{english ? "Manual knowledge notes" : "Notas manuais da base de conhecimento"}<textarea rows={6} value={settings.base_conhecimento_documentos} onChange={(event) => setSettings({ ...settings, base_conhecimento_documentos: event.target.value })} placeholder={english ? "Products, hours, location, FAQs and information the bot should know." : "Produtos, horários, localização, perguntas frequentes e informação que o bot deve conhecer."} /></label>
+      <label>{english ? "Human handoff timeout (minutes)" : "Timeout para atendimento humano (minutos)"}<input type="number" min={1} max={240} value={settings.timeout_humano_minutos} onChange={(event) => setSettings({ ...settings, timeout_humano_minutos: Number(event.target.value) })} /></label>
+      <section className="knowledge-base-section" aria-labelledby="knowledge-base-title">
+        <div className="panel-heading"><div><span className="eyebrow">BASE DE CONHECIMENTO</span><h3 id="knowledge-base-title">{english ? "Support files" : "Ficheiros de suporte"}</h3></div><FileUp size={20} /></div>
+        <p className="knowledge-intro">{english ? "Upload official files so the assistant can use their text, tables and slides when answering customers." : "Carrega ficheiros oficiais para o assistente consultar textos, tabelas e apresentações ao responder aos clientes."}</p>
+        <label className={`knowledge-dropzone${dragging ? " is-dragging" : ""}`} onDragEnter={(event) => { event.preventDefault(); setDragging(true); }} onDragOver={(event) => { event.preventDefault(); setDragging(true); }} onDragLeave={(event) => { if (event.currentTarget === event.target) setDragging(false); }} onDrop={(event) => { event.preventDefault(); setDragging(false); void uploadKnowledge(event.dataTransfer.files?.[0]); }}>
+          <UploadCloud size={26} />
+          <strong>{uploading ? (english ? "Processing file..." : "A processar ficheiro...") : (english ? "Drag a file here or click to select" : "Arrasta um ficheiro aqui ou clica para seleccionar")}</strong>
+          <small>PDF · XLSX · CSV · PPTX · DOCX · PNG · JPG · {english ? "up to 16 MB" : "até 16 MB"}</small>
+          <input type="file" accept=".pdf,.xlsx,.csv,.pptx,.docx,.png,.jpg,.jpeg" disabled={uploading} onChange={(event) => { void uploadKnowledge(event.target.files?.[0]); event.currentTarget.value = ""; }} />
+        </label>
+        {knowledgeBusy ? <LoadingBox /> : knowledgeFiles.length ? <div className="knowledge-file-list">{knowledgeFiles.map((file) => <div className="knowledge-file-row" key={file.id}><div className="knowledge-file-icon">{fileIcon(file)}</div><div className="row-main"><strong title={file.file_name}>{file.file_name}</strong><small>{formatFileSize(file.size_bytes)} · {file.extension.replace(".", "").toUpperCase()} · {file.extracted_chars ? `${file.extracted_chars.toLocaleString()} ${english ? "characters" : "caracteres"}` : ""}</small>{file.error && <small className="knowledge-file-error">{file.error}</small>}</div><span className={`knowledge-status ${file.status}`}>{file.status === "indexed" && <CheckCircle2 size={13} />}{file.status === "processing" && <Loader2 size={13} className="spin" />}{file.status === "error" && <XCircle size={13} />}{statusLabel(file.status)}</span><button className="icon-button" type="button" title={english ? "Remove file" : "Remover ficheiro"} aria-label={english ? `Remove ${file.file_name}` : `Remover ${file.file_name}`} disabled={deletingId === file.id} onClick={() => void removeKnowledge(file)}>{deletingId === file.id ? <Loader2 size={15} className="spin" /> : <Trash2 size={15} />}</button></div>)}</div> : <div className="knowledge-empty">{english ? "No support files indexed yet." : "Ainda não existem ficheiros de suporte indexados."}</div>}
+      </section>
+      <div className="model-summary"><strong>{english ? "Active AI engines" : "Motores de IA activos"}</strong><span>{english ? "Text Engine Pro" : "Motor de Texto Pro"}<small>{english ? "For conversations, FAQs and scripts" : "Para conversas, FAQs e roteiros"}</small></span><span>{english ? "Advanced Vision Engine" : "Motor de Visão Avançada"}<small>{english ? "For images and documents" : "Para imagens e documentos"}</small></span></div>
+      <button className="primary-button" disabled={saving} type="submit">{saving ? (english ? "Saving..." : "A guardar...") : (english ? "Save configuration" : "Guardar configuração")}</button>
+    </form>
+  </div>;
 }
 
 

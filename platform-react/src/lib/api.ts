@@ -346,6 +346,20 @@ export type BusinessProfile = {
   profile_completed?: boolean;
 };
 
+export type AssistantKnowledgeFile = {
+  id: string;
+  file_name: string;
+  size_bytes: number;
+  mime_type: string;
+  extension: string;
+  status: "processing" | "indexed" | "error" | string;
+  error?: string | null;
+  extracted_chars?: number;
+  created_at?: string | null;
+  updated_at?: string | null;
+  indexed_at?: string | null;
+};
+
 export type AssistantSettings = {
   diretrizes_corporativas: string;
   base_conhecimento_documentos: string;
@@ -515,6 +529,9 @@ export const api = {
     updateProfile: (profile: Partial<BusinessProfile>) => request<{ updated: true; fields: string[] }>("/api/platform/client/profile", { method: "PATCH", body: JSON.stringify(profile) }),
     assistant: () => request<AssistantSettings>("/api/platform/client/assistant"),
     updateAssistant: (settings: Partial<AssistantSettings>) => request<{ updated: true }>("/api/platform/client/assistant", { method: "PATCH", body: JSON.stringify(settings) }),
+    assistantKnowledge: () => request<{ files: AssistantKnowledgeFile[]; count: number }>("/api/platform/client/assistant/knowledge"),
+    uploadAssistantKnowledge: (file: File) => { const form = new FormData(); form.append("file", file); return request<{ uploaded?: true; file: AssistantKnowledgeFile }>("/api/platform/client/assistant/knowledge", { method: "POST", body: form }); },
+    deleteAssistantKnowledge: (id: string) => request<{ deleted: true; file_id: string }>(`/api/platform/client/assistant/knowledge/${encodeURIComponent(id)}`, { method: "DELETE" }),
     verifyPayment: (messageText: string, clientPhone: string, addonId?: string) => request<{ processed: true; response: string; state?: string; instance_name?: string | null; qrcode?: string | null }>("/api/platform/client/payments/mpesa/verify", { method: "POST", body: JSON.stringify({ message_text: messageText, client_phone: clientPhone, ...(addonId ? { addon_id: addonId } : {}) }) }),
     paymentHistory: () => request<{ payments: PaymentRecord[] }>("/api/platform/client/payments/history"),
     lemonSqueezyStatus: () => request<LemonSqueezyStatus>("/api/platform/client/payments/lemonsqueezy/status"),
