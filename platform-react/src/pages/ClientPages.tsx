@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { AlertCircle, BarChart3, Bot, Building2, CheckCircle2, CircleDollarSign, Download, FileSpreadsheet, FileText, FileType, FileUp, Image as ImageIcon, LifeBuoy, Loader2, MessageCircle, Pause, Play, Plus, Presentation, QrCode, RefreshCw, Send, ShieldCheck, Smartphone, Sparkles, Trash2, UploadCloud, Users, Video, XCircle } from "lucide-react";
+import { AlertCircle, BarChart3, Bot, Building2, CheckCircle2, CircleDollarSign, Download, FileSpreadsheet, FileText, FileType, FileUp, Image as ImageIcon, LifeBuoy, Loader2, MessageCircle, Mic, Pause, Play, Plus, Presentation, QrCode, RefreshCw, Send, ShieldCheck, Smartphone, Sparkles, Square, Trash2, UploadCloud, Users, Video, XCircle } from "lucide-react";
 import { usePlatformLanguage } from "../lib/platformLanguage";
 import { api, type AssistantKnowledgeFile, type AssistantSettings, type Campaign, type CampaignTemplate, type CampaignSettings, type ClientPlan, type ChatMessage, type Contact, type Conversation, type DeliveryMetrics, type IntegrationStatus, type LemonSqueezyStatus, type PaymentRecord, type Plan, type PlanAddon, type SupportTicket, type TeamMember, type TenantMetrics, type VideoAsset, type VideoJob, type VideoScene, type VideoVisualMode, type WhatsAppGroup } from "../lib/api";
 
@@ -591,6 +591,13 @@ export function VideoPage() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [previewError, setPreviewError] = useState(false);
+  const [recordingSceneId, setRecordingSceneId] = useState<number | null>(null);
+  const [recordingSeconds, setRecordingSeconds] = useState<Record<number, number>>({});
+  const [recordingPreviewUrls, setRecordingPreviewUrls] = useState<Record<number, string>>({});
+  const voiceRecorderRefs = useRef<Record<number, MediaRecorder | null>>({});
+  const voiceStreamRefs = useRef<Record<number, MediaStream | null>>({});
+  const voiceChunksRefs = useRef<Record<number, Blob[]>>({});
+  const voiceTimerRefs = useRef<Record<number, number | null>>({});
   const totalScriptCharacters = scenes.reduce((total, scene) => total + scene.text.length, 0);
   const totalEstimatedDuration = scenes.reduce((total, scene) => total + Math.max(scene.duration_seconds || 3.5, estimateSceneDuration(scene.text)), 0);
   const scriptLimitExceeded = totalScriptCharacters > MAX_VIDEO_TOTAL_SCRIPT_CHARACTERS;
@@ -598,6 +605,11 @@ export function VideoPage() {
 
   useEffect(() => {
     void api.client.videoAssets().then((result) => setAssets(result.assets || [])).catch(() => undefined).finally(() => setAssetsBusy(false));
+  }, []);
+  useEffect(() => () => {
+    Object.values(voiceRecorderRefs.current).forEach((recorder) => { if (recorder?.state === "recording") recorder.stop(); });
+    Object.values(voiceStreamRefs.current).forEach((stream) => stream?.getTracks().forEach((track) => track.stop()));
+    Object.values(voiceTimerRefs.current).forEach((timer) => { if (timer !== null) window.clearInterval(timer); });
   }, []);
   useEffect(() => {
     if (!job?.id || ["completed", "deleted", "failed"].includes(job.status || "")) return;
@@ -612,6 +624,64 @@ export function VideoPage() {
     setScenes((current) => [...current, { id: Math.max(0, ...current.map((scene) => scene.id)) + 1, text: "", duration_seconds: 3.5, visual_mode: "ai_media", voice: language.startsWith("pt") ? "pt_mz_male" : "en_us_male", subtitles: true }]);
   }
   function removeScene(id: number) { setScenes((current) => current.length <= 1 ? current : current.filter((scene) => scene.id !== id)); }
+  function supportedRecordingMime() {
+    if (typeof MediaRecorder === "undefined") return "";
+    return ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus", "audio/mp4"].find((mime) => MediaRecorder.isTypeSupported(mime)) || "";
+  }
+  async function startVoiceRecording(sceneId: number) {
+    if (recordingSceneId !== null) return;
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+      setError(english ? "Voice recording is not supported by this browser." : "Este navegador não suporta gravação de voz.");
+      return;
+    }
+    setError(""); setNotice("");
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = supportedRecordingMime();
+      const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+      voiceStreamRefs.current[sceneId] = stream;
+      voiceChunksRefs.current[sceneId] = [];
+      voiceRecorderRefs.current[sceneId] = recorder;
+      recorder.ondataavailable = (event) => { if (event.data.size > 0) voiceChunksRefs.current[sceneId]?.push(event.data); };
+      recorder.onstop = () => {
+        stream.getTracks().forEach((track) => track.stop());
+        const chunks = voiceChunksRefs.current[sceneId] || [];
+        const blob = new Blob(chunks, { type: recorder.mimeType || mimeType || "audio/webm" });
+        const extension = blob.type.includes("ogg") ? "ogg" : blob.type.includes("mp4") ? "m4a" : "webm";
+        const file = new File([blob], `voz-cena-${sceneId}.${extension}`, { type: blob.type });
+        const previewUrl = URL.createObjectURL(blob);
+        setRecordingPreviewUrls((current) => { if (current[sceneId]) URL.revokeObjectURL(current[sceneId]); return { ...current, [sceneId]: previewUrl }; });
+        voiceRecorderRefs.current[sceneId] = null;
+        voiceStreamRefs.current[sceneId] = null;
+        void uploadForScene(sceneId, file, "voice");
+      };
+      recorder.start(250);
+      setRecordingSeconds((current) => ({ ...current, [sceneId]: 0 }));
+      voiceTimerRefs.current[sceneId] = window.setInterval(() => setRecordingSeconds((current) => ({ ...current, [sceneId]: (current[sceneId] || 0) + 1 })), 1000);
+      setRecordingSceneId(sceneId);
+    } catch (reason) {
+      setError(english ? "Microphone access was denied or is unavailable." : "O acesso ao microfone foi recusado ou não está disponível.");
+    }
+  }
+  function stopVoiceRecording(sceneId: number) {
+    const recorder = voiceRecorderRefs.current[sceneId];
+    const timer = voiceTimerRefs.current[sceneId];
+    if (timer !== null && timer !== undefined) window.clearInterval(timer);
+    voiceTimerRefs.current[sceneId] = null;
+    setRecordingSceneId(null);
+    if (recorder?.state === "recording") recorder.stop();
+  }
+  async function removeVoiceSample(sceneId: number) {
+    const scene = scenes.find((item) => item.id === sceneId);
+    if (!scene) return;
+    setError(""); setNotice("");
+    try {
+      if (scene.voiceSample?.id) await api.client.deleteVideoAsset(scene.voiceSample.id);
+      setRecordingPreviewUrls((current) => { if (current[sceneId]) URL.revokeObjectURL(current[sceneId]); const next = { ...current }; delete next[sceneId]; return next; });
+      updateScene(sceneId, { voice_sample_url: undefined, voice_sample_mime: undefined, voiceSample: undefined });
+      setNotice(english ? "The voice sample was removed from this scene." : "A amostra de voz foi removida desta cena.");
+    } catch (reason) { setError(reason instanceof Error ? reason.message : (english ? "The voice sample could not be removed." : "Não foi possível remover a amostra de voz.")); }
+  }
   async function uploadForScene(sceneId: number, file: File, assetRole: "media" | "voice") {
     if (!file) return;
     setUploading(`${sceneId}:${assetRole}`); setError(""); setNotice("");
@@ -686,8 +756,9 @@ export function VideoPage() {
       {scene.visual_mode === "upload_media" && <div className={`scene-dropzone ${draggingScene === scene.id ? "is-dragging" : ""}`} role="button" tabIndex={0} aria-label={english ? "Upload scene video or image" : "Carregar vídeo ou imagem da cena"} onClick={() => mediaInputRefs.current[scene.id]?.click()} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); mediaInputRefs.current[scene.id]?.click(); } }} onDragEnter={(event) => handleDragEnter(scene.id, event)} onDragOver={(event) => handleDragOver(scene.id, event)} onDragLeave={(event) => handleDragLeave(scene.id, event)} onDrop={(event) => handleDrop(scene.id, event)}><UploadCloud size={19} /><strong>{uploading === `${scene.id}:media` ? (english ? "Uploading..." : "A carregar...") : scene.media?.file_name || (english ? "Drop a video or image here" : "Arrasta um vídeo ou imagem para aqui")}</strong><small>{scene.media ? formatVideoBytes(scene.media.size_bytes) : (english ? "or click to choose · MP4, MOV, WEBM, PNG, JPG" : "ou clica para seleccionar · MP4, MOV, WEBM, PNG, JPG")}</small><input ref={(element) => { mediaInputRefs.current[scene.id] = element; }} type="file" accept={mediaAccept} disabled={uploading === `${scene.id}:media`} onClick={(event) => event.stopPropagation()} onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadForScene(scene.id, file, "media"); event.currentTarget.value = ""; }} /></div>}
       {scene.visual_mode === "ai_media" && <div className="scene-option-hint"><Sparkles size={16} />{english ? "The worker generates a vertical AI background from this scene text, with Pexels fallback." : "O worker gera um fundo vertical por IA a partir do texto, com fallback Pexels."}</div>}
       <div className="scene-grid-two"><label>{english ? "Voice" : "Voz"}<select value={scene.voice || ""} onChange={(event) => updateScene(scene.id, { voice: event.target.value || undefined })}><option value="">{english ? "Default voice" : "Voz padrão"}</option>{VIDEO_VOICES.map((voice) => <option key={voice.value} value={voice.value}>{english ? voice.en : voice.pt}</option>)}</select></label><label className="toggle-field"><span>{english ? "Animated subtitles" : "Legendas dinâmicas"}<small>{english ? "Show word-level captions" : "Mostrar legendas sincronizadas"}</small></span><input type="checkbox" checked={scene.subtitles !== false} onChange={(event) => updateScene(scene.id, { subtitles: event.target.checked })} /></label></div>
-      <label className="scene-upload-inline"><span><FileUp size={15} />{scene.voiceSample?.file_name || (english ? "Clone voice with MP3/WAV sample" : "Clonar voz com amostra MP3/WAV")}</span><input type="file" accept={voiceAccept} disabled={uploading === `${scene.id}:voice`} onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadForScene(scene.id, file, "voice"); event.currentTarget.value = ""; }} /></label>
-      {scene.voiceSample && <small className="muted">{english ? "Voice sample attached" : "Amostra de voz associada"} · {formatVideoBytes(scene.voiceSample.size_bytes)}</small>}
+      <div className="voice-recording-panel"><div className="voice-recording-controls"><button type="button" className={`recording-button ${recordingSceneId === scene.id ? "is-recording" : ""}`} onClick={() => recordingSceneId === scene.id ? stopVoiceRecording(scene.id) : void startVoiceRecording(scene.id)} disabled={Boolean(uploading) || (recordingSceneId !== null && recordingSceneId !== scene.id)}>{recordingSceneId === scene.id ? <Square size={14} /> : <Mic size={15} />}{recordingSceneId === scene.id ? (english ? `Stop recording · ${recordingSeconds[scene.id] || 0}s` : `Parar gravação · ${recordingSeconds[scene.id] || 0}s`) : (english ? "Record voice sample" : "Gravar amostra de voz")}</button>{recordingPreviewUrls[scene.id] && <audio controls preload="metadata" src={recordingPreviewUrls[scene.id]} aria-label={english ? "Recorded voice sample" : "Amostra de voz gravada"} />}</div><small className="muted">{english ? "Allow microphone access, record a clear sample, then it is uploaded for voice cloning." : "Permite o microfone, grava uma amostra nítida e ela será carregada para clonagem de voz."}</small></div>
+      <label className="scene-upload-inline"><span><FileUp size={15} />{scene.voiceSample?.file_name || (english ? "Or choose an MP3/WAV sample" : "Ou escolhe uma amostra MP3/WAV")}</span><input type="file" accept={voiceAccept} disabled={Boolean(uploading)} onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadForScene(scene.id, file, "voice"); event.currentTarget.value = ""; }} /></label>
+      {scene.voiceSample && <div className="voice-sample-attached"><small className="muted">{english ? "Voice sample attached" : "Amostra de voz associada"} · {formatVideoBytes(scene.voiceSample.size_bytes)}</small><button type="button" className="ghost-button compact" onClick={() => void removeVoiceSample(scene.id)} disabled={Boolean(uploading)}><Trash2 size={13} />{english ? "Remove sample" : "Remover amostra"}</button></div>}
     </div>;
   }
   return <div className="content-stack"><ModuleHeader eyebrow="VÍDEOS CURTOS" title="Cria vídeos verticais com IA" description="Transforma um roteiro em cenas 9:16 e acompanha a renderização no worker persistente." action={<div className="live-pill"><span className="status-dot" /> Fila assíncrona</div>} />{error && <ErrorBox message={error} />}{notice && <SuccessBox message={notice} />}<div className="module-grid two"><section className="data-panel"><div className="panel-heading"><div><span className="eyebrow">NOVO VÍDEO</span><h3>Roteiro por cenas</h3></div><Video size={19} /></div><form className="stack-form compact-form" onSubmit={create}><label>Título<input value={title} onChange={(event) => setTitle(event.target.value)} required minLength={2} maxLength={160} placeholder="Oferta especial de agosto" /></label><div className="scene-grid-two"><label>Idioma<select value={language} onChange={(event) => setLanguage(event.target.value)}><option value="pt-MZ">Português de Moçambique</option><option value="en">English</option></select></label><label>{english ? "Scene transition" : "Transição entre cenas"}<select value={transition} onChange={(event) => setTransition(event.target.value as "cut" | "fade")}><option value="fade">{english ? "Soft fade" : "Fade suave"}</option><option value="cut">{english ? "Quick cut" : "Corte rápido"}</option></select></label></div><fieldset className="scene-list"><legend>{english ? "Scenes" : "Cenas"}</legend><small className="muted">{english ? "Choose the visual source, voice and animated subtitles for every scene." : "Escolhe a fonte visual, a voz e as legendas animadas de cada cena."}</small>{scenes.map(renderSceneOptions)}<button type="button" className="secondary-button compact" onClick={addScene} disabled={scenes.length >= 20}><Plus size={15} />{english ? "Add new scene" : "Adicionar nova cena"}</button></fieldset><small className={`video-limit-summary ${scriptLimitExceeded || durationLimitExceeded ? "video-limit-warning" : ""}`}>{english ? `${totalScriptCharacters.toLocaleString()} / ${MAX_VIDEO_TOTAL_SCRIPT_CHARACTERS.toLocaleString()} characters · estimated video ${totalEstimatedDuration.toFixed(1)}s / ${MAX_VIDEO_TOTAL_DURATION_SECONDS}s. Maximum: 5,000 characters / 300 seconds (about 5 minutes).` : `${totalScriptCharacters.toLocaleString("pt-MZ")} / ${MAX_VIDEO_TOTAL_SCRIPT_CHARACTERS.toLocaleString("pt-MZ")} caracteres · vídeo estimado em ${totalEstimatedDuration.toFixed(1)}s / ${MAX_VIDEO_TOTAL_DURATION_SECONDS}s. Máximo: 5.000 caracteres / 300 segundos (cerca de 5 minutos).`}</small><small className="muted">{assetsBusy ? (english ? "Loading your media library..." : "A carregar a tua biblioteca de media...") : `${assets.length} ${english ? "media assets available for this tenant." : "media disponíveis para este tenant."}`}</small><button className="primary-button" disabled={saving || Boolean(uploading) || scriptLimitExceeded || durationLimitExceeded} type="submit">{saving ? (english ? "Queueing..." : "A colocar na fila...") : (english ? "Render video" : "Renderizar vídeo")}</button></form></section><section className="data-panel"><div className="panel-heading"><div><span className="eyebrow">ESTADO DO JOB</span><h3>{job?.title || "Nenhum job ativo"}</h3></div><Video size={19} /></div>{job ? <div className="content-stack"><div className="stat-card blue"><div className="stat-top"><span>Estado</span><span className="status-badge">{job.status || "queued"}</span></div><strong>{job.progress || 0}%</strong><small>{english ? "Scene-by-scene rendering progress" : "Progresso da renderização por cenas"}</small></div>{job.error && <ErrorBox message={job.error} />}{job.status === "completed" && job.output_available !== false && <div className="video-preview-card"><div className="video-preview-heading"><div><span className="eyebrow">{english ? "PREVIEW" : "PRÉ-VISUALIZAÇÃO"}</span><strong>{english ? "Watch your video" : "Visualiza o teu vídeo"}</strong></div><Video size={18} /></div><video className="video-preview" controls playsInline preload="metadata" src={api.client.videoPreviewUrl(job.id)} aria-label={english ? "Generated video preview" : "Pré-visualização do vídeo gerado"} onError={() => setPreviewError(true)} />{previewError && <p className="muted">{english ? "The preview could not be loaded. Try again or download the video." : "Não foi possível carregar a pré-visualização. Tenta novamente ou baixa o vídeo."}</p>}</div>}{job.status === "completed" && <div className="payment-instruction"><div className="quick-icon"><CheckCircle2 size={20} /></div><div><strong>{english ? "Video ready" : "Vídeo pronto"}</strong><p>{english ? "Download the file to your device before publishing. The temporary server copy is deleted after a complete transfer." : "Baixa o ficheiro para o teu dispositivo antes de publicar. A cópia temporária é eliminada depois da transferência completa."}</p><div className="row-actions"><button className="primary-button compact" type="button" onClick={() => void downloadVideo()} disabled={job.output_available === false}><Download size={16} />{english ? "Download video" : "Baixar vídeo"}</button><button className="ghost-button" type="button" onClick={() => void deleteVideo()} disabled={job.output_available === false}><Trash2 size={16} />{english ? "Delete from server" : "Apagar do servidor"}</button></div></div></div>}{job.status === "deleted" && <div className="payment-instruction"><div className="quick-icon"><CheckCircle2 size={20} /></div><div><strong>{english ? "Server copy deleted" : "Cópia do servidor eliminada"}</strong><p>{english ? "Use the copy saved on your device to publish on your social networks." : "Usa a cópia guardada no teu dispositivo para publicar nas tuas redes sociais."}</p></div></div>}{job.status !== "completed" && job.status !== "deleted" && job.status !== "failed" && <div className="loading-box"><Loader2 size={18} className="spin" /> {english ? "Processing on the server..." : "A processar no servidor..."}</div>}</div> : <div className="empty-state">{english ? "Create a script to start rendering." : "Cria um roteiro para iniciar a renderização."}</div>}</section></div></div>;

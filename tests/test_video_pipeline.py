@@ -106,6 +106,20 @@ class VideoPipelineTests(unittest.TestCase):
         self.assertEqual(len(job.scenes[0].text), len(text))
         self.assertEqual(video_pipeline._scene_text(job.scenes[0].model_dump(), job.model_dump()), text)
 
+    def test_recorded_webm_voice_sample_is_normalised_to_wav(self):
+        with tempfile.TemporaryDirectory() as directory:
+            sample = Path(directory) / "voice.webm"
+            sample.write_bytes(b"webm")
+
+            def fake_run(command, timeout=None):
+                Path(command[-1]).write_bytes(b"wav")
+
+            with patch.object(video_pipeline, "_run", side_effect=fake_run) as run:
+                result = video_pipeline._normalise_voice_sample(sample)
+            self.assertEqual(result.suffix, ".wav")
+            self.assertTrue(result.is_file())
+            self.assertEqual(run.call_args.args[0][0:3], ["ffmpeg", "-y", "-i"])
+
     def test_effective_scene_duration_follows_real_audio_without_truncation(self):
         self.assertEqual(video_pipeline._effective_scene_duration(3.5, 18.75), 19.0)
         self.assertEqual(video_pipeline._effective_scene_duration(30, 18.75), 30.0)

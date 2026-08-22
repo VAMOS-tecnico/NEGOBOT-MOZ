@@ -281,7 +281,18 @@ def _elevenlabs_key() -> str:
     return str(os.getenv("ELEVENLABS_API_KEY") or "").strip()
 
 
+def _normalise_voice_sample(sample_path: Path) -> Path:
+    if sample_path.suffix.lower() not in {".webm", ".ogg", ".m4a"}:
+        return sample_path
+    converted = sample_path.with_suffix(".wav")
+    _run(["ffmpeg", "-y", "-i", str(sample_path), "-vn", "-ac", "1", "-ar", "44100", str(converted)], timeout=120)
+    if not converted.exists() or converted.stat().st_size == 0:
+        raise VoiceCloneError("A gravação não produziu um áudio WAV válido.")
+    return converted
+
+
 def _clone_voice(sample_path: Path, voice_name: str) -> str:
+    sample_path = _normalise_voice_sample(sample_path)
     api_key = _elevenlabs_key()
     if not api_key:
         raise VoiceCloneError("ELEVENLABS_API_KEY não está configurada para clonagem de voz.")
@@ -639,7 +650,7 @@ def render_job(job: dict[str, Any], output_dir: str, progress_callback: Any | No
             sample_url = str(scene.get("voice_sample_url") or "").strip()
             if sample_url:
                 sample_mime = str(scene.get("voice_sample_mime") or "audio/mpeg").lower()
-                sample_suffix = ".wav" if sample_mime == "audio/wav" else ".mp3"
+                sample_suffix = {"audio/wav": ".wav", "audio/webm": ".webm", "audio/ogg": ".ogg", "audio/mp4": ".m4a"}.get(sample_mime, ".mp3")
                 sample = _download_asset(sample_url, job_dir / f"voice-sample-{index:03d}{sample_suffix}", headers=_internal_asset_headers(job))
             has_audio = False
             text = _scene_text(scene, job)

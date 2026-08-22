@@ -523,9 +523,17 @@ select:focus { border-color: rgba(98, 226, 171, .7); box-shadow: 0 0 0 3px rgba(
 .toggle-field > span { display: grid; gap: 3px; color: #c7ead4; font-size: 11px; }
 .toggle-field small { color: #78998a; font-size: 9px; }
 .toggle-field input { width: 16px; height: 16px; accent-color: #62e2ab; }
+.voice-recording-panel { display: grid; gap: 7px; padding: 10px; border: 1px solid rgba(117, 173, 148, .14); border-radius: 10px; background: rgba(5, 15, 12, .2); }
+.voice-recording-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.recording-button { display: inline-flex; align-items: center; gap: 6px; padding: 8px 10px; border: 1px solid rgba(98, 226, 171, .28); border-radius: 8px; color: #b9e9c9; background: rgba(67, 180, 127, .1); cursor: pointer; font-size: 10px; font-weight: 600; }
+.recording-button:hover, .recording-button:focus-visible { border-color: rgba(98, 226, 171, .75); background: rgba(67, 180, 127, .18); }
+.recording-button.is-recording { border-color: rgba(255, 126, 116, .72); color: #ffd4cf; background: rgba(176, 51, 57, .22); }
+.recording-button:disabled { cursor: not-allowed; opacity: .55; }
+.voice-recording-controls audio { width: min(100%, 240px); height: 30px; }
+.voice-sample-attached { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .scene-upload-inline { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 9px 10px; border: 1px solid rgba(117, 173, 148, .14); border-radius: 9px; color: #9cc4ad; background: rgba(5, 15, 12, .2); cursor: pointer; font-size: 10px; }
 .scene-upload-inline > span { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
 .scene-upload-inline > span svg { flex: 0 0 auto; }
 .scene-upload-inline input { width: 92px; min-width: 0; border: 0; color: #78998a; background: transparent; font-size: 9px; }
 .scene-upload-inline input::file-selector-button { padding: 5px 7px; border: 1px solid rgba(98, 226, 171, .18); border-radius: 7px; color: #b9e9c9; background: rgba(67, 180, 127, .1); cursor: pointer; font-size: 9px; }
-@media (max-width: 680px) { .scene-grid-two { grid-template-columns: 1fr; } .scene-upload-inline { align-items: flex-start; flex-direction: column; } .scene-upload-inline input { width: 100%; } }
+@media (max-width: 680px) { .scene-grid-two { grid-template-columns: 1fr; } .scene-upload-inline { align-items: flex-start; flex-direction: column; } .scene-upload-inline input { width: 100%; } .voice-sample-attached { align-items: flex-start; flex-direction: column; } }

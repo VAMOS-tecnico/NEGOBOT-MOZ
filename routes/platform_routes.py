@@ -2736,6 +2736,8 @@ _VIDEO_ASSET_EXTENSIONS = {
     ".jpeg": ("image", "image/jpeg"),
     ".mp3": ("audio", "audio/mpeg"),
     ".wav": ("audio", "audio/wav"),
+    ".ogg": ("audio", "audio/ogg"),
+    ".m4a": ("audio", "audio/mp4"),
 }
 _VIDEO_ASSET_MAX_BYTES = 16 * 1024 * 1024
 
@@ -2781,7 +2783,7 @@ def upload_video_asset():
     if uploaded is None or not filename:
         return jsonify({"error": "Selecciona um ficheiro de media."}), 400
     if extension not in _VIDEO_ASSET_EXTENSIONS:
-        return jsonify({"error": "Formato não suportado. Usa MP4, MOV, WEBM, PNG, JPG, JPEG, MP3 ou WAV."}), 400
+        return jsonify({"error": "Formato não suportado. Usa MP4, MOV, WEBM, PNG, JPG, JPEG, MP3, WAV, OGG ou M4A."}), 400
     content = uploaded.read(_VIDEO_ASSET_MAX_BYTES + 1)
     if len(content) > _VIDEO_ASSET_MAX_BYTES:
         return jsonify({"error": "O ficheiro excede o limite de 16 MB."}), 413
@@ -2789,6 +2791,8 @@ def upload_video_asset():
         return jsonify({"error": "O ficheiro está vazio."}), 400
     kind, fallback_mime = _VIDEO_ASSET_EXTENSIONS[extension]
     mime_type = str(uploaded.mimetype or fallback_mime).lower()
+    if extension == ".webm" and mime_type.startswith("audio/"):
+        kind, fallback_mime = "audio", "audio/webm"
     if not (mime_type.startswith(f"{kind}/") or mime_type == fallback_mime):
         mime_type = fallback_mime
     asset_id = secrets.token_urlsafe(18)

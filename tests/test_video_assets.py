@@ -32,6 +32,18 @@ class VideoAssetRouteTests(unittest.TestCase):
         self.assertEqual(stored["tenant_id"], "tenant-video-a")
         self.assertNotIn("fake-video", repr(stored))
 
+    def test_recorded_webm_is_stored_as_audio_asset(self):
+        with patch.dict(os.environ, {"VIDEO_ASSET_BASE_URL": "https://app.example"}, clear=False), patch.object(platform_routes, "store_blob", return_value="local:video-assets/tenant-video-a/asset-b/voice.webm"):
+            response = self.client.post(
+                "/api/platform/client/videos/assets",
+                data={"file": (io.BytesIO(b"fake-audio"), "voice.webm", "audio/webm")},
+                content_type="multipart/form-data",
+            )
+        self.assertEqual(response.status_code, 201)
+        asset = response.get_json()["asset"]
+        self.assertEqual(asset["kind"], "audio")
+        self.assertEqual(asset["mime_type"], "audio/webm")
+
     def test_internal_stream_requires_service_token_and_matching_tenant(self):
         collection = self.db.collection("video_assets")
         collection.document("asset-a").set({"tenant_id": "tenant-video-a", "file_name": "clip.mp4", "mime_type": "video/mp4", "storage_key": "local:clip"})
