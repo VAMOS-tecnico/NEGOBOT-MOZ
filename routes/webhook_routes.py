@@ -7,6 +7,7 @@ from flask import Blueprint, request
 from config import Config
 import extensions
 from services.evolution_service import notificar_erro_admin, send_whatsapp, transcrever_audio_mensagem
+from services.evolution_instance_cleanup import delete_disconnected_instance
 from services.incoming_queue import enqueue_incoming_event
 from services.trial_service import ACTIVE_STATUS, PENDING_STATUS, active_fields, is_paid_plan
 from services.central_account_service import central_account_id_for_tenant, claim_trial_for_account, registry_is_expired, registry_status, trial_fields_from_registry
@@ -182,7 +183,8 @@ def _handle_connection_update(data: dict) -> None:
         _mark_trial_connection_open(instance_name, data)
     elif state in {"close", "connecting", "qr", "refused"}:
         archived = archive_groups_for_instance(instance_name, reason=f"whatsapp_{state}")
-        logger.info("Estado WhatsApp instance=%s state=%s; %d grupo(s) arquivado(s)", instance_name, state, archived)
+        deleted = delete_disconnected_instance(instance_name, state)
+        logger.info("Estado WhatsApp instance=%s state=%s; %d grupo(s) arquivado(s); instance_deleted=%s", instance_name, state, archived, deleted)
 
 
 def processar_webhook_background(data):

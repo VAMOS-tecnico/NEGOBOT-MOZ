@@ -14,6 +14,7 @@ except ImportError:  # instalado no container pelo requirements.txt
     redis = None
 
 from routes.webhook_routes import processar_webhook_background
+from services.evolution_instance_cleanup import cleanup_orphan_instances
 from services.group_automation_service import purge_archived_groups
 from services.incoming_queue import OMNICHANNEL_QUEUE_NAME, QUEUE_NAME
 from services.service_config import enforce_profile
@@ -107,11 +108,17 @@ def main() -> None:
         now = time.time()
         if now - last_group_cleanup >= 300:
             try:
-                removed = purge_archived_groups()
-                if removed:
-                    logger.info("Limpeza de grupos arquivados: %d documento(s) removido(s)", removed)
+                removed_groups = purge_archived_groups()
+                if removed_groups:
+                    logger.info("Limpeza de grupos arquivados: %d documento(s) removido(s)", removed_groups)
             except Exception:
                 logger.exception("Falha na limpeza de grupos arquivados; o consumo continua")
+            try:
+                instance_cleanup = cleanup_orphan_instances()
+                if instance_cleanup.get("deleted") or instance_cleanup.get("failed"):
+                    logger.info("Limpeza Evolution: %s", instance_cleanup)
+            except Exception:
+                logger.exception("Falha na limpeza de instâncias Evolution; o consumo continua")
             last_group_cleanup = now
         item = client.blpop([QUEUE_NAME, OMNICHANNEL_QUEUE_NAME], timeout=30)
         if item:
