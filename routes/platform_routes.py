@@ -1453,6 +1453,67 @@ def _clean_chat_target(value: str) -> str:
     return re.sub(r"\D", "", raw)
 
 
+def _chat_target_from_evolution(chat: dict[str, Any]) -> str:
+    """Extract a complete WhatsApp JID/number, never a short @lid or display fragment."""
+    candidates: list[Any] = [
+        chat.get("remoteJid"),
+        chat.get("jid"),
+        chat.get("id"),
+        chat.get("phone"),
+        chat.get("number"),
+        chat.get("phoneNumber"),
+    ]
+    for nested in (
+        chat.get("key"),
+        chat.get("lastMessage"),
+        chat.get("contact"),
+        chat.get("profile"),
+    ):
+        if isinstance(nested, dict):
+            candidates.extend([
+                nested.get("remoteJid"),
+                nested.get("jid"),
+                nested.get("id"),
+                nested.get("phone"),
+                nested.get("number"),
+                nested.get("phoneNumber"),
+                (nested.get("key") or {}).get("remoteJid") if isinstance(nested.get("key"), dict) else None,
+            ])
+    for candidate in candidates:
+        raw = str(candidate or "").strip()
+        if raw.endswith("@g.us"):
+            return raw
+        cleaned = _clean_chat_target(raw)
+        if len(cleaned) >= 8:
+            return cleaned
+    return ""
+
+
+def _real_chat_name(*values: Any) -> str:
+    """Return a provider/user name, ignoring placeholders created by old sync code."""
+    placeholders = {"contacto", "contact", "cliente", "customer", "unknown", "undefined", "null", "sem nome"}
+    for value in values:
+        name = str(value or "").strip()
+        if name and name.casefold() not in placeholders:
+            return name
+    return ""
+
+
+def _chat_display_name(chat: dict[str, Any]) -> str:
+    contact = chat.get("contact") if isinstance(chat.get("contact"), dict) else {}
+    profile = chat.get("profile") if isinstance(chat.get("profile"), dict) else {}
+    return _real_chat_name(
+        chat.get("name"),
+        chat.get("pushName"),
+        chat.get("subject"),
+        chat.get("displayName"),
+        contact.get("name"),
+        contact.get("pushName"),
+        profile.get("name"),
+        profile.get("pushName"),
+    )
+
+
 def _serialize_chat_message(document: Any, data: dict[str, Any]) -> dict[str, Any]:
     stamp = data.get("timestamp") or data.get("created_at") or data.get("updated_at")
     if hasattr(stamp, "isoformat"):
@@ -1474,19 +1535,19 @@ def _tenant_chat_contacts(tenant_id: str) -> dict[str, dict[str, Any]]:
     contacts: dict[str, dict[str, Any]] = {}
     for contact_doc in db.collection("contacts").where("tenant_id", "==", tenant_id).limit(5000).stream():
         data = contact_doc.to_dict() or {}
-        normalized = re.sub(r"\D", "", str(data.get("phone") or data.get("telefone") or ""))
-        if normalized:
+        normalized = _clean_chat_target(str(data.get("phone") or data.get("telefone") or ""))
+        if normalized and not normalized.endswith("@g.us") and len(normalized) >= 8:
             contacts[normalized] = {
                 "id": contact_doc.id,
-                "name": str(data.get("name") or data.get("nome") or "").strip(),
+                "name": _real_chat_name(data.get("name"), data.get("nome"), data.get("pushName")),
             }
     base_contacts = db.collection("clientes_bot").document(tenant_id).collection("base_contactos").limit(5000).stream()
     for contact_doc in base_contacts:
         data = contact_doc.to_dict() or {}
-        normalized = re.sub(r"\D", "", str(data.get("phone") or data.get("telefone") or contact_doc.id or ""))
-        if not normalized or normalized.endswith("@g.us"):
+        normalized = _clean_chat_target(str(data.get("phone") or data.get("telefone") or contact_doc.id or ""))
+        if not normalized or normalized.endswith("@g.us") or len(normalized) < 8:
             continue
-        name = str(data.get("name") or data.get("nome") or data.get("pushName") or "").strip()
+        name = _real_chat_name(data.get("name"), data.get("nome"), data.get("pushName"), data.get("display_name"))
         current = contacts.get(normalized)
         if current is None or not current.get("name"):
             contacts[normalized] = {"id": contact_doc.id, "name": name}
@@ -1505,7 +1566,7 @@ def list_conversations():
         by_phone[phone] = {
             "id": phone,
             "phone": phone,
-            "name": str(contact.get("name") or "Contacto").strip() or "Contacto",
+            "name": _real_chat_name(contact.get("name")) or phone,
             "last_message": "",
             "last_interaction": None,
             "status_atendimento": "bot",
@@ -1514,8 +1575,7 @@ def list_conversations():
         }
     if instance_name and get_connection_state(instance_name) == "open":
         for chat in listar_chats_whatsapp(instance_name):
-            jid = str(chat.get("id") or chat.get("remoteJid") or "").strip()
-            phone = _clean_chat_target(jid)
+            phone = _chat_target_from_evolution(chat)
             if not phone:
                 continue
             last_message_data = chat.get("lastMessage") or chat.get("last_message") or {}
@@ -1535,7 +1595,7 @@ def list_conversations():
             by_phone.setdefault(phone, {
                 "id": phone,
                 "phone": phone,
-                "name": str(chat.get("name") or chat.get("pushName") or chat.get("subject") or contacts.get(phone, {}).get("name") or "Contacto").strip() or "Contacto",
+                "name": _chat_display_name(chat) or _real_chat_name(contacts.get(phone, {}).get("name")) or phone,
                 "last_message": last_message,
                 "last_interaction": str(last_interaction) if last_interaction else None,
                 "status_atendimento": "bot",
@@ -1546,7 +1606,7 @@ def list_conversations():
         for document in source.limit(5000).stream():
             data = document.to_dict() or {}
             phone = _clean_chat_target(document.id)
-            if not phone:
+            if not phone or (not phone.endswith("@g.us") and len(phone) < 8):
                 continue
             existing = by_phone.get(phone, {})
             last_message = str(data.get("ultima_mensagem") or data.get("last_message") or existing.get("last_message") or "").strip()
@@ -1557,7 +1617,7 @@ def list_conversations():
                 **existing,
                 "id": phone,
                 "phone": phone,
-                "name": str(data.get("name") or contacts.get(phone, {}).get("name") or existing.get("name") or "Contacto").strip(),
+                "name": _real_chat_name(data.get("name"), contacts.get(phone, {}).get("name"), existing.get("name")) or phone,
                 "last_message": last_message,
                 "last_interaction": str(last_interaction) if last_interaction else None,
                 "status_atendimento": data.get("status_atendimento") or existing.get("status_atendimento") or "bot",

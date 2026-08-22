@@ -7,6 +7,15 @@ function normalizePhone(value: string) {
   return value.endsWith("@g.us") ? value : value.replace(/\D/g, "");
 }
 
+function validAddress(value: string) {
+  const normalized = normalizePhone(value);
+  return normalized.endsWith("@g.us") || normalized.length >= 8;
+}
+
+function isPlaceholderName(value?: string) {
+  return !value || ["contacto", "contact", "cliente", "customer", "unknown", "undefined", "null", "sem nome"].includes(value.trim().toLowerCase());
+}
+
 function displayName(item: Contact | WhatsAppGroup | Conversation) {
   if ("group_jid" in item) return item.name || item.group_jid;
   return item.name || item.phone || "Contact";
@@ -59,23 +68,32 @@ export function ChatPage() {
 
   const conversationByPhone = useMemo(() => new Map(conversations.map((item) => [normalizePhone(item.phone || item.id || ""), item])), [conversations]);
   const directoryContacts = useMemo(() => {
-    const byPhone = new Map(contacts.map((item) => [normalizePhone(item.phone), item]));
+    const byPhone = new Map<string, Contact>();
+    for (const item of contacts) {
+      const phone = normalizePhone(item.phone);
+      if (!validAddress(item.phone) || phone.endsWith("@g.us")) continue;
+      byPhone.set(phone, { ...item, phone, name: isPlaceholderName(item.name) ? phone : item.name });
+    }
     for (const conversation of conversations) {
       const phone = normalizePhone(conversation.phone || conversation.id || "");
-      if (!phone || phone.endsWith("@g.us") || byPhone.has(phone)) continue;
-      byPhone.set(phone, { id: conversation.id || phone, name: conversation.name || phone, phone });
+      if (!validAddress(phone) || phone.endsWith("@g.us")) continue;
+      const existing = byPhone.get(phone);
+      const name = conversation.name || phone;
+      if (!existing || isPlaceholderName(existing.name)) {
+        byPhone.set(phone, { id: conversation.id || phone, name: isPlaceholderName(name) ? phone : name, phone });
+      }
     }
     return [...byPhone.values()];
   }, [contacts, conversations]);
   const directoryGroups = useMemo(() => {
-    const byJid = new Map(groups.map((item) => [item.group_jid, item]));
+    const byJid = new Map(groups.filter((item) => item.group_jid.endsWith("@g.us")).map((item) => [item.group_jid, item]));
     for (const conversation of conversations) {
       const groupJid = conversation.phone || conversation.id || "";
       if (!groupJid.endsWith("@g.us") || byJid.has(groupJid)) continue;
       byJid.set(groupJid, {
         id: conversation.id || groupJid,
         group_jid: groupJid,
-        name: conversation.name || groupJid,
+        name: isPlaceholderName(conversation.name) ? groupJid : conversation.name || groupJid,
         admin_verified: false,
         status: "historical",
       });
