@@ -166,7 +166,8 @@ def _mark_trial_connection_open(instance_name: str, data: dict) -> None:
         "evolution_state": "open",
         **{key: fields[key] for key in ("trial_status", "trial_access_level", "trial_connected_at", "trial_expires_at", "data_ativacao", "data_expiracao", "trial_connection_confirmed") if key in fields},
     }
-    for tenant_ref in tenant_refs:
+    for tenant_snapshot in tenant_refs:
+        tenant_ref = extensions.db.collection("tenants").document(tenant_snapshot.id)
         tenant_ref.set(tenant_fields, merge=True)
     logger.info("Ligação WhatsApp confirmada instance=%s trial_status=%s", instance_name, fields.get("trial_status", current.get("trial_status")))
 
