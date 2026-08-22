@@ -38,14 +38,18 @@ def normalize_jid(value: Any) -> str:
         return ""
     if raw.endswith("@g.us"):
         return raw
+    local = raw.split("@", 1)[0].split(":", 1)[0].split(";", 1)[0]
+    digits = re.sub(r"\D", "", local)
+    if not digits:
+        return ""
     if "@" in raw:
-        return raw
-    digits = re.sub(r"\D", "", raw)
-    return f"{digits}@s.whatsapp.net" if digits else ""
+        return f"{digits}@s.whatsapp.net"
+    return f"{digits}@s.whatsapp.net"
 
 
 def normalize_phone(value: Any) -> str:
-    return re.sub(r"\D", "", _clean(value).split("@")[0])
+    local = _clean(value).split("@", 1)[0].split(":", 1)[0].split(";", 1)[0]
+    return re.sub(r"\D", "", local)
 
 
 def group_document_id(group_jid: str) -> str:

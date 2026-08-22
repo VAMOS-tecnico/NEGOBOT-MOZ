@@ -79,12 +79,16 @@ class GroupAutomationTests(unittest.TestCase):
         }
 
     def test_verify_admin_accepts_is_admin(self):
-        self.assertEqual(groups.verify_bot_admin(self.tenant, "tenant-instance", [{"id": "258841234567@c.us", "isAdmin": True}]), (True, "admin_verified", "258841234567@c.us"))
+        self.assertEqual(groups.verify_bot_admin(self.tenant, "tenant-instance", [{"id": "258841234567@c.us", "isAdmin": True}]), (True, "admin_verified", "258841234567@s.whatsapp.net"))
 
     def test_verify_admin_rejects_regular_participant(self):
         verified, reason, _ = groups.verify_bot_admin(self.tenant, "tenant-instance", [{"id": "258841234567@c.us", "isAdmin": False}])
         self.assertFalse(verified)
         self.assertEqual(reason, "connected_identity_not_admin")
+
+    def test_verify_admin_accepts_c_us_and_device_jids(self):
+        participants = [{"id": "258841234567:7@c.us", "isAdmin": True}]
+        self.assertEqual(groups.verify_bot_admin(self.tenant, "tenant-instance", participants), (True, "admin_verified", "258841234567@s.whatsapp.net"))
 
     @patch("services.group_automation_service.send_whatsapp", return_value=True)
     def test_keyword_requires_mention(self, send_mock):
