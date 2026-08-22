@@ -65,15 +65,19 @@ export function ChatPage() {
   async function load() {
     setLoading(true);
     setError("");
+    const errors: string[] = [];
+    const [contactResult, groupResult] = await Promise.allSettled([api.client.contacts(), api.client.groups()]);
+    if (contactResult.status === "fulfilled") setContacts(contactResult.value.contacts || []);
+    else errors.push(english ? "contacts" : "contactos");
+    if (groupResult.status === "fulfilled") setGroups(groupResult.value.groups || []);
+    else errors.push(english ? "groups" : "grupos");
+    setLoading(false);
+    if (errors.length) setError(english ? `Could not load ${errors.join(" and ")}.` : `Não foi possível carregar ${errors.join(" e ")}.`);
     try {
-      const [contactResult, groupResult, conversationResult] = await Promise.all([api.client.contacts(), api.client.groups(), api.client.conversations()]);
-      setContacts(contactResult.contacts || []);
-      setGroups(groupResult.groups || []);
+      const conversationResult = await api.client.conversations();
       setConversations(conversationResult.conversations || []);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : (english ? "Could not load your chats." : "Não foi possível carregar os teus chats."));
-    } finally {
-      setLoading(false);
+    } catch {
+      setError((current) => current || (english ? "Conversation history is temporarily unavailable." : "O histórico de conversas está temporariamente indisponível."));
     }
   }
 
@@ -120,8 +124,17 @@ export function ChatPage() {
   const directoryItems = useMemo(() => [...directoryContacts, ...directoryGroups], [directoryContacts, directoryGroups]);
 
   useEffect(() => {
+    const known: Record<string, string> = {};
+    for (const conversation of conversations) {
+      const address = normalizePhone(conversation.phone || conversation.id || "");
+      if (address && conversation.avatar_url) known[address] = conversation.avatar_url;
+    }
+    if (Object.keys(known).length) setAvatarUrls((current) => ({ ...current, ...known }));
+  }, [conversations]);
+
+  useEffect(() => {
     let cancelled = false;
-    const missing = directoryItems.filter((item) => !avatarChecked[displayAddress(item)]).slice(0, 40);
+    const missing = directoryItems.filter((item) => !avatarChecked[displayAddress(item)] && !avatarUrls[displayAddress(item)]).slice(0, 40);
     if (!missing.length) return () => { cancelled = true; };
     void Promise.all(missing.map(async (item) => {
       const address = displayAddress(item);
