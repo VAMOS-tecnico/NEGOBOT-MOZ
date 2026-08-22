@@ -144,6 +144,15 @@ export type Conversation = {
   contact_id?: string;
   status?: string;
   status_atendimento?: string;
+  kind?: "contact" | "group" | string;
+};
+
+export type ChatMessage = {
+  id?: string;
+  role?: string;
+  text: string;
+  timestamp?: string | null;
+  from_me?: boolean;
 };
 
 export type Contact = {
@@ -455,7 +464,9 @@ export const api = {
     team: () => request<{ users: TeamMember[]; current_role?: string }>("/api/platform/client/team"),
     createOperator: (name: string, email: string, password: string) => request<{ created: true; user: TeamMember }>("/api/platform/client/team", { method: "POST", body: JSON.stringify({ name, email, password }) }),
     updateTeamMember: (id: string, fields: { status?: "active" | "suspended"; tenant_role?: "operator" | "viewer" }) => request<{ updated: true }>(`/api/platform/client/team/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(fields) }),
-    conversations: () => request<{ conversations: Conversation[] }>("/api/platform/client/conversations"),
+    conversations: () => request<{ conversations: Conversation[]; count?: number; instance_name?: string }>("/api/platform/client/conversations"),
+    conversationMessages: (phone: string) => request<{ phone: string; messages: ChatMessage[]; count: number }>(`/api/platform/client/conversations/${encodeURIComponent(phone)}/messages`),
+    sendConversationMessage: (phone: string, text: string) => request<{ sent: true; phone: string; message: ChatMessage }>(`/api/platform/client/conversations/${encodeURIComponent(phone)}/messages`, { method: "POST", body: JSON.stringify({ text }) }),
     campaignConversationAudience: () => request<{ conversations: Conversation[]; count: number; eligibility: string }>("/api/platform/client/campaign-audience/conversations"),
     handoff: (phone: string, mode: "bot" | "humano") => request<{ updated: true }>(`/api/platform/client/conversations/${encodeURIComponent(phone)}/handoff`, { method: "POST", body: JSON.stringify({ mode }) }),
     contacts: (filters: { search?: string; tag?: string; opt_in?: "true" | "false" } = {}) => { const query = new URLSearchParams(); if (filters.search) query.set("search", filters.search); if (filters.tag) query.set("tag", filters.tag); if (filters.opt_in) query.set("opt_in", filters.opt_in); const suffix = query.toString() ? `?${query.toString()}` : ""; return request<{ contacts: Contact[]; count?: number }>(`/api/platform/client/contacts${suffix}`); },

@@ -27,7 +27,7 @@ from services.channel_publication_service import channel_capability, create_publ
 from services.channel_oauth_service import complete_oauth, disconnect_oauth, provider_config, start_oauth
 from services.password_reset_service import consume_password_reset, request_password_reset
 from services.ai_queue_service import AIQueueError, request_ai_text
-from services.evolution_service import get_connection_state
+from services.evolution_service import get_connection_state, send_whatsapp
 
 platform_bp = Blueprint("platform", __name__, url_prefix="/api/platform")
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -1439,16 +1439,140 @@ def campaign_conversation_audience():
     return jsonify({"conversations": rows, "count": len(rows), "eligibility": "opt_in_contact_only"})
 
 
+def _conversation_sources(tenant_id: str, instance_name: str) -> list[Any]:
+    sources = [_db().collection("clientes_bot").document(tenant_id).collection("conversas")]
+    if instance_name and instance_name != tenant_id:
+        sources.append(_db().collection("clientes_bot").document(instance_name).collection("conversas"))
+    return sources
+
+
+def _clean_chat_target(value: str) -> str:
+    raw = str(value or "").strip()
+    if raw.endswith("@g.us"):
+        return raw
+    return re.sub(r"\D", "", raw)
+
+
+def _serialize_chat_message(document: Any, data: dict[str, Any]) -> dict[str, Any]:
+    stamp = data.get("timestamp") or data.get("created_at") or data.get("updated_at")
+    if hasattr(stamp, "isoformat"):
+        stamp = stamp.isoformat()
+    text = str(data.get("text") or data.get("content") or "").strip()
+    role = str(data.get("role") or "user").strip().lower()
+    return {
+        "id": getattr(document, "id", None) or str(data.get("id") or ""),
+        "role": role,
+        "text": text,
+        "timestamp": str(stamp) if stamp else None,
+        "from_me": role in {"assistant", "atendente", "bot", "agent"},
+    }
+
+
 @platform_bp.get("/client/conversations")
 @_require_roles("client", "operator")
 def list_conversations():
     tenant_id = _tenant_for_identity(_identity())
-    rows = []
-    for document in _db().collection("clientes_bot").document(tenant_id).collection("conversas").limit(200).stream():
-        item = document.to_dict() or {}
-        item["phone"] = document.id
-        rows.append(item)
-    return jsonify({"conversations": rows})
+    tenant = _tenant_data(tenant_id)
+    instance_name = str(tenant.get("instance_name") or "").strip()
+    contacts = {}
+    for contact_doc in _db().collection("contacts").where("tenant_id", "==", tenant_id).limit(5000).stream():
+        contact = contact_doc.to_dict() or {}
+        normalized = re.sub(r"\D", "", str(contact.get("phone") or ""))
+        if normalized:
+            contacts[normalized] = {"id": contact_doc.id, "name": str(contact.get("name") or "").strip()}
+    by_phone: dict[str, dict[str, Any]] = {}
+    for source in _conversation_sources(tenant_id, instance_name):
+        for document in source.limit(500).stream():
+            data = document.to_dict() or {}
+            phone = _clean_chat_target(document.id)
+            if not phone:
+                continue
+            existing = by_phone.get(phone, {})
+            last_message = str(data.get("ultima_mensagem") or data.get("last_message") or existing.get("last_message") or "").strip()
+            last_interaction = data.get("ultima_interacao") or data.get("updated_at") or existing.get("last_interaction")
+            if hasattr(last_interaction, "isoformat"):
+                last_interaction = last_interaction.isoformat()
+            by_phone[phone] = {
+                **existing,
+                "id": phone,
+                "phone": phone,
+                "name": str(data.get("name") or contacts.get(phone, {}).get("name") or existing.get("name") or "Contacto").strip(),
+                "last_message": last_message,
+                "last_interaction": str(last_interaction) if last_interaction else None,
+                "status_atendimento": data.get("status_atendimento") or existing.get("status_atendimento") or "bot",
+                "contact_id": contacts.get(phone, {}).get("id"),
+                "kind": "group" if phone.endswith("@g.us") else "contact",
+            }
+    rows = sorted(by_phone.values(), key=lambda item: str(item.get("last_interaction") or ""), reverse=True)
+    return jsonify({"conversations": rows[:500], "count": len(rows), "instance_name": instance_name})
+
+
+@platform_bp.get("/client/conversations/<phone>/messages")
+@_require_roles("client", "operator")
+def conversation_messages(phone: str):
+    tenant_id = _tenant_for_identity(_identity())
+    tenant = _tenant_data(tenant_id)
+    instance_name = str(tenant.get("instance_name") or "").strip()
+    target = _clean_chat_target(phone)
+    if not target or (not target.endswith("@g.us") and len(target) < 8):
+        return jsonify({"error": "Destino de conversa inválido."}), 400
+    messages: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for source in _conversation_sources(tenant_id, instance_name):
+        conversation_ref = source.document(target)
+        conversation_doc = conversation_ref.get()
+        if conversation_doc.exists:
+            data = conversation_doc.to_dict() or {}
+            inline = data.get("messages") if isinstance(data.get("messages"), list) else []
+            for index, item in enumerate(inline):
+                if isinstance(item, dict):
+                    serialized = _serialize_chat_message(type("Message", (), {"id": f"inline-{index}"})(), item)
+                    key = f"{serialized.get('timestamp')}|{serialized.get('text')}|{serialized.get('role')}"
+                    if key not in seen:
+                        seen.add(key); messages.append(serialized)
+        for document in conversation_ref.collection("historico").limit(200).stream():
+            serialized = _serialize_chat_message(document, document.to_dict() or {})
+            key = f"{serialized.get('timestamp')}|{serialized.get('text')}|{serialized.get('role')}"
+            if serialized.get("text") and key not in seen:
+                seen.add(key); messages.append(serialized)
+    messages.sort(key=lambda item: str(item.get("timestamp") or ""))
+    return jsonify({"phone": target, "messages": messages[-200:], "count": min(len(messages), 200)})
+
+
+@platform_bp.post("/client/conversations/<phone>/messages")
+@_require_tenant_roles("owner", "operator")
+def send_conversation_message(phone: str):
+    tenant_id = _tenant_for_identity(_identity())
+    tenant = _tenant_data(tenant_id)
+    instance_name = str(tenant.get("instance_name") or "").strip()
+    target = _clean_chat_target(phone)
+    payload = request.get_json(silent=True) or {}
+    text = str(payload.get("text") or "").strip()
+    if not target or (not target.endswith("@g.us") and len(target) < 8):
+        return jsonify({"error": "Destino de conversa inválido."}), 400
+    if not text or len(text) > 4000:
+        return jsonify({"error": "A mensagem deve ter entre 1 e 4.000 caracteres."}), 400
+    if not instance_name:
+        return jsonify({"error": "Liga primeiro o WhatsApp deste tenant."}), 409
+    if get_connection_state(instance_name) != "open":
+        return jsonify({"error": "O WhatsApp deste tenant está desligado. Liga a instância antes de enviar mensagens."}), 409
+    if target.endswith("@g.us"):
+        group_doc = _db().collection("whatsapp_groups").document(group_document_id(tenant_id, target)).get()
+        group_data = group_doc.to_dict() if group_doc.exists else {}
+        if not group_data or group_data.get("tenant_id") != tenant_id or group_data.get("admin_verified") is not True or group_data.get("status") != "active":
+            return jsonify({"error": "Este grupo não está verificado como grupo próprio administrado pela instância deste tenant."}), 403
+    else:
+        contact_exists = any(re.sub(r"\D", "", str((doc.to_dict() or {}).get("phone") or "")) == target for doc in _db().collection("contacts").where("tenant_id", "==", tenant_id).limit(5000).stream())
+        conversation_exists = any(source.document(target).get().exists for source in _conversation_sources(tenant_id, instance_name))
+        if not contact_exists and not conversation_exists:
+            return jsonify({"error": "Só podes iniciar uma conversa com um contacto ou conversa pertencente a este tenant."}), 403
+    if not send_whatsapp(target, text, instance_name=instance_name):
+        return jsonify({"error": "A Evolution API não conseguiu enviar a mensagem."}), 502
+    now = _now()
+    conversation_ref = _db().collection("clientes_bot").document(instance_name).collection("conversas").document(target)
+    conversation_ref.set({"ultima_mensagem": text, "ultima_mensagem_por": "atendente", "ultima_interacao": now, "status_atendimento": "humano"}, merge=True)
+    conversation_ref.collection("historico").add({"role": "atendente", "text": text, "timestamp": now})
+    return jsonify({"sent": True, "message": {"role": "atendente", "text": text, "timestamp": now.isoformat(), "from_me": True}, "phone": target})
 
 
 @platform_bp.post("/client/conversations/<phone>/handoff")

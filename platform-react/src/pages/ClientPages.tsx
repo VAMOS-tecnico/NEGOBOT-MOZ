@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { AlertCircle, BarChart3, Bot, Building2, CheckCircle2, CircleDollarSign, Download, FileUp, LifeBuoy, Loader2, MessageCircle, Pause, Play, Plus, QrCode, RefreshCw, Send, ShieldCheck, Smartphone, Sparkles, Trash2, Users, Video, XCircle } from "lucide-react";
 import { usePlatformLanguage } from "../lib/platformLanguage";
-import { api, type AssistantSettings, type Campaign, type CampaignTemplate, type CampaignSettings, type ClientPlan, type Contact, type Conversation, type DeliveryMetrics, type IntegrationStatus, type LemonSqueezyStatus, type PaymentRecord, type Plan, type PlanAddon, type SupportTicket, type TeamMember, type TenantMetrics, type VideoJob, type WhatsAppGroup } from "../lib/api";
+import { api, type AssistantSettings, type Campaign, type CampaignTemplate, type CampaignSettings, type ClientPlan, type ChatMessage, type Contact, type Conversation, type DeliveryMetrics, type IntegrationStatus, type LemonSqueezyStatus, type PaymentRecord, type Plan, type PlanAddon, type SupportTicket, type TeamMember, type TenantMetrics, type VideoJob, type WhatsAppGroup } from "../lib/api";
 
 function ModuleHeader({ eyebrow, title, description, action }: { eyebrow: string; title: string; description: string; action?: ReactNode }) {
   const { language } = usePlatformLanguage();
