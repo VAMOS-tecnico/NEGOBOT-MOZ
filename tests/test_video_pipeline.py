@@ -98,6 +98,18 @@ class VideoPipelineTests(unittest.TestCase):
         self.assertTrue(post.call_args.kwargs["headers"]["Idempotency-Key"].startswith("negobot-"))
         self.assertEqual(download.call_args.args[0], "https://files.example/video.mp4")
 
+    def test_long_news_script_is_accepted_without_the_old_500_character_cap(self):
+        text = ("Notícia de última hora: a plataforma apresenta uma actualização importante para os clientes. " * 14).strip()
+        scene = Scene(text=text, duration_seconds=3.5)
+        job = VideoJobRequest(tenant_id="tenant-a", title="Notícias", scenes=[scene])
+        self.assertGreater(len(text), 500)
+        self.assertEqual(len(job.scenes[0].text), len(text))
+        self.assertEqual(video_pipeline._scene_text(job.scenes[0].model_dump(), job.model_dump()), text)
+
+    def test_effective_scene_duration_follows_real_audio_without_truncation(self):
+        self.assertEqual(video_pipeline._effective_scene_duration(3.5, 18.75), 19.0)
+        self.assertEqual(video_pipeline._effective_scene_duration(30, 18.75), 30.0)
+
     def test_advanced_scene_rejects_private_or_invalid_asset_urls(self):
         with self.assertRaises(ValidationError):
             Scene(text="Cena", visual_mode="upload_media", asset_url="http://private.local/video.mp4")

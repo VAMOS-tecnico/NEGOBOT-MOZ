@@ -2850,7 +2850,19 @@ def create_video_job():
     except requests.RequestException:
         return jsonify({"error": "O motor de vídeos está temporariamente indisponível."}), 503
     if not response.ok:
-        return jsonify({"error": "O motor de vídeos rejeitou o job."}), 502
+        detail = "O motor de vídeos rejeitou o job."
+        if response.status_code == 422:
+            try:
+                raw_detail = response.json().get("detail")
+                if isinstance(raw_detail, list):
+                    messages = [str(item.get("msg") or "Validação inválida.") for item in raw_detail if isinstance(item, dict)]
+                    detail = " ".join(messages) or detail
+                elif raw_detail:
+                    detail = str(raw_detail)
+            except (ValueError, TypeError):
+                pass
+            return jsonify({"error": detail}), 422
+        return jsonify({"error": detail}), 502
     data = response.json()
     job = data.get("job") or {}
     job_id = str(job.get("id") or "").strip()

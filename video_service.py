@@ -12,7 +12,7 @@ from typing import Any, Literal
 import redis
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 from fastapi.responses import FileResponse, StreamingResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from services.service_config import enforce_profile
 
@@ -81,9 +81,14 @@ def _filename(title: str, job_id: str) -> str:
     return f"{clean}-{job_id[:8]}.mp4"
 
 
+MAX_SCENE_TEXT_LENGTH = 12_000
+MAX_SCENE_DURATION_SECONDS = 900
+MAX_JOB_DURATION_SECONDS = 1_800
+
+
 class Scene(BaseModel):
-    text: str = Field(min_length=1, max_length=500)
-    duration_seconds: float = Field(default=3.5, ge=1, le=20)
+    text: str = Field(min_length=1, max_length=MAX_SCENE_TEXT_LENGTH)
+    duration_seconds: float = Field(default=3.5, ge=1, le=MAX_SCENE_DURATION_SECONDS)
     visual_mode: Literal["avatar_ai", "upload_media", "ai_media"] = "ai_media"
     asset_url: str | None = Field(default=None, max_length=2000)
     asset_kind: Literal["image", "video"] | None = None
@@ -115,11 +120,18 @@ class VideoJobRequest(BaseModel):
     language: str = Field(default="pt-MZ", min_length=2, max_length=20)
     voice: str | None = Field(default=None, max_length=100)
     subtitles: bool = True
-    narracao: str | None = Field(default=None, max_length=5000)
+    narracao: str | None = Field(default=None, max_length=MAX_SCENE_TEXT_LENGTH)
     palavras_chave: list[str] = Field(default_factory=list, max_length=8)
     background_keywords: list[str] = Field(default_factory=list, max_length=8)
     callback_url: str | None = Field(default=None, max_length=2000)
     transition: Literal["cut", "fade"] = "fade"
+
+    @model_validator(mode="after")
+    def validate_total_duration(self) -> "VideoJobRequest":
+        total = sum(float(scene.duration_seconds or 0) for scene in self.scenes)
+        if total > MAX_JOB_DURATION_SECONDS:
+            raise ValueError(f"A duração total do job não pode ultrapassar {MAX_JOB_DURATION_SECONDS // 60} minutos.")
+        return self
 
     @field_validator("callback_url")
     @classmethod

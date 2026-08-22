@@ -26,12 +26,15 @@ import requests
 logger = logging.getLogger("negobot-video-pipeline")
 PEXELS_SEARCH_URL = "https://api.pexels.com/videos/search"
 MAX_ASSET_BYTES = 80 * 1024 * 1024
+MAX_SCENE_TEXT_LENGTH = 12_000
+MAX_SCENE_DURATION_SECONDS = 900
 DEFAULT_PEXELS_PER_PAGE = 3
 DEFAULT_PEXELS_TIMEOUT = 20
 
 
-def _safe_text(value: str) -> str:
-    return re.sub(r"[^\w\s,.!?;:'\-À-ÿ]", "", str(value or "")).strip()[:500]
+def _safe_text(value: str, limit: int = 500) -> str:
+    clean = re.sub(r"[^\w\s,.!?;:'\-À-ÿ]", "", str(value or "")).strip()
+    return clean[:max(1, int(limit))]
 
 
 def _run(command: list[str], timeout: int = 90) -> None:
@@ -567,7 +570,14 @@ def _mux_scene_silence(video: Path, duration: float, output: Path) -> None:
 
 
 def _scene_text(scene: dict[str, Any], job: dict[str, Any]) -> str:
-    return str(scene.get("text") or job.get("title") or "NEGOBOT-MOZ").strip()[:500]
+    return _safe_text(scene.get("text") or job.get("title") or "NEGOBOT-MOZ", MAX_SCENE_TEXT_LENGTH)
+
+
+def _effective_scene_duration(requested_duration: float, audio_duration: float | None = None) -> float:
+    duration = max(1.0, min(MAX_SCENE_DURATION_SECONDS, float(requested_duration or 3.5)))
+    if audio_duration is not None and audio_duration > 0:
+        duration = max(duration, min(MAX_SCENE_DURATION_SECONDS, float(audio_duration) + 0.25))
+    return duration
 
 
 def _render_scene_visual(scene: dict[str, Any], job: dict[str, Any], index: int, duration: float, job_dir: Path, pexels_assets: list[str], transition: str) -> Path:
@@ -615,15 +625,15 @@ def render_job(job: dict[str, Any], output_dir: str, progress_callback: Any | No
         scenes = job.get("scenes") or []
         if not scenes:
             raise ValueError("O job precisa de pelo menos uma cena.")
-        total_duration = sum(max(1.0, min(20.0, float(scene.get("duration_seconds") or 3.5))) for scene in scenes)
+        total_duration = sum(max(1.0, min(MAX_SCENE_DURATION_SECONDS, float(scene.get("duration_seconds") or 3.5))) for scene in scenes)
         transition = str(job.get("transition") or "fade")
         pexels_assets = baixar_videos_pexels(_derive_keywords(job), total_duration, str(job_dir / "pexels"))
         parts: list[Path] = []
         if progress_callback:
             progress_callback(10)
         for index, scene in enumerate(scenes):
-            duration = max(1.0, min(20.0, float(scene.get("duration_seconds") or 3.5)))
-            visual = _render_scene_visual(scene, job, index, duration, job_dir, pexels_assets, transition)
+            requested_duration = _effective_scene_duration(float(scene.get("duration_seconds") or 3.5))
+            duration = requested_duration
             audio = job_dir / f"scene-audio-{index:03d}.mp3"
             sample = None
             sample_url = str(scene.get("voice_sample_url") or "").strip()
@@ -644,6 +654,13 @@ def render_job(job: dict[str, Any], output_dir: str, progress_callback: Any | No
                         has_audio = False
                 except Exception as exc:
                     logger.warning("Voz indisponível na cena %s: %s", index, exc)
+            if has_audio:
+                try:
+                    audio_duration = _probe_duration(audio)
+                    duration = _effective_scene_duration(requested_duration, audio_duration)
+                except Exception as exc:
+                    logger.warning("Não foi possível medir o áudio da cena %s; será usada a duração solicitada: %s", index, exc)
+            visual = _render_scene_visual(scene, job, index, duration, job_dir, pexels_assets, transition)
             captioned = job_dir / f"scene-captioned-{index:03d}.mp4"
             subtitles = bool(scene.get("subtitles", job.get("subtitles", True)))
             if has_audio and subtitles:
