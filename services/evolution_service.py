@@ -296,7 +296,7 @@ def _webhook_payload(webhook_target_url):
                 "CHATS_UPSERT",
                 "CONNECTION_UPDATE",
                 "GROUPS_UPSERT",
-                "GROUPS_UPDATE",
+                "GROUP_UPDATE",
                 "GROUP_PARTICIPANTS_UPDATE"
             ],
             "groupsIgnore": False

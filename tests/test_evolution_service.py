@@ -12,6 +12,7 @@ from config import Config
 import services.groq_service  # noqa: F401 — garante que o alvo do mock existe antes do patch
 from services.evolution_service import (
     _normalizar_audio_para_whisper,
+    _webhook_payload,
     criar_e_configurar_instancia_automatica,
     send_whatsapp,
     transcrever_audio_mensagem,
@@ -100,6 +101,11 @@ class TestEvolutionService(unittest.TestCase):
         webhook_payload = post.call_args_list[-1].kwargs["json"]
         self.assertIn("webhook", webhook_payload)
         self.assertEqual(webhook_payload["webhook"]["url"], "https://webhook.test/webhook")
+
+    def test_webhook_usa_evento_de_grupo_da_evolution_v2(self):
+        events = _webhook_payload("https://webhook.test/webhook")["webhook"]["events"]
+        self.assertIn("GROUP_UPDATE", events)
+        self.assertNotIn("GROUPS_UPDATE", events)
 
     @patch("services.evolution_service.requests.post")
     def test_send_text_envia_payload_v2(self, post):
