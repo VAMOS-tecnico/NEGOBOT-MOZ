@@ -58,8 +58,32 @@ export function ChatPage() {
   useEffect(() => { void load(); }, []);
 
   const conversationByPhone = useMemo(() => new Map(conversations.map((item) => [normalizePhone(item.phone || item.id || ""), item])), [conversations]);
-  const filteredContacts = useMemo(() => contacts.filter((item) => `${item.name} ${item.phone}`.toLowerCase().includes(search.toLowerCase().trim())), [contacts, search]);
-  const filteredGroups = useMemo(() => groups.filter((item) => `${item.name} ${item.group_jid}`.toLowerCase().includes(search.toLowerCase().trim())), [groups, search]);
+  const directoryContacts = useMemo(() => {
+    const byPhone = new Map(contacts.map((item) => [normalizePhone(item.phone), item]));
+    for (const conversation of conversations) {
+      const phone = normalizePhone(conversation.phone || conversation.id || "");
+      if (!phone || phone.endsWith("@g.us") || byPhone.has(phone)) continue;
+      byPhone.set(phone, { id: conversation.id || phone, name: conversation.name || phone, phone });
+    }
+    return [...byPhone.values()];
+  }, [contacts, conversations]);
+  const directoryGroups = useMemo(() => {
+    const byJid = new Map(groups.map((item) => [item.group_jid, item]));
+    for (const conversation of conversations) {
+      const groupJid = conversation.phone || conversation.id || "";
+      if (!groupJid.endsWith("@g.us") || byJid.has(groupJid)) continue;
+      byJid.set(groupJid, {
+        id: conversation.id || groupJid,
+        group_jid: groupJid,
+        name: conversation.name || groupJid,
+        admin_verified: false,
+        status: "historical",
+      });
+    }
+    return [...byJid.values()];
+  }, [groups, conversations]);
+  const filteredContacts = useMemo(() => directoryContacts.filter((item) => `${item.name} ${item.phone}`.toLowerCase().includes(search.toLowerCase().trim())), [directoryContacts, search]);
+  const filteredGroups = useMemo(() => directoryGroups.filter((item) => `${item.name} ${item.group_jid}`.toLowerCase().includes(search.toLowerCase().trim())), [directoryGroups, search]);
   const selectedPhone = selected ? displayAddress(selected) : "";
   const selectedConversation = selectedPhone ? conversationByPhone.get(normalizePhone(selectedPhone)) : undefined;
 
@@ -109,7 +133,7 @@ export function ChatPage() {
     <div className="chat-layout">
       <section className="data-panel chat-directory">
         <div className="chat-directory-header"><div><span className="eyebrow">{english ? "INBOX" : "CAIXA DE ENTRADA"}</span><h3>{english ? "Conversations" : "Conversas"}</h3></div><MessageCircle size={19} /></div>
-        <div className="chat-tabs"><button className={tab === "contacts" ? "active" : ""} onClick={() => setTab("contacts")}><MessageCircle size={15} />{english ? "Contacts" : "Contactos"}<span>{contacts.length}</span></button><button className={tab === "groups" ? "active" : ""} onClick={() => setTab("groups")}><Users size={15} />{english ? "Groups" : "Grupos"}<span>{groups.length}</span></button></div>
+        <div className="chat-tabs"><button className={tab === "contacts" ? "active" : ""} onClick={() => setTab("contacts")}><MessageCircle size={15} />{english ? "Contacts" : "Contactos"}<span>{directoryContacts.length}</span></button><button className={tab === "groups" ? "active" : ""} onClick={() => setTab("groups")}><Users size={15} />{english ? "Groups" : "Grupos"}<span>{directoryGroups.length}</span></button></div>
         <label className="chat-search"><Search size={16} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={english ? "Search contacts or groups" : "Pesquisar contactos ou grupos"} /></label>
         <div className="chat-list">{loading ? <div className="loading-box"><Loader2 size={18} className="spin" />{english ? "Loading..." : "A carregar..."}</div> : listItems.length ? listItems.map((item) => { const address = displayAddress(item); const conversation = conversationByPhone.get(normalizePhone(address)); const isSelected = selected && normalizePhone(selectedPhone) === normalizePhone(address); const blocked = "group_jid" in item && item.admin_verified !== true; return <button key={"group_jid" in item ? item.id : item.id || item.phone} className={`chat-list-item ${isSelected ? "selected" : ""}`} onClick={() => void openChat(item)}><span className="chat-avatar">{displayName(item).slice(0, 1).toUpperCase()}</span><span className="chat-list-copy"><strong>{displayName(item)}</strong><small>{conversation?.last_message || address}</small></span>{blocked ? <span className="chat-lock">{english ? "Blocked" : "Bloqueado"}</span> : conversation?.last_interaction ? <time>{messageTime(conversation.last_interaction)}</time> : null}</button>; }) : <div className="empty-state">{noItems}</div>}</div>
       </section>
