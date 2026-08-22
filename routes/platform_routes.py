@@ -27,7 +27,7 @@ from services.channel_publication_service import channel_capability, create_publ
 from services.channel_oauth_service import complete_oauth, disconnect_oauth, provider_config, start_oauth
 from services.password_reset_service import consume_password_reset, request_password_reset
 from services.ai_queue_service import AIQueueError, request_ai_text
-from services.evolution_service import get_connection_state, send_whatsapp
+from services.evolution_service import get_connection_state, listar_chats_whatsapp, send_whatsapp
 
 platform_bp = Blueprint("platform", __name__, url_prefix="/api/platform")
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -1468,21 +1468,82 @@ def _serialize_chat_message(document: Any, data: dict[str, Any]) -> dict[str, An
     }
 
 
+def _tenant_chat_contacts(tenant_id: str) -> dict[str, dict[str, Any]]:
+    """Merge platform contacts with WhatsApp contacts synced under the tenant document."""
+    db = _db()
+    contacts: dict[str, dict[str, Any]] = {}
+    for contact_doc in db.collection("contacts").where("tenant_id", "==", tenant_id).limit(5000).stream():
+        data = contact_doc.to_dict() or {}
+        normalized = re.sub(r"\D", "", str(data.get("phone") or data.get("telefone") or ""))
+        if normalized:
+            contacts[normalized] = {
+                "id": contact_doc.id,
+                "name": str(data.get("name") or data.get("nome") or "").strip(),
+            }
+    base_contacts = db.collection("clientes_bot").document(tenant_id).collection("base_contactos").limit(5000).stream()
+    for contact_doc in base_contacts:
+        data = contact_doc.to_dict() or {}
+        normalized = re.sub(r"\D", "", str(data.get("phone") or data.get("telefone") or contact_doc.id or ""))
+        if not normalized or normalized.endswith("@g.us"):
+            continue
+        name = str(data.get("name") or data.get("nome") or data.get("pushName") or "").strip()
+        current = contacts.get(normalized)
+        if current is None or not current.get("name"):
+            contacts[normalized] = {"id": contact_doc.id, "name": name}
+    return contacts
+
+
 @platform_bp.get("/client/conversations")
 @_require_roles("client", "operator")
 def list_conversations():
     tenant_id = _tenant_for_identity(_identity())
     tenant = _tenant_data(tenant_id)
     instance_name = str(tenant.get("instance_name") or "").strip()
-    contacts = {}
-    for contact_doc in _db().collection("contacts").where("tenant_id", "==", tenant_id).limit(5000).stream():
-        contact = contact_doc.to_dict() or {}
-        normalized = re.sub(r"\D", "", str(contact.get("phone") or ""))
-        if normalized:
-            contacts[normalized] = {"id": contact_doc.id, "name": str(contact.get("name") or "").strip()}
+    contacts = _tenant_chat_contacts(tenant_id)
     by_phone: dict[str, dict[str, Any]] = {}
+    for phone, contact in contacts.items():
+        by_phone[phone] = {
+            "id": phone,
+            "phone": phone,
+            "name": str(contact.get("name") or "Contacto").strip() or "Contacto",
+            "last_message": "",
+            "last_interaction": None,
+            "status_atendimento": "bot",
+            "contact_id": contact.get("id"),
+            "kind": "contact",
+        }
+    if instance_name and get_connection_state(instance_name) == "open":
+        for chat in listar_chats_whatsapp(instance_name):
+            jid = str(chat.get("id") or chat.get("remoteJid") or "").strip()
+            phone = _clean_chat_target(jid)
+            if not phone:
+                continue
+            last_message_data = chat.get("lastMessage") or chat.get("last_message") or {}
+            if not isinstance(last_message_data, dict):
+                last_message_data = {}
+            last_message = str(
+                chat.get("lastMessageText")
+                or chat.get("last_message_text")
+                or last_message_data.get("conversation")
+                or last_message_data.get("text")
+                or ((last_message_data.get("extendedTextMessage") or {}).get("text") if isinstance(last_message_data.get("extendedTextMessage"), dict) else "")
+                or ""
+            ).strip()
+            last_interaction = chat.get("updatedAt") or chat.get("timestamp") or chat.get("conversationTimestamp")
+            if hasattr(last_interaction, "isoformat"):
+                last_interaction = last_interaction.isoformat()
+            by_phone.setdefault(phone, {
+                "id": phone,
+                "phone": phone,
+                "name": str(chat.get("name") or chat.get("pushName") or chat.get("subject") or contacts.get(phone, {}).get("name") or "Contacto").strip() or "Contacto",
+                "last_message": last_message,
+                "last_interaction": str(last_interaction) if last_interaction else None,
+                "status_atendimento": "bot",
+                "contact_id": contacts.get(phone, {}).get("id"),
+                "kind": "group" if phone.endswith("@g.us") else "contact",
+            })
     for source in _conversation_sources(tenant_id, instance_name):
-        for document in source.limit(500).stream():
+        for document in source.limit(5000).stream():
             data = document.to_dict() or {}
             phone = _clean_chat_target(document.id)
             if not phone:
@@ -1516,6 +1577,16 @@ def conversation_messages(phone: str):
     target = _clean_chat_target(phone)
     if not target or (not target.endswith("@g.us") and len(target) < 8):
         return jsonify({"error": "Destino de conversa inválido."}), 400
+    if target.endswith("@g.us"):
+        group_doc = _db().collection("whatsapp_groups").document(group_document_id(target)).get()
+        group_data = group_doc.to_dict() if group_doc.exists else {}
+        if not group_data or group_data.get("tenant_id") != tenant_id or group_data.get("admin_verified") is not True or group_data.get("status") != "active":
+            return jsonify({"error": "Este grupo não está verificado como grupo próprio administrado pela instância deste tenant."}), 403
+    else:
+        contact_exists = target in _tenant_chat_contacts(tenant_id)
+        conversation_exists = any(source.document(target).get().exists for source in _conversation_sources(tenant_id, instance_name))
+        if not contact_exists and not conversation_exists:
+            return jsonify({"error": "Só podes consultar uma conversa pertencente a este tenant."}), 403
     messages: list[dict[str, Any]] = []
     seen: set[str] = set()
     for source in _conversation_sources(tenant_id, instance_name):
@@ -1557,12 +1628,12 @@ def send_conversation_message(phone: str):
     if get_connection_state(instance_name) != "open":
         return jsonify({"error": "O WhatsApp deste tenant está desligado. Liga a instância antes de enviar mensagens."}), 409
     if target.endswith("@g.us"):
-        group_doc = _db().collection("whatsapp_groups").document(group_document_id(tenant_id, target)).get()
+        group_doc = _db().collection("whatsapp_groups").document(group_document_id(target)).get()
         group_data = group_doc.to_dict() if group_doc.exists else {}
         if not group_data or group_data.get("tenant_id") != tenant_id or group_data.get("admin_verified") is not True or group_data.get("status") != "active":
             return jsonify({"error": "Este grupo não está verificado como grupo próprio administrado pela instância deste tenant."}), 403
     else:
-        contact_exists = any(re.sub(r"\D", "", str((doc.to_dict() or {}).get("phone") or "")) == target for doc in _db().collection("contacts").where("tenant_id", "==", tenant_id).limit(5000).stream())
+        contact_exists = target in _tenant_chat_contacts(tenant_id)
         conversation_exists = any(source.document(target).get().exists for source in _conversation_sources(tenant_id, instance_name))
         if not contact_exists and not conversation_exists:
             return jsonify({"error": "Só podes iniciar uma conversa com um contacto ou conversa pertencente a este tenant."}), 403

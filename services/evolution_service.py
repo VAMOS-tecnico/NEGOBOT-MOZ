@@ -491,6 +491,28 @@ def gerar_e_enviar_qrcode_central(phone_number):
 # 🟢 SINCRONIZAÇÃO E EXTRAÇÃO DE CONTATOS/GRUPOS
 # ==========================================================
 
+def listar_chats_whatsapp(instance_name):
+    """Lista chats da instância Evolution sem importar membros nem enviar mensagens."""
+    clean_instance = _get_clean_instance(instance_name)
+    if not clean_instance:
+        return []
+    headers = {"apikey": Config.EVOLUTION_API_KEY, "Content-Type": "application/json"}
+    base_url = Config.EVOLUTION_API_URL.rstrip('/')
+    try:
+        response = requests.post(f"{base_url}/chat/findChats/{clean_instance}", headers=headers, json={}, timeout=20)
+        if response.status_code != 200:
+            response = requests.get(f"{base_url}/chat/findChats/{clean_instance}", headers=headers, timeout=20)
+        if response.status_code != 200:
+            logger.warning("Evolution não devolveu chats para %s: HTTP %s", clean_instance, response.status_code)
+            return []
+        payload = response.json() or []
+        chats = payload if isinstance(payload, list) else payload.get("data") or payload.get("chats") or []
+        return [chat for chat in chats if isinstance(chat, dict) and (chat.get("id") or chat.get("remoteJid"))]
+    except (requests.RequestException, ValueError, TypeError):
+        logger.exception("Falha ao listar chats Evolution para %s", clean_instance)
+        return []
+
+
 def extrair_contactos_conversas(tenant_id, instance_name):
     import extensions
     clean_instance = _get_clean_instance(instance_name)
